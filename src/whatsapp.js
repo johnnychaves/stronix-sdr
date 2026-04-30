@@ -30,4 +30,23 @@ async function sendMessage(to, text) {
   );
 }
 
-module.exports = { sendMessage };
+async function sendAudio(to, mediaId) {
+  const recipient = normalizeBRNumber(to);
+  await axios.post(
+    BASE_URL,
+    {
+      messaging_product: 'whatsapp',
+      to: recipient,
+      type: 'audio',
+      audio: { id: mediaId },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${config.whatsapp.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+}
+
+module.exports = { sendMessage, sendAudio };

@@ -109,33 +109,88 @@ REGRAS ABSOLUTAS:
 - Se não souber horários disponíveis: "Deixa eu verificar a agenda aqui e já te confirmo!"
 - Nunca envie paredes de texto — seja conciso e conversacional
 - Sempre termine suas mensagens com uma pergunta ou chamada para ação
-- O sucesso desta conversa é um agendamento marcado — não um preço enviado`;
+- O sucesso desta conversa é um agendamento marcado — não um preço enviado
 
-async function reply(from, text) {
-  const isFirstMessage = !conversations.has(from);
-  if (isFirstMessage) {
-    conversations.set(from, []);
+RESPOSTAS EM ÁUDIO — REGRAS:
+- O sistema vai te avisar quando você tiver permissão de áudio com a nota [AUDIO_LIBERADO].
+- Com [AUDIO_LIBERADO]: você pode responder em áudio quando julgar que vai ajudar mais — numa objeção difícil, num momento de fechar, quando quiser soar mais pessoal. Para responder em áudio, coloque a tag [AUDIO] no início da sua resposta. O sistema converte o texto em voz automaticamente.
+- Sem [AUDIO_LIBERADO]: você pode pedir permissão UMA VEZ por conversa, quando achar que faria diferença. Faça de forma natural, por exemplo: "Posso te mandar um áudio rapidinho pra explicar melhor?" — e coloque a tag [PEDIR_AUDIO] ao final da mensagem. Se já pediu e não foi autorizado, não peça de novo.
+- Ao escrever para áudio: escreva como fala, não como texto. Sem listas, sem bullets. Frases curtas. Tom de conversa natural.
+- Sem a tag [AUDIO], a resposta vai como texto normalmente.`;
+
+// Detecta se o lead confirmou ou negou o pedido de áudio
+function isAffirmative(text) {
+  return /^(sim|s\b|pode|claro|ok\b|tá|ta\b|vai|manda|mande|yes|é|boa|bora|com certeza|claro que sim|pode sim)/i.test(text.trim());
+}
+
+function isNegative(text) {
+  return /^(n[aã]o|n\b|deixa|tranquilo|pode deixar|sem [aá]udio|prefiro texto|n[aã]o precisa)/i.test(text.trim());
+}
+
+// Estado por contato: histórico + controle de permissão de áudio
+function getContact(from) {
+  if (!conversations.has(from)) {
+    conversations.set(from, {
+      history: [],
+      audioPermission: false,     // pode enviar áudio livremente
+      awaitingAudioConfirm: false, // pediu permissão, aguardando resposta
+      askedForAudio: false,        // já pediu uma vez (não pede de novo)
+    });
+  }
+  return conversations.get(from);
+}
+
+async function reply(from, text, { isAudio = false } = {}) {
+  const contact = getContact(from);
+  const isFirstMessage = contact.history.length === 0;
+
+  // Lead mandou áudio → permissão automática
+  if (isAudio) contact.audioPermission = true;
+
+  contact.history.push({ role: 'user', content: text });
+
+  // Contexto de áudio injetado no system prompt
+  let audioCtx = '';
+  if (contact.audioPermission) {
+    audioCtx = '\n\n[AUDIO_LIBERADO] — o lead mandou áudio ou autorizou. Você pode responder em áudio quando julgar que vai ajudar. Use [AUDIO] no início da resposta para enviar em áudio.';
+  } else if (contact.askedForAudio) {
+    audioCtx = '\n\n[AUDIO_JÁ_PEDIDO] — você já pediu permissão de áudio nessa conversa. Não peça de novo.';
   }
 
-  const history = conversations.get(from);
-  history.push({ role: 'user', content: text });
-
-  const systemMessage = isFirstMessage
-    ? SYSTEM_PROMPT + '\n\nATENÇÃO: esta é a PRIMEIRA mensagem desse lead. Você OBRIGATORIAMENTE deve começar sua resposta com "Oii! Sou o Johnny da STRONIX!" antes de qualquer outra coisa.'
-    : SYSTEM_PROMPT;
+  let systemMessage = SYSTEM_PROMPT + audioCtx;
+  if (isFirstMessage) {
+    systemMessage += '\n\nATENÇÃO: esta é a PRIMEIRA mensagem desse lead. Você OBRIGATORIAMENTE deve começar sua resposta com "Oii! Sou o Johnny da STRONIX!" antes de qualquer outra coisa.';
+  }
 
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1024,
     system: systemMessage,
-    messages: history,
+    messages: contact.history,
   });
 
-  const answer = response.content[0].text;
-  history.push({ role: 'assistant', content: answer });
+  let answer = response.content[0].text;
 
-  console.log(`[agent] ${from} → "${text.slice(0, 40)}" | "${answer.slice(0, 60)}..."`);
-  return answer;
+  // Detecta tags de áudio na resposta
+  const useAudio = answer.startsWith('[AUDIO]');
+  const askingForAudio = answer.includes('[PEDIR_AUDIO]');
+
+  // Remove as tags antes de armazenar e enviar
+  const cleanText = answer
+    .replace(/^\[AUDIO\]\s*/i, '')
+    .replace(/\[PEDIR_AUDIO\]\s*$/i, '')
+    .trim();
+
+  if (askingForAudio) {
+    contact.awaitingAudioConfirm = true;
+    contact.askedForAudio = true;
+  }
+
+  contact.history.push({ role: 'assistant', content: cleanText });
+
+  console.log(`[agent] ${from} → "${text.slice(0, 40)}" | ${useAudio ? '🔊' : '💬'} "${cleanText.slice(0, 60)}..."`);
+
+  return { text: cleanText, useAudio, askingForAudio };
 }
 
-module.exports = { reply };
+module.exports = { reply, isAffirmative, isNegative, getContact };

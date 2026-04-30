@@ -1,8 +1,9 @@
 const { Router } = require('express');
 const config    = require('./config');
-const { reply } = require('./agent');
-const { sendMessage } = require('./whatsapp');
+const { reply, isAffirmative, isNegative, getContact } = require('./agent');
+const { sendMessage, sendAudio } = require('./whatsapp');
 const { transcribeAudio } = require('./transcriber');
+const { textToAudioMessage } = require('./tts');
 
 const router = Router();
 
@@ -32,12 +33,14 @@ router.post('/', async (req, res) => {
 
   const from = message.from;
   let text;
+  let isAudio = false;
 
   if (message.type === 'text') {
     text = message.text.body;
     console.log(`[webhook] texto de ${from}: "${text}"`);
 
   } else if (message.type === 'audio') {
+    isAudio = true;
     console.log(`[webhook] áudio recebido de ${from}, transcrevendo...`);
     try {
       text = await transcribeAudio(message.audio.id);
@@ -60,8 +63,41 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const response = await reply(from, text);
-    await sendMessage(from, response);
+    const contact = getContact(from);
+
+    // Lead estava respondendo ao pedido de permissão de áudio
+    if (contact.awaitingAudioConfirm) {
+      if (isAffirmative(text)) {
+        contact.awaitingAudioConfirm = false;
+        contact.audioPermission = true;
+        console.log(`[webhook] ${from} autorizou áudio — próximas respostas podem ser em áudio`);
+        // Processa normalmente com permissão de áudio ativa
+      } else if (isNegative(text)) {
+        contact.awaitingAudioConfirm = false;
+        console.log(`[webhook] ${from} recusou áudio — continuando em texto`);
+        // Processa normalmente sem áudio
+      } else {
+        // Resposta não relacionada — cancela a espera e processa normalmente
+        contact.awaitingAudioConfirm = false;
+      }
+    }
+
+    const result = await reply(from, text, { isAudio });
+
+    if (result.useAudio) {
+      // SDR decidiu responder em áudio
+      console.log(`[webhook] enviando resposta em áudio para ${from}`);
+      try {
+        const mediaId = await textToAudioMessage(result.text);
+        await sendAudio(from, mediaId);
+      } catch (err) {
+        console.error('[webhook] erro ao gerar/enviar áudio, enviando como texto:', err.message);
+        await sendMessage(from, result.text);
+      }
+    } else {
+      await sendMessage(from, result.text);
+    }
+
   } catch (err) {
     console.error('[webhook] erro ao processar mensagem:', err.message);
   }
