@@ -680,6 +680,14 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
     contact.askedForAudio = true;
   }
 
+  // Sanitiza em-dash (—) e en-dash (–) que o Claude insiste em usar
+  // Substitui por vírgula+espaço (mais natural em conversa de WhatsApp)
+  const beforeSanitize = cleanText;
+  cleanText = cleanText.replace(/\s*[—–]\s*/g, ', ');
+  if (beforeSanitize !== cleanText) {
+    console.log(`[agent] sanitizou traço longo na resposta para ${from}`);
+  }
+
   contact.history.push({ role: 'assistant', content: cleanText });
 
   console.log(`[agent] ${from} → "${text.slice(0, 40)}" | ${useAudio ? '🔊' : '💬'} "${cleanText.slice(0, 60)}..."`);
