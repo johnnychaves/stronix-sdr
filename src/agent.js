@@ -5,7 +5,7 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const conversations = new Map();
 
-const SYSTEM_PROMPT = `Você é o assistente de vendas da STRONIX Academia, localizada na Av. Edgar Pires de Castro, 9392 - Bairro Lageado, Porto Alegre, RS. Você atende leads pelo WhatsApp com o objetivo de qualificá-los e agendar uma visita ou aula experimental. Seu único objetivo é marcar esse agendamento. Os valores são tratados presencialmente.
+let SYSTEM_PROMPT = `Você é o assistente de vendas da STRONIX Academia, localizada na Av. Edgar Pires de Castro, 9392 - Bairro Lageado, Porto Alegre, RS. Você atende leads pelo WhatsApp com o objetivo de qualificá-los e agendar uma visita ou aula experimental. Seu único objetivo é marcar esse agendamento. Os valores são tratados presencialmente.
 
 MODALIDADES DA STRONIX:
 - Musculação: trânsito livre, acesso convencional, para todos os objetivos
@@ -213,4 +213,34 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
   return { text: cleanText, useAudio, askingForAudio };
 }
 
-module.exports = { reply, isAffirmative, isNegative, getContact };
+function getSystemPrompt() {
+  return SYSTEM_PROMPT;
+}
+
+function updateSystemPrompt(newPrompt) {
+  SYSTEM_PROMPT = newPrompt;
+  console.log('[agent] system prompt atualizado via painel admin');
+}
+
+function getConversations() {
+  const result = [];
+  for (const [from, contact] of conversations.entries()) {
+    result.push({
+      from,
+      fromDisplay: from.slice(0, 2) + '...' + from.slice(-4),
+      messageCount: contact.history.length,
+      audioPermission: contact.audioPermission,
+      lastMessage: contact.history.length > 0
+        ? contact.history[contact.history.length - 1]
+        : null,
+      history: contact.history,
+    });
+  }
+  return result.sort((a, b) => b.messageCount - a.messageCount);
+}
+
+function clearConversation(from) {
+  conversations.delete(from);
+}
+
+module.exports = { reply, isAffirmative, isNegative, getContact, getSystemPrompt, updateSystemPrompt, getConversations, clearConversation };
