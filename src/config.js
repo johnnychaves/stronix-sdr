@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 
 const required = [
   'WHATSAPP_PHONE_NUMBER_ID',

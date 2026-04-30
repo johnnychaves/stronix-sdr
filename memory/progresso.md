@@ -4,6 +4,19 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-04-30 — Etapa 2 concluída: IA respondendo no WhatsApp
+
+**O que foi feito:**
+- Integração com OpenAI GPT-4o mini no `agent.js`
+- Memória de conversa por contato implementada (histórico em Map)
+- Primeira resposta real de IA recebida no WhatsApp com sucesso
+- Anthropic API bloqueada por revisão de conta nova (conta OpenAI usada como alternativa)
+- Quando Anthropic liberar: troca de 1 linha em `agent.js`
+
+**Resultado:** Sistema completo funcionando — mensagem entra, IA pensa, resposta sai no WhatsApp.
+
+---
+
 ## 2026-04-30 — Etapa 1 concluída: fluxo WhatsApp end-to-end funcionando
 
 **O que foi feito:**

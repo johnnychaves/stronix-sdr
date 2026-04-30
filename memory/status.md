@@ -17,10 +17,9 @@
 3. Atualizar URL do webhook no painel Meta se o ngrok reiniciou
 
 **Próximos passos:**
-- Etapa 2: Integrar Claude API no `agent.js` — agente real em vez de eco
-- Etapa 3: Memória de conversa por contato
-- Etapa 4: Conectar Google Agenda
-- Etapa 5: Conectar Google Sheets
+- Etapa 3: Escrever system prompt SDR da academia (persona, roteiro, objeções)
+- Etapa 4: Conectar Google Agenda — consulta de horários reais
+- Etapa 5: Conectar Google Sheets — registro de leads e agendamentos
 
 ---
 
