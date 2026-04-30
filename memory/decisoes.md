@@ -14,6 +14,24 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-04-30 — Meta Cloud API em vez de Baileys/Evolution API
+
+**Decisão:** Usar a API oficial do WhatsApp (Meta Cloud API) como camada de integração.
+
+**Por quê:** Baileys e Evolution API são não-oficiais e podem banir o número permanentemente. Para o WhatsApp comercial da academia, o risco não é aceitável. A Meta Cloud API é gratuita até 1.000 conversas/mês — mais que suficiente.
+
+**Alternativas descartadas:** Baileys (risco de ban), Evolution API (mesmo risco, precisa de Docker), plataformas SaaS como WATI/Respond.io (custo mensal alto).
+
+---
+
+## 2026-04-30 — Express como servidor de webhook (sem framework adicional)
+
+**Decisão:** Usar Express puro, sem NestJS, Fastify ou similares.
+
+**Por quê:** O escopo é pequeno (uma rota de webhook + envio de mensagens). Frameworks maiores adicionam complexidade desnecessária para esse caso.
+
+---
+
 ## 2026-04-29 — .gitignore cobre Node.js e Python
 
 **Decisão:** `.gitignore` configurado para cobrir as duas stacks mais prováveis para um agente de IA/WhatsApp.

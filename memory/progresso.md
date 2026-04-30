@@ -4,6 +4,22 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-04-30 — Infraestrutura base do agente
+
+**O que foi feito:**
+- Definida stack: Meta Cloud API (oficial) + Node.js + Claude API + Google Agenda/Sheets
+- Descartado Baileys/Evolution API por risco de ban em número comercial
+- ngrok instalado via brew para expor servidor local ao Meta
+- Projeto Node.js inicializado com: `express`, `@anthropic-ai/sdk`, `dotenv`, `axios`, `nodemon`
+- Criada estrutura `src/` com 5 arquivos: webhook handler, sender Meta API, agent stub, config, entry point
+- Servidor Express na porta 3000 pronto para receber webhooks
+- `.env.example` documentando todas as variáveis necessárias
+- `npm run dev` inicia com hot-reload via nodemon
+
+**Resultado:** Backend pronto e aguardando credenciais do Meta para primeiro teste end-to-end.
+
+---
+
 ## 2026-04-29 — Configuração inicial do projeto
 
 **O que foi feito:**

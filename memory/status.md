@@ -2,20 +2,26 @@
 
 > Atualize este arquivo sempre que o estado do projeto mudar.
 
-## Estado: Configuração inicial ✅
+## Estado: Infraestrutura base criada ✅
 
 **O que está em pé agora:**
 - Repositório Git inicializado (branch `main`)
-- `CLAUDE.md` criado — guia para o Claude Code
-- `SKILLS.md` criado — referência de skills disponíveis
-- `.gitignore` configurado para Node.js / Python
-- Sistema de memória criado em `memory/`
+- Projeto Node.js com `package.json` e dependências instaladas
+- Estrutura `src/` criada: `index.js`, `webhook.js`, `whatsapp.js`, `agent.js`, `config.js`
+- Servidor Express pronto para receber webhooks do Meta na porta 3000
+- ngrok instalado — pronto para expor o servidor localmente
+- `.env.example` criado com todas as variáveis necessárias
 
-**Próximos passos planejados:**
-- Definir stack tecnológica (Node.js, Python, etc.)
-- Escolher biblioteca de integração com WhatsApp
-- Configurar variáveis de ambiente
-- Implementar primeiro fluxo de mensagem
+**Aguardando (ação do usuário):**
+- Criar conta e app no Meta for Developers
+- Preencher o arquivo `.env` com as credenciais
+- Iniciar ngrok e configurar webhook no painel Meta
+
+**Próximos passos de código:**
+- Etapa 2: Integrar Claude API no `agent.js`
+- Etapa 3: Adicionar memória de conversa por contato
+- Etapa 4: Conectar Google Agenda
+- Etapa 5: Conectar Google Sheets
 
 ---
 
