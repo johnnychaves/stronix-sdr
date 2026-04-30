@@ -151,22 +151,24 @@ function getContact(from) {
   return conversations.get(from);
 }
 
-async function reply(from, text, { isAudio = false } = {}) {
+async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
   const contact = getContact(from);
   const isFirstMessage = contact.history.length === 0;
 
-  // Lead mandou áudio → permissão automática
-  if (isAudio) contact.audioPermission = true;
+  // Lead mandou áudio ou pediu explicitamente → permissão permanente
+  if (isAudio || forceAudio) contact.audioPermission = true;
 
   contact.history.push({ role: 'user', content: text });
 
   // Contexto de áudio injetado no system prompt
   let audioCtx = '';
-  if (isAudio) {
-    // Lead acabou de mandar áudio AGORA → DEVE responder em áudio
-    audioCtx = '\n\n[LEAD_RESPONDEU_EM_AUDIO] — o lead acabou de te mandar um áudio. Espelhe o meio: responda em áudio. Comece sua resposta com [AUDIO]. Não responda em texto, não prometa áudio depois — mande agora.';
+  if (isAudio || forceAudio) {
+    // Código já decidiu que a resposta vai sair como áudio
+    // Claude só precisa escrever de forma falada — sem precisar colocar tag
+    audioCtx = '\n\n[AUDIO_SERÁ_ENVIADO] — sua resposta será convertida em áudio de voz e enviada como mensagem de voz no WhatsApp. Escreva de forma completamente falada e natural: sem listas, sem bullets, sem formatação. Frases curtas como se estivesse gravando um áudio no celular. Não coloque tags, não mencione áudio — só fale naturalmente.';
   } else if (contact.audioPermission) {
-    audioCtx = '\n\n[AUDIO_LIBERADO] — o lead autorizou áudio nessa conversa. Você pode responder em áudio quando julgar que ajuda. Use [AUDIO] no início da resposta.';
+    // Lead autorizou em algum momento — Claude pode optar por áudio se achar que ajuda
+    audioCtx = '\n\n[AUDIO_LIBERADO] — o lead autorizou áudio nessa conversa. Você pode responder em áudio quando julgar que vai ajudar mais (objeção, fechamento, algo pessoal). Para escolher áudio, coloque [AUDIO] no início da resposta.';
   } else if (contact.askedForAudio) {
     audioCtx = '\n\n[AUDIO_JÁ_PEDIDO] — você já pediu permissão de áudio nessa conversa. Não peça de novo.';
   }

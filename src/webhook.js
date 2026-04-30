@@ -5,6 +5,13 @@ const { sendMessage, sendAudio } = require('./whatsapp');
 const { transcribeAudio } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
 
+// Detecta quando o lead pede explicitamente áudio por texto
+function isExplicitAudioRequest(text) {
+  return /(fala|manda|pode mandar|responde?|me manda|prefiro|quero|me fala).{0,20}(áudio|audio|voz)/i.test(text)
+    || /^(áudio|audio|por áudio|em áudio|via áudio|no áudio)/i.test(text.trim())
+    || /^(manda|fala|pode).{0,10}(áudio|audio)/i.test(text.trim());
+}
+
 const router = Router();
 
 // Verificação do webhook exigida pelo Meta ao cadastrar a URL
@@ -65,27 +72,39 @@ router.post('/', async (req, res) => {
   try {
     const contact = getContact(from);
 
-    // Lead estava respondendo ao pedido de permissão de áudio
-    if (contact.awaitingAudioConfirm) {
+    // Determina se o código deve forçar resposta em áudio
+    // (independente do que o Claude decidir)
+    let forceAudio = false;
+
+    if (isAudio) {
+      // Lead mandou áudio → espelha o meio, sempre
+      forceAudio = true;
+      console.log(`[webhook] lead mandou áudio → resposta forçada em áudio`);
+    } else if (isExplicitAudioRequest(text)) {
+      // Lead pediu áudio explicitamente em texto → atende
+      forceAudio = true;
+      console.log(`[webhook] lead pediu áudio explicitamente → resposta forçada em áudio`);
+    } else if (contact.awaitingAudioConfirm) {
+      // Lead estava respondendo ao pedido de permissão de áudio
       if (isAffirmative(text)) {
         contact.awaitingAudioConfirm = false;
         contact.audioPermission = true;
-        console.log(`[webhook] ${from} autorizou áudio — próximas respostas podem ser em áudio`);
-        // Processa normalmente com permissão de áudio ativa
+        forceAudio = true;
+        console.log(`[webhook] lead confirmou áudio`);
       } else if (isNegative(text)) {
         contact.awaitingAudioConfirm = false;
-        console.log(`[webhook] ${from} recusou áudio — continuando em texto`);
-        // Processa normalmente sem áudio
+        console.log(`[webhook] lead recusou áudio — continuando em texto`);
       } else {
-        // Resposta não relacionada — cancela a espera e processa normalmente
         contact.awaitingAudioConfirm = false;
       }
     }
 
-    const result = await reply(from, text, { isAudio });
+    const result = await reply(from, text, { isAudio, forceAudio });
 
-    if (result.useAudio) {
-      // SDR decidiu responder em áudio
+    // Envia como áudio se: código forçou OU Claude optou por áudio
+    const shouldSendAudio = forceAudio || result.useAudio;
+
+    if (shouldSendAudio) {
       console.log(`[webhook] enviando resposta em áudio para ${from}`);
       try {
         const mediaId = await textToAudioMessage(result.text);
