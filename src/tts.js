@@ -1,34 +1,38 @@
-const OpenAI = require('openai');
+const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 require('dotenv').config({ override: true });
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+const VOICE_ID = process.env.ELEVENLABS_VOICE_ID;
 
-// Instrução de voz — descreve o personagem para o gpt-4o-mini-tts
-const VOICE_INSTRUCTIONS = `Você é o Johnny, um homem gaúcho de Porto Alegre, dono de uma academia chamada STRONIX. Sua voz é grave, calorosa e firme — mas tem energia, não é monótona.
-
-Tom: confiante, descontraído, próximo. Como alguém gravando rapidamente um áudio no WhatsApp pra um cliente que ele realmente quer ajudar — sem papo de vendedor.
-
-Ritmo: natural de conversa. Use pausas curtas onde faria sentido respirar. Não acelere demais nem fique lento e arrastado. Pense em alguém andando pela academia enquanto fala.
-
-Sotaque: gaúcho leve, do sul do Brasil. Não exagerado. Pronúncia clara em português brasileiro.
-
-Emoção: passe interesse genuíno. Quando contar algo bom, deixe transparecer. Quando perguntar, soe curioso de verdade. Evite tom comercial ou plástico.`;
-
-// Gera o áudio e salva em arquivo temporário
+// Gera o áudio via ElevenLabs e salva em arquivo temporário
 async function generateSpeech(text) {
-  const response = await openai.audio.speech.create({
-    model: 'gpt-4o-mini-tts',
-    voice: 'onyx', // voz grave masculina — base do personagem
-    input: text,
-    instructions: VOICE_INSTRUCTIONS,
-  });
+  const response = await axios.post(
+    `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
+    {
+      text,
+      model_id: 'eleven_multilingual_v2',
+      voice_settings: {
+        stability: 0.45,         // variação natural — não monótono
+        similarity_boost: 0.90,  // fiel à voz clonada
+        style: 0.35,             // leve expressividade
+        use_speaker_boost: true, // reforça a identidade da voz
+      },
+    },
+    {
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg',
+      },
+      responseType: 'arraybuffer',
+    }
+  );
 
-  const buffer = Buffer.from(await response.arrayBuffer());
   const tmpFile = path.join(os.tmpdir(), `tts_${Date.now()}.mp3`);
-  fs.writeFileSync(tmpFile, buffer);
+  fs.writeFileSync(tmpFile, Buffer.from(response.data));
   return tmpFile;
 }
 
@@ -59,7 +63,7 @@ async function uploadAudioToMeta(filePath) {
   return data.id;
 }
 
-// Pipeline completo: texto → áudio → upload → media_id
+// Pipeline completo: texto → ElevenLabs → upload Meta → media_id
 async function textToAudioMessage(text) {
   const filePath = await generateSpeech(text);
   try {
