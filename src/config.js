@@ -4,13 +4,16 @@ const required = [
   'WHATSAPP_PHONE_NUMBER_ID',
   'WHATSAPP_ACCESS_TOKEN',
   'WEBHOOK_VERIFY_TOKEN',
-  'ANTHROPIC_API_KEY',
 ];
 
 for (const key of required) {
   if (!process.env[key]) {
     throw new Error(`Variável de ambiente obrigatória não definida: ${key}`);
   }
+}
+
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.warn('[config] ANTHROPIC_API_KEY não definida — Claude será integrado na Etapa 2');
 }
 
 module.exports = {

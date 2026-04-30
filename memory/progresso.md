@@ -4,6 +4,19 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-04-30 — Etapa 1 concluída: fluxo WhatsApp end-to-end funcionando
+
+**O que foi feito:**
+- Meta Cloud API configurada com app Business no Meta for Developers
+- ngrok autenticado e expondo porta 3000 via HTTPS
+- Webhook verificado e assinatura de `messages` ativa
+- Fluxo testado e validado: celular → Meta → webhook → servidor → resposta → celular
+- Corrigido bug de formato de número brasileiro: wa_id tem 12 dígitos, API exige 13 (inserção do 9º dígito na posição correta)
+
+**Resultado:** Infraestrutura 100% funcional. Mensagens chegam e respostas são entregues no celular.
+
+---
+
 ## 2026-04-30 — Infraestrutura base do agente
 
 **O que foi feito:**
