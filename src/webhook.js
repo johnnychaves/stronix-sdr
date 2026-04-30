@@ -48,6 +48,11 @@ router.post('/', async (req, res) => {
       return;
     }
 
+    if (!text || !text.trim()) {
+      await sendMessage(from, 'Não consegui entender o áudio. Pode repetir ou mandar por texto?');
+      return;
+    }
+
   } else {
     // Sticker, imagem, vídeo, localização, etc — ignora silenciosamente
     console.log(`[webhook] tipo não suportado ignorado: ${message.type}`);
