@@ -2,6 +2,7 @@ const { Router } = require('express');
 const config    = require('./config');
 const { reply } = require('./agent');
 const { sendMessage } = require('./whatsapp');
+const { transcribeAudio } = require('./transcriber');
 
 const router = Router();
 
@@ -27,12 +28,31 @@ router.post('/', async (req, res) => {
   const change = entry?.changes?.[0];
   const message = change?.value?.messages?.[0];
 
-  if (!message || message.type !== 'text') return;
+  if (!message) return;
 
   const from = message.from;
-  const text = message.text.body;
+  let text;
 
-  console.log(`[webhook] mensagem recebida de ${from}: "${text}"`);
+  if (message.type === 'text') {
+    text = message.text.body;
+    console.log(`[webhook] texto de ${from}: "${text}"`);
+
+  } else if (message.type === 'audio') {
+    console.log(`[webhook] áudio recebido de ${from}, transcrevendo...`);
+    try {
+      text = await transcribeAudio(message.audio.id);
+      console.log(`[webhook] transcrição de ${from}: "${text}"`);
+    } catch (err) {
+      console.error('[webhook] erro ao transcrever áudio:', err.message);
+      await sendMessage(from, 'Recebi seu áudio, mas não consegui entender. Pode me mandar por texto?');
+      return;
+    }
+
+  } else {
+    // Sticker, imagem, vídeo, localização, etc — ignora silenciosamente
+    console.log(`[webhook] tipo não suportado ignorado: ${message.type}`);
+    return;
+  }
 
   try {
     const response = await reply(from, text);
