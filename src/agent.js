@@ -113,8 +113,8 @@ REGRAS ABSOLUTAS:
 
 RESPOSTAS EM ÁUDIO — REGRAS:
 - O sistema vai te avisar quando você tiver permissão de áudio com a nota [AUDIO_LIBERADO].
-- Com [AUDIO_LIBERADO]: você pode responder em áudio quando julgar que vai ajudar mais — numa objeção difícil, num momento de fechar, quando quiser soar mais pessoal. Para responder em áudio, coloque a tag [AUDIO] no início da sua resposta. O sistema converte o texto em voz automaticamente.
-- Sem [AUDIO_LIBERADO]: você pode pedir permissão UMA VEZ por conversa, quando achar que faria diferença. Faça de forma natural, por exemplo: "Posso te mandar um áudio rapidinho pra explicar melhor?" — e coloque a tag [PEDIR_AUDIO] ao final da mensagem. Se já pediu e não foi autorizado, não peça de novo.
+- Com [AUDIO_LIBERADO]: você pode responder em áudio quando julgar que vai ajudar mais — numa objeção difícil, num momento de fechar, quando quiser soar mais pessoal. Para responder em áudio, a sua mensagem INTEIRA deve começar com [AUDIO] — sem nenhuma palavra antes disso. Exemplo correto: "[AUDIO] Oi, então sobre isso..." Exemplo ERRADO: "Claro! [AUDIO] Oi...". O sistema converte tudo depois de [AUDIO] em voz automaticamente.
+- Sem [AUDIO_LIBERADO]: você pode pedir permissão UMA VEZ por conversa, quando achar que faria diferença. Faça de forma natural, por exemplo: "Posso te mandar um áudio rapidinho pra explicar melhor?" — e coloque a tag [PEDIR_AUDIO] ao final da mensagem, sem mais nada depois dela. Se já pediu e não foi autorizado, não peça de novo.
 - Ao escrever para áudio: escreva como fala, não como texto. Sem listas, sem bullets. Frases curtas. Tom de conversa natural.
 - Sem a tag [AUDIO], a resposta vai como texto normalmente.`;
 
@@ -171,15 +171,19 @@ async function reply(from, text, { isAudio = false } = {}) {
 
   let answer = response.content[0].text;
 
-  // Detecta tags de áudio na resposta
-  const useAudio = answer.startsWith('[AUDIO]');
-  const askingForAudio = answer.includes('[PEDIR_AUDIO]');
+  // Detecta tags de áudio na resposta (independente de posição)
+  const useAudio = /\[AUDIO\]/i.test(answer);
+  const askingForAudio = /\[PEDIR_AUDIO\]/i.test(answer);
 
-  // Remove as tags antes de armazenar e enviar
-  const cleanText = answer
-    .replace(/^\[AUDIO\]\s*/i, '')
-    .replace(/\[PEDIR_AUDIO\]\s*$/i, '')
-    .trim();
+  // Extrai apenas o conteúdo após [AUDIO] (descarta qualquer texto antes da tag)
+  // Se não tiver [AUDIO], remove só o [PEDIR_AUDIO] do final
+  let cleanText;
+  if (useAudio) {
+    const match = answer.match(/\[AUDIO\]\s*([\s\S]*)/i);
+    cleanText = match ? match[1].trim() : answer.replace(/\[AUDIO\]/gi, '').trim();
+  } else {
+    cleanText = answer.replace(/\[PEDIR_AUDIO\]/gi, '').trim();
+  }
 
   if (askingForAudio) {
     contact.awaitingAudioConfirm = true;
