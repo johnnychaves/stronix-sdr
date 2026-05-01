@@ -1,0 +1,12 @@
+node_modules
+.git
+.gitignore
+.env
+.env.local
+.env.example
+data/
+*.log
+.DS_Store
+.claude/
+memory/
+scripts/
