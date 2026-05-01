@@ -372,6 +372,24 @@ function deleteStudent(phone) {
   stmts.deleteStudent.run(phone);
 }
 
+// Insere múltiplos alunos numa única transação. Retorna { inserted, updated, skipped }.
+// items: array de { phone, name?, notes? }. Phones com menos de 10 dígitos são skipped.
+function bulkUpsertStudents(items) {
+  let inserted = 0, updated = 0, skipped = 0;
+  const tx = db.transaction((items) => {
+    const now = Date.now();
+    for (const item of items) {
+      const phone = String(item.phone || '').replace(/\D/g, '');
+      if (phone.length < 10) { skipped++; continue; }
+      const existed = !!stmts.getStudent.get(phone);
+      stmts.upsertStudent.run(phone, item.name || null, item.notes || null, now);
+      if (existed) updated++; else inserted++;
+    }
+  });
+  tx(items);
+  return { inserted, updated, skipped };
+}
+
 module.exports = {
   getContact,
   getOrCreateContact,
@@ -396,4 +414,5 @@ module.exports = {
   isStudent,
   getAllStudents,
   deleteStudent,
+  bulkUpsertStudents,
 };

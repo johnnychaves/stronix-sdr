@@ -4,7 +4,8 @@ const webhook = require('./webhook');
 const admin   = require('./admin');
 
 const app = express();
-app.use(express.json());
+// 1MB cobre import bulk de ~10k clientes — default 100KB era apertado
+app.use(express.json({ limit: '1mb' }));
 
 app.use('/webhook', webhook);
 app.use('/admin', admin);

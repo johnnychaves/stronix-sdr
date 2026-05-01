@@ -83,7 +83,8 @@ router.post('/', async (req, res) => {
     // Se o phone está cadastrado em students, IA NÃO roda. Resposta padrão + notifica dono.
     const student = db.getStudent(from);
     if (student) {
-      const firstName = student.name ? student.name.split(/\s+/)[0] : '';
+      // Phones com múltiplos alunos (família) vem como "Alana / Sofia". Pega o 1º nome do 1º cliente.
+      const firstName = student.name ? student.name.split(/\s*\/\s*/)[0].split(/\s+/)[0] : '';
       const greet = firstName ? `Oi ${firstName}!` : 'Oi!';
       const studentReply = `${greet} Aqui é o assistente da academia, mas pra coisas de aluno eu te passo direto pra equipe. Já avisei eles e logo te respondem 👋`;
       console.log(`[webhook] phone ${from} é aluno cadastrado (${student.name || 'sem nome'}) — desviando IA`);

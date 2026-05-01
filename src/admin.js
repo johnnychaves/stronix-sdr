@@ -83,6 +83,17 @@ router.delete('/api/students/:phone', (req, res) => {
   res.json({ ok: true });
 });
 
+// API — bulk upsert (importação em massa de planilha de clientes ativos)
+router.post('/api/students/bulk', (req, res) => {
+  const { items } = req.body;
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'items deve ser array' });
+  if (items.length === 0) return res.json({ inserted: 0, updated: 0, skipped: 0 });
+  if (items.length > 5000) return res.status(400).json({ error: 'Máximo 5000 itens por chamada' });
+  const result = db.bulkUpsertStudents(items);
+  console.log(`[admin] bulk students: inserted=${result.inserted} updated=${result.updated} skipped=${result.skipped}`);
+  res.json(result);
+});
+
 // Painel HTML
 router.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
