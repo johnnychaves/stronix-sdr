@@ -639,32 +639,26 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
   }
 
   try {
-    // WhatsApp Cloud API só aceita ogg/opus, mp3, mp4, aac, amr — webm/opus é
-    // rejeitado SILENCIOSAMENTE (upload retorna media_id ok, mas msg não chega).
-    // Por isso: tudo que chega aqui é remuxado pra ogg/opus via ffmpeg.
-    // Se já é ogg/mp3/mp4, idealmente puláva o transcode, mas pra robustez
-    // remuxamos webm/ogg pra garantir container ogg correto. mp3/mp4/aac
-    // passam direto.
-    let finalBuffer = buffer;
-    let finalMime = baseMime;
-    let finalExt = 'bin';
-
-    const needsRemux = baseMime === 'audio/webm' || baseMime === 'audio/ogg';
-    if (needsRemux) {
-      try {
-        finalBuffer = await transcodeAudio(buffer, baseMime);
-        finalMime = 'audio/ogg';
-        finalExt = 'ogg';
-        console.log(`[admin] transcode ${baseMime} → audio/ogg ok (${buffer.length} → ${finalBuffer.length} bytes)`);
-      } catch (e) {
-        console.error('[admin] transcode falhou:', e.message);
-        return res.status(500).json({ error: 'Falha ao processar áudio (ffmpeg). ' + e.message });
-      }
-    } else {
-      finalExt = baseMime === 'audio/mpeg' || baseMime === 'audio/mp3' ? 'mp3'
-              : baseMime === 'audio/mp4' || baseMime === 'audio/m4a' ? 'm4a'
-              : baseMime === 'audio/aac' ? 'aac'
-              : 'bin';
+    // WhatsApp Cloud API aceita oficialmente:
+    //   - audio/ogg (codec MUST be opus)
+    //   - audio/mp4 (codec MUST be AAC — não opus)
+    //   - audio/mpeg (mp3)
+    //   - audio/aac, audio/amr
+    //
+    // MediaRecorder em Chrome/Safari produz containers (webm, mp4) que ENVELOPAM
+    // opus, mas a Meta exige AAC dentro de mp4 ou opus dentro de ogg. Quando
+    // o codec/container não bate, a Meta aceita o upload silenciosamente,
+    // retorna 200 no /messages e NÃO ENTREGA — sem webhook de erro.
+    //
+    // Solução robusta: SEMPRE transcoda pra ogg/opus via ffmpeg. Cobre todo
+    // input de browser sem depender de detecção fina de codec.
+    let finalBuffer, finalMime = 'audio/ogg', finalExt = 'ogg';
+    try {
+      finalBuffer = await transcodeAudio(buffer, baseMime);
+      console.log(`[admin] transcode ${baseMime} → audio/ogg ok (${buffer.length} → ${finalBuffer.length} bytes)`);
+    } catch (e) {
+      console.error('[admin] transcode falhou:', e.message);
+      return res.status(500).json({ error: 'Falha ao processar áudio (ffmpeg). ' + e.message });
     }
 
     const mediaId = await uploadMedia(finalBuffer, finalMime, `voice.${finalExt}`);
