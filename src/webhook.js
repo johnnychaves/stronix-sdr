@@ -11,15 +11,115 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Delay antes de enviar resposta de texto, simulando SDR humano que está
 // atendendo várias conversas em paralelo. Range 1-3 min, proporcional ao
 // tamanho — resposta curta ~60s, média ~120s, longa (300+ chars) ~180s.
-// LIMITAÇÃO: lead que manda várias msgs em sequência pode receber respostas
-// fora de ordem (cada webhook POST processa independente). Atacar só se virar
-// problema real via review do painel.
 function typingDelayMs(text) {
   const MIN_MS = 60 * 1000;   // 1 min — resposta curta
   const MAX_MS = 180 * 1000;  // 3 min — resposta longa
   const FULL_LEN = 300;       // chars que justificam o teto
   const ratio = Math.min(1, (text || '').length / FULL_LEN);
   return Math.round(MIN_MS + (MAX_MS - MIN_MS) * ratio);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// BUFFER DE MENSAGENS (debouncing por phone)
+//
+// Lead/aluno costuma fragmentar pensamento em várias mensagens curtas
+// ("oi" → "tem aula?" → "qual valor?"). Sem buffer, cada uma vira webhook
+// independente, IA processa 3x e responde fora de ordem (especialmente
+// com delay de 1-3 min entre processamento e envio).
+//
+// Solução: acumula msgs do mesmo phone numa janela de 15s sem nova msg.
+// Quando timer expira, processa o batch concatenado como UMA conversa.
+// ─────────────────────────────────────────────────────────────────────
+
+const BUFFER_WINDOW_MS = 15 * 1000;
+const buffers = new Map(); // phone -> { messages: [{text, isAudio}], timer }
+
+function enqueueMessage(from, text, isAudio) {
+  let buf = buffers.get(from);
+  if (!buf) {
+    buf = { messages: [], timer: null };
+    buffers.set(from, buf);
+  }
+  buf.messages.push({ text, isAudio });
+  if (buf.timer) clearTimeout(buf.timer);
+  buf.timer = setTimeout(() => flushBuffer(from), BUFFER_WINDOW_MS);
+  console.log(`[buffer] ${from} acumulou ${buf.messages.length} msg(s) — aguardando ${BUFFER_WINDOW_MS / 1000}s sem nova msg pra processar`);
+}
+
+function flushBuffer(from) {
+  const buf = buffers.get(from);
+  if (!buf || !buf.messages.length) {
+    buffers.delete(from);
+    return;
+  }
+  buffers.delete(from);
+
+  const messages = buf.messages;
+  const text       = messages.map(m => m.text).join('\n');
+  const anyAudio   = messages.some(m => m.isAudio);
+  const firstText  = messages.find(m => !m.isAudio)?.text || '';
+  const explicitAudio = !anyAudio && messages.some(m => isExplicitAudioRequest(m.text));
+
+  console.log(`[buffer] flush ${from}: ${messages.length} msg(s) concatenadas (${text.length} chars)`);
+
+  processBatch(from, { text, anyAudio, explicitAudio, firstText }).catch(err => {
+    console.error(`[buffer] erro ao processar batch de ${from}:`, err.message);
+  });
+}
+
+async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) {
+  // Roteamento aluno vs lead — antes de qualquer IA
+  const student = db.getStudent(from);
+  if (student) {
+    const firstName = student.name ? student.name.split(/\s*\/\s*/)[0].split(/\s+/)[0] : '';
+    const greet = firstName ? `Oi ${firstName}!` : 'Oi!';
+    const studentReply = `${greet} Aqui é o assistente da academia, mas pra coisas de aluno eu te passo direto pra equipe. Já avisei eles e logo te respondem 👋`;
+    console.log(`[webhook] phone ${from} é aluno cadastrado (${student.name || 'sem nome'}) — desviando IA`);
+    await sleep(typingDelayMs(studentReply));
+    await sendMessage(from, studentReply);
+    await notifyStudent(from, student, text);
+    return;
+  }
+
+  const contact = getContact(from);
+  let forceAudio = false;
+
+  if (anyAudio) {
+    forceAudio = true;
+    console.log(`[webhook] alguma msg do batch foi áudio → resposta forçada em áudio`);
+  } else if (explicitAudio) {
+    forceAudio = true;
+    console.log(`[webhook] alguma msg pediu áudio explicitamente → resposta forçada em áudio`);
+  } else if (contact.awaitingAudioConfirm) {
+    if (isAffirmative(firstText)) {
+      setAudioFlags(from, { awaitingAudioConfirm: false, audioPermission: true });
+      forceAudio = true;
+      console.log(`[webhook] lead confirmou áudio`);
+    } else if (isNegative(firstText)) {
+      setAudioFlags(from, { awaitingAudioConfirm: false });
+      console.log(`[webhook] lead recusou áudio — continuando em texto`);
+    } else {
+      setAudioFlags(from, { awaitingAudioConfirm: false });
+    }
+  }
+
+  const result = await reply(from, text, { isAudio: anyAudio, forceAudio });
+  const shouldSendAudio = forceAudio || result.useAudio;
+
+  if (shouldSendAudio) {
+    console.log(`[webhook] enviando resposta em áudio para ${from}`);
+    try {
+      const mediaId = await textToAudioMessage(result.text);
+      await sendAudio(from, mediaId);
+    } catch (err) {
+      console.error('[webhook] erro ao gerar/enviar áudio, enviando como texto:', err.message);
+      await sleep(typingDelayMs(result.text));
+      await sendMessage(from, result.text);
+    }
+  } else {
+    await sleep(typingDelayMs(result.text));
+    await sendMessage(from, result.text);
+  }
 }
 
 // Detecta quando o lead pede explicitamente áudio por texto
@@ -86,74 +186,9 @@ router.post('/', async (req, res) => {
     return;
   }
 
-  try {
-    // Roteamento aluno vs lead — antes de qualquer IA
-    // Se o phone está cadastrado em students, IA NÃO roda. Resposta padrão + notifica dono.
-    const student = db.getStudent(from);
-    if (student) {
-      // Phones com múltiplos alunos (família) vem como "Alana / Sofia". Pega o 1º nome do 1º cliente.
-      const firstName = student.name ? student.name.split(/\s*\/\s*/)[0].split(/\s+/)[0] : '';
-      const greet = firstName ? `Oi ${firstName}!` : 'Oi!';
-      const studentReply = `${greet} Aqui é o assistente da academia, mas pra coisas de aluno eu te passo direto pra equipe. Já avisei eles e logo te respondem 👋`;
-      console.log(`[webhook] phone ${from} é aluno cadastrado (${student.name || 'sem nome'}) — desviando IA`);
-      await sleep(typingDelayMs(studentReply));
-      await sendMessage(from, studentReply);
-      await notifyStudent(from, student, text);
-      return;
-    }
-
-    const contact = getContact(from);
-
-    // Determina se o código deve forçar resposta em áudio
-    // (independente do que o Claude decidir)
-    let forceAudio = false;
-
-    if (isAudio) {
-      // Lead mandou áudio → espelha o meio, sempre
-      forceAudio = true;
-      console.log(`[webhook] lead mandou áudio → resposta forçada em áudio`);
-    } else if (isExplicitAudioRequest(text)) {
-      // Lead pediu áudio explicitamente em texto → atende
-      forceAudio = true;
-      console.log(`[webhook] lead pediu áudio explicitamente → resposta forçada em áudio`);
-    } else if (contact.awaitingAudioConfirm) {
-      // Lead estava respondendo ao pedido de permissão de áudio
-      if (isAffirmative(text)) {
-        setAudioFlags(from, { awaitingAudioConfirm: false, audioPermission: true });
-        forceAudio = true;
-        console.log(`[webhook] lead confirmou áudio`);
-      } else if (isNegative(text)) {
-        setAudioFlags(from, { awaitingAudioConfirm: false });
-        console.log(`[webhook] lead recusou áudio — continuando em texto`);
-      } else {
-        setAudioFlags(from, { awaitingAudioConfirm: false });
-      }
-    }
-
-    const result = await reply(from, text, { isAudio, forceAudio });
-
-    // Envia como áudio se: código forçou OU Claude optou por áudio
-    const shouldSendAudio = forceAudio || result.useAudio;
-
-    if (shouldSendAudio) {
-      // Áudio já tem latência natural do TTS (~2-3s) — não adiciona delay extra.
-      console.log(`[webhook] enviando resposta em áudio para ${from}`);
-      try {
-        const mediaId = await textToAudioMessage(result.text);
-        await sendAudio(from, mediaId);
-      } catch (err) {
-        console.error('[webhook] erro ao gerar/enviar áudio, enviando como texto:', err.message);
-        await sleep(typingDelayMs(result.text));
-        await sendMessage(from, result.text);
-      }
-    } else {
-      await sleep(typingDelayMs(result.text));
-      await sendMessage(from, result.text);
-    }
-
-  } catch (err) {
-    console.error('[webhook] erro ao processar mensagem:', err.message);
-  }
+  // Acumula no buffer; processamento real (IA + envio) acontece quando o
+  // timer do buffer expira (15s sem nova msg do mesmo phone).
+  enqueueMessage(from, text, isAudio);
 });
 
 module.exports = router;

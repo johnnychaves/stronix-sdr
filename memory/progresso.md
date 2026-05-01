@@ -4,6 +4,34 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-01 — Buffer de mensagens (debouncing por phone)
+
+**Contexto:** Lead/aluno costuma fragmentar pensamento em várias msgs curtas ("oi" → "tem aula?" → "qual valor?"). Sem buffer, cada uma virava webhook independente, IA processava 3x e respondia fora de ordem — especialmente crítico depois que o delay de digitação subiu pra 1-3 min, abrindo janela enorme pra race condition.
+
+**Solução:** janela de debounce de 15s por phone.
+
+**Como funciona:**
+- Webhook resolve text (transcreve áudio se preciso) e chama `enqueueMessage(from, text, isAudio)`
+- `enqueueMessage` empilha no Map `buffers` por phone, cancela timer anterior e agenda novo timer de 15s
+- Quando 15s passam SEM nova msg do mesmo phone, `flushBuffer` dispara `processBatch`
+- `processBatch` (extraído do antigo handler POST):
+  - Concatena msgs com `\n` → vira o "text" da chamada da IA
+  - `anyAudio` = qualquer msg do batch foi áudio
+  - `explicitAudio` = qualquer msg pediu áudio explicitamente em texto
+  - `firstText` = 1ª msg de texto (pra avaliar isAffirmative/isNegative no fluxo de awaitingAudioConfirm)
+  - Roteamento aluno vs lead, depois reply() com texto concatenado, depois delay 1-3 min, depois envia
+
+**Tradeoffs aceitos:**
+- Lead que manda 1 msg só agora espera 15s + 1-3 min (era 0 + 1-3 min). Custo pequeno, simplicidade alta.
+- Histórico no DB fica com 1 msg do user contendo texto concatenado, em vez de N msgs fragmentadas. No painel aparece junto, separado por `\n`.
+- Buffer é em memória — restart do servidor perde msgs pendentes (raro no Railway).
+
+**Race condition residual:** durante o sleep de 1-3 min após o flush, lead pode mandar mais msgs e gerar um SEGUNDO batch que processa em paralelo. Mitigação futura (se virar problema via review do painel): lock por phone.
+
+**Smoke test:** 3 webhook POSTs em 2s → buffer acumula (1,2,3) → 15s depois → 1 flush → 1 chamada Claude com texto concatenado de 32 chars. Confirmado.
+
+---
+
 ## 2026-05-01 — Importação em massa de alunos (planilha STRONIX)
 
 **Contexto:** STRONIX compartilhou XLSX `clientes-01_05_2026.xlsx` com 621 linhas, 602 contratos ativos. Construir bulk import era o próximo bloqueio antes de ligar o número real.

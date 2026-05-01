@@ -4,6 +4,38 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-01 — Debounce por chave em Map<phone, {messages, timer}>
+
+**Contexto:** Acumular mensagens fragmentadas do mesmo lead/aluno e processar em lote depois de janela de inatividade.
+
+**Solução:** (`src/webhook.js`)
+```js
+const BUFFER_WINDOW_MS = 15 * 1000;
+const buffers = new Map();
+
+function enqueueMessage(from, text, isAudio) {
+  let buf = buffers.get(from);
+  if (!buf) {
+    buf = { messages: [], timer: null };
+    buffers.set(from, buf);
+  }
+  buf.messages.push({ text, isAudio });
+  if (buf.timer) clearTimeout(buf.timer);
+  buf.timer = setTimeout(() => flushBuffer(from), BUFFER_WINDOW_MS);
+}
+
+function flushBuffer(from) {
+  const buf = buffers.get(from);
+  if (!buf || !buf.messages.length) { buffers.delete(from); return; }
+  buffers.delete(from);
+  // ... processa buf.messages como batch
+}
+```
+
+**Por que funciona:** Cada nova msg cancela o timer anterior e agenda um novo. Só dispara quando passa N segundos SEM nova msg do mesmo phone. Map permite múltiplos leads independentes em paralelo. State em memória — perdas em restart aceitáveis pra esse uso.
+
+---
+
 ## 2026-05-01 — Bulk insert transacional com better-sqlite3
 
 **Contexto:** Importar 594 registros via 594 PUTs separados é lento e martela o servidor. Bulk em transação única é ordens de grandeza mais rápido.
