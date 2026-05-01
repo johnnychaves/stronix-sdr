@@ -63,101 +63,369 @@ router.post('/api/auth/logout', (req, res) => {
 
 // Tela de login HTML — pública (sem auth)
 router.get('/login', (req, res) => {
-  res.send(`<!DOCTYPE html>
+  res.send(`<!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>STRONIX SDR — Login</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 32px; width: 380px; max-width: calc(100vw - 32px); }
-    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-    h1 .accent { color: #22c55e; }
-    .subtitle { font-size: 13px; color: #666; margin-bottom: 24px; }
-    .bootstrap-banner { background: #1e2a1e; color: #4ade80; border: 1px solid #22c55e44; padding: 12px 14px; border-radius: 8px; font-size: 12px; line-height: 1.5; margin-bottom: 18px; }
-    label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; margin-top: 14px; }
-    input { width: 100%; background: #0f0f0f; color: #d4d4d4; border: 1px solid #2a2a2a; border-radius: 6px; padding: 10px 12px; font-size: 14px; outline: none; font-family: inherit; }
-    input:focus { border-color: #22c55e44; }
-    button { width: 100%; margin-top: 20px; padding: 11px; background: #22c55e; color: #000; border: none; border-radius: 7px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s; }
-    button:hover { background: #16a34a; }
-    button:disabled { background: #1a4a2a; color: #555; cursor: not-allowed; }
-    .error { color: #f87171; font-size: 13px; margin-top: 12px; min-height: 18px; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STRONIX SDR — Login</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;
+  background:#0a1014;color:#e9edef;overflow:hidden;
+}
+
+/* ─── Tokens ─── */
+:root{
+  --brand:#00a884;--brand-dark:#008f72;--brand-light:#06cf9c;
+  --brand-soft:rgba(0,168,132,.13);--brand-on:#001f17;
+  --bg-0:#0a1014;--bg-1:#111b21;--bg-2:#1a2730;--bg-3:#202c33;--bg-4:#2a3942;
+  --border-subtle:#1f2a30;--border:#222d34;--border-strong:#2a3942;
+  --text-primary:#e9edef;--text-secondary:#aebac1;--text-muted:#8696a0;--text-faint:#67797f;
+  --bubble-in:#202c33;--bubble-out:#005c4b;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.2);
+  --shadow-md:0 4px 12px rgba(0,0,0,.35);
+  --shadow-lg:0 12px 28px rgba(0,0,0,.5);
+  --shadow-bubble:0 1px 1px rgba(0,0,0,.13);
+  --glow-brand:0 4px 10px rgba(0,168,132,.25);
+  --glow-brand-hi:0 6px 14px rgba(0,168,132,.40);
+  --t-fast:.12s cubic-bezier(.2,.8,.2,1);
+}
+
+.shell{display:grid;grid-template-columns:1.05fr .95fr;height:100vh}
+
+/* ─── Painel da marca (esquerda) ─── */
+.brand{
+  position:relative;
+  background:
+    radial-gradient(1100px 700px at 75% 10%,rgba(0,168,132,.22),transparent 55%),
+    radial-gradient(900px 600px at 10% 95%,rgba(6,207,156,.10),transparent 60%),
+    linear-gradient(165deg,#0a1014 0%,#111b21 50%,#0c1418 100%);
+  padding:48px 56px;
+  display:flex;flex-direction:column;justify-content:space-between;
+  overflow:hidden;
+}
+.brand::before{
+  content:"";position:absolute;inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:48px 48px;
+  mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,#000 30%,transparent 80%);
+  pointer-events:none;
+}
+.logo{display:flex;align-items:center;gap:14px;position:relative;z-index:1}
+.logo .mark{
+  width:44px;height:44px;border-radius:11px;
+  background:linear-gradient(135deg,#00a884,#008f72);
+  display:grid;place-items:center;color:#001f17;font-weight:800;font-size:24px;
+  box-shadow:var(--glow-brand);letter-spacing:-1px;
+}
+.logo .word{font-weight:700;font-size:18px;letter-spacing:-.3px}
+.logo .word .accent{color:var(--brand)}
+
+.pitch{position:relative;z-index:1;max-width:480px}
+.pitch .eyebrow{
+  font-size:11px;font-weight:600;color:var(--brand);letter-spacing:.12em;text-transform:uppercase;
+  margin-bottom:20px;
+}
+.pitch h1{
+  font-size:42px;font-weight:700;line-height:1.1;letter-spacing:-1px;margin:0 0 18px;
+}
+.pitch h1 .em{
+  background:linear-gradient(120deg,#00a884,#06cf9c);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.pitch p{font-size:15px;line-height:1.55;color:var(--text-secondary);margin:0 0 28px;max-width:440px}
+
+.preview{
+  position:relative;z-index:1;
+  background:rgba(17,27,33,.6);backdrop-filter:blur(12px);
+  border:1px solid var(--border-subtle);border-radius:14px;
+  padding:14px 16px 12px;max-width:380px;
+  display:flex;flex-direction:column;gap:5px;
+  box-shadow:var(--shadow-lg);
+}
+.preview .head{
+  display:flex;align-items:center;gap:9px;
+  padding-bottom:10px;border-bottom:1px solid var(--border-subtle);margin-bottom:8px;
+}
+.preview .av{
+  width:30px;height:30px;border-radius:50%;
+  background:linear-gradient(135deg,#f472b6,#db2777);
+  display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px;flex-shrink:0;
+}
+.preview .head .nm{font-weight:600;font-size:13px}
+.preview .head .st{font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px}
+.preview .head .st::before{content:"";width:6px;height:6px;border-radius:50%;background:#4ade80;display:inline-block}
+.preview .b{
+  padding:7px 11px 6px;border-radius:8px;font-size:13px;line-height:1.4;
+  max-width:82%;box-shadow:var(--shadow-bubble);
+}
+.preview .b.in{background:var(--bubble-in);align-self:flex-start;border-top-left-radius:2px}
+.preview .b.out{background:var(--bubble-out);align-self:flex-end;border-top-right-radius:2px}
+.preview .b .t{font-size:10px;color:var(--text-muted);margin-top:1px;display:block;text-align:right}
+
+.brand-foot{position:relative;z-index:1;display:flex;justify-content:space-between;align-items:flex-end;font-size:12px;color:var(--text-muted)}
+.brand-foot .addr{line-height:1.5}
+.brand-foot .ig{color:var(--brand-light);font-weight:500}
+
+/* ─── Painel do formulário (direita) ─── */
+.form-wrap{
+  background:var(--bg-1);
+  display:flex;align-items:center;justify-content:center;
+  padding:48px;position:relative;
+}
+.form{width:100%;max-width:380px;display:flex;flex-direction:column;gap:22px}
+.form .top{display:flex;flex-direction:column;gap:6px}
+.form h2{font-size:24px;font-weight:700;letter-spacing:-.3px}
+.form .sub{font-size:14px;color:var(--text-secondary);line-height:1.5}
+
+.field{display:flex;flex-direction:column;gap:7px}
+.field label{font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:.02em;text-transform:uppercase}
+.field .ctl{
+  position:relative;display:flex;align-items:center;
+  background:var(--bg-2);border:1px solid var(--border);border-radius:9px;
+  transition:all var(--t-fast);
+}
+.field .ctl:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.field .ctl input{
+  flex:1;background:transparent;border:none;outline:none;
+  color:var(--text-primary);font:14px inherit;
+  padding:12px 14px;
+}
+.field .ctl input::placeholder{color:var(--text-faint)}
+.field .ctl .ic{padding:0 0 0 14px;color:var(--text-muted);display:grid;place-items:center;flex-shrink:0}
+.field .ctl .ic svg{width:16px;height:16px;stroke-width:2;stroke:currentColor;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.field .ctl .toggle{padding:0 13px;color:var(--text-muted);background:none;border:none;cursor:pointer;font-size:11px;letter-spacing:.05em;font-weight:600;text-transform:uppercase;white-space:nowrap}
+.field .ctl .toggle:hover{color:var(--brand)}
+
+.opts{display:flex;justify-content:space-between;align-items:center;margin-top:-4px}
+.opts .check{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;user-select:none}
+.opts .check input{accent-color:var(--brand);width:15px;height:15px;cursor:pointer}
+
+.submit{
+  background:var(--brand);color:var(--brand-on);
+  font:600 14px inherit;
+  padding:13px 16px;border:none;border-radius:9px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;
+  box-shadow:var(--glow-brand);transition:all var(--t-fast);
+}
+.submit:hover{background:var(--brand-light);box-shadow:var(--glow-brand-hi);transform:translateY(-1px)}
+.submit:disabled{background:var(--bg-4);color:var(--text-muted);box-shadow:none;transform:none;cursor:not-allowed}
+.submit svg{transition:transform var(--t-fast)}
+.submit:hover:not(:disabled) svg{transform:translateX(2px)}
+
+.err-msg{color:#f87171;font-size:13px;min-height:18px;line-height:1.4}
+
+.divider{display:flex;align-items:center;gap:14px;color:var(--text-faint);font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border-subtle)}
+
+.bootstrap-card{
+  background:var(--bg-2);border:1px dashed var(--border-strong);border-radius:9px;
+  padding:14px;display:flex;gap:12px;align-items:flex-start;
+}
+.bootstrap-card .bk-icn{
+  width:32px;height:32px;border-radius:8px;background:var(--brand-soft);
+  display:grid;place-items:center;color:var(--brand-light);flex-shrink:0;
+}
+.bootstrap-card .bk-body{font-size:12.5px;line-height:1.55;color:var(--text-secondary)}
+.bootstrap-card .bk-body strong{color:var(--text-primary);font-weight:600}
+
+/* ─── Campos extras do bootstrap (display:none por padrão) ─── */
+.extra-fields{display:flex;flex-direction:column;gap:22px}
+
+.form-footer{
+  position:absolute;bottom:20px;left:0;right:0;text-align:center;
+  font-size:11px;color:var(--text-faint);letter-spacing:.02em;
+}
+
+@media(max-width:880px){
+  .shell{grid-template-columns:1fr}
+  .brand{display:none}
+  .form-wrap{padding:32px 24px}
+  body{overflow:auto}
+}
+</style>
 </head>
 <body>
-  <div class="card">
-    <h1>⚡ STRONIX <span class="accent">SDR</span></h1>
-    <p class="subtitle" id="subtitle">Acesse o painel</p>
-    <div class="bootstrap-banner" id="banner" style="display:none">
-      Nenhum admin cadastrado ainda. Cadastre o <strong>primeiro admin</strong> abaixo — ele terá acesso total ao painel.
+
+<div class="shell">
+
+  <!-- Painel da marca -->
+  <aside class="brand">
+    <div class="logo">
+      <div class="mark">S</div>
+      <div class="word">STRONIX <span class="accent">SDR</span></div>
     </div>
-    <form id="form">
-      <label>Usuário</label>
-      <input id="username" autocomplete="username" required>
-      <label>Senha <span id="pw-hint" style="color:#444;font-weight:400" hidden> (mín 8 caracteres)</span></label>
-      <input id="password" type="password" autocomplete="current-password" required>
-      <div id="extra-fields" style="display:none">
-        <label>Nome completo</label>
-        <input id="displayName" autocomplete="name">
-        <label>Telefone (opcional, formato 5551XXXXXXXX)</label>
-        <input id="phone" inputmode="numeric">
+
+    <div class="pitch">
+      <div class="eyebrow">Painel da equipe · STRONIX Academia</div>
+      <h1>O Johnny não dorme. <span class="em">Sua equipe sim.</span></h1>
+      <p>Atendimento WhatsApp 24/7 com IA, handoff humano em um clique e agenda de visitas direto no painel. Tudo num lugar só.</p>
+
+      <div class="preview" aria-hidden="true">
+        <div class="head">
+          <div class="av">MH</div>
+          <div>
+            <div class="nm">Maria Helena</div>
+            <div class="st">online · respondendo</div>
+          </div>
+        </div>
+        <div class="b in">Oi! Quero saber dos planos de musculação 💪<span class="t">14:30</span></div>
+        <div class="b out">Que massa! Aula experimental é gratuita. Quarta de manhã serve?<span class="t">14:30 ✓✓</span></div>
+        <div class="b in">Quarta às 9h fica show!<span class="t">14:31</span></div>
       </div>
-      <button type="submit" id="submit">Entrar</button>
-      <div class="error" id="err"></div>
+    </div>
+
+    <div class="brand-foot">
+      <div class="addr">
+        Av. Edgar Pires de Castro, 9392<br>
+        Bairro Lageado · Porto Alegre/RS
+      </div>
+      <div class="ig">@stronixacademia</div>
+    </div>
+  </aside>
+
+  <!-- Formulário -->
+  <main class="form-wrap">
+    <form class="form" id="form" onsubmit="return false">
+
+      <div class="top">
+        <h2 id="form-title">Bem-vindo de volta</h2>
+        <p class="sub" id="form-sub">Entre com a conta da equipe pra acessar a inbox e agendamentos.</p>
+      </div>
+
+      <div class="field">
+        <label for="username">Usuário</label>
+        <div class="ctl">
+          <span class="ic">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          </span>
+          <input id="username" type="text" placeholder="seu.usuario" autocomplete="username" required>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="password">Senha <span id="pw-hint" style="color:var(--text-faint);font-weight:400;text-transform:none" hidden>(mín 8 caracteres)</span></label>
+        <div class="ctl">
+          <span class="ic">
+            <svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          </span>
+          <input id="password" type="password" placeholder="Sua senha" autocomplete="current-password" required>
+          <button type="button" class="toggle" id="pw-toggle" onclick="(function(){const i=document.getElementById('password');const t=document.getElementById('pw-toggle');i.type=i.type==='password'?'text':'password';t.textContent=i.type==='password'?'Mostrar':'Ocultar'})()">Mostrar</button>
+        </div>
+      </div>
+
+      <!-- Campos extras — modo bootstrap -->
+      <div class="extra-fields" id="extra-fields" style="display:none">
+        <div class="field">
+          <label for="displayName">Nome completo</label>
+          <div class="ctl">
+            <span class="ic">
+              <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </span>
+            <input id="displayName" type="text" placeholder="Ex: Paula Rodrigues" autocomplete="name">
+          </div>
+        </div>
+        <div class="field">
+          <label for="phone">Telefone <span style="color:var(--text-faint);font-weight:400;text-transform:none">(opcional)</span></label>
+          <div class="ctl">
+            <span class="ic">
+              <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2A19.8 19.8 0 0 1 3.08 5.18 2 2 0 0 1 5.09 3h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L9.09 10.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 23 18a2 2 0 0 1-.08.92z"/></svg>
+            </span>
+            <input id="phone" type="tel" placeholder="5551XXXXXXXXX" inputmode="numeric">
+          </div>
+        </div>
+      </div>
+
+      <div class="opts" id="opts-row">
+        <label class="check"><input type="checkbox" checked>Manter conectada</label>
+      </div>
+
+      <button type="submit" class="submit" id="submit">
+        Entrar no painel
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+      </button>
+
+      <div class="err-msg" id="err"></div>
+
+      <!-- Separador bootstrap -->
+      <div class="divider" id="bootstrap-divider" style="display:none">Primeira vez aqui?</div>
+
+      <!-- Card de bootstrap (aparece quando não há admin) -->
+      <div class="bootstrap-card" id="bootstrap-card" style="display:none">
+        <div class="bk-icn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+        </div>
+        <div class="bk-body" id="bootstrap-msg">
+          <strong>Configuração inicial.</strong><br>
+          Nenhum admin cadastrado ainda. Preencha os campos acima para criar o primeiro admin com acesso total ao painel.
+        </div>
+      </div>
+
     </form>
-  </div>
-  <script>
-    let bootstrap = false;
-    fetch('/admin/api/auth/status').then(r => r.json()).then(s => {
-      bootstrap = !!s.bootstrap;
-      if (bootstrap) {
-        document.getElementById('subtitle').textContent = 'Configuração inicial';
-        document.getElementById('banner').style.display = 'block';
-        document.getElementById('extra-fields').style.display = 'block';
-        document.getElementById('submit').textContent = 'Criar admin e entrar';
-        document.getElementById('pw-hint').hidden = false;
-        document.getElementById('password').autocomplete = 'new-password';
-      }
-    });
 
-    document.getElementById('form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = document.getElementById('submit');
-      const err = document.getElementById('err');
-      err.textContent = '';
-      btn.disabled = true;
+    <div class="form-footer">© STRONIX 2026 · Painel SDR</div>
+  </main>
 
-      const body = {
-        username: document.getElementById('username').value.trim(),
-        password: document.getElementById('password').value,
-      };
-      if (bootstrap) {
-        body.displayName = document.getElementById('displayName').value.trim();
-        body.phone = document.getElementById('phone').value.trim();
-      }
+</div>
 
-      const url = bootstrap ? '/admin/api/auth/bootstrap' : '/admin/api/auth/login';
-      try {
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await r.json();
-        if (!r.ok) {
-          err.textContent = data.error || 'Erro';
-          btn.disabled = false;
-          return;
-        }
-        location.href = '/admin';
-      } catch (e2) {
-        err.textContent = 'Falha de conexão';
+<script>
+  let isBootstrap = false;
+
+  fetch('/admin/api/auth/status').then(r => r.json()).then(s => {
+    isBootstrap = !!s.bootstrap;
+    if (isBootstrap) {
+      document.getElementById('form-title').textContent = 'Configuração inicial';
+      document.getElementById('form-sub').textContent = 'Crie o primeiro admin pra liberar o acesso ao painel.';
+      document.getElementById('extra-fields').style.display = 'flex';
+      document.getElementById('opts-row').style.display = 'none';
+      document.getElementById('submit').innerHTML = 'Criar admin e entrar <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>';
+      document.getElementById('pw-hint').hidden = false;
+      document.getElementById('password').autocomplete = 'new-password';
+      document.getElementById('bootstrap-divider').style.display = 'flex';
+      document.getElementById('bootstrap-card').style.display = 'flex';
+    }
+  }).catch(() => {});
+
+  document.getElementById('form').addEventListener('submit', async () => {
+    const btn = document.getElementById('submit');
+    const err = document.getElementById('err');
+    err.textContent = '';
+    btn.disabled = true;
+
+    const body = {
+      username: document.getElementById('username').value.trim(),
+      password: document.getElementById('password').value,
+    };
+    if (isBootstrap) {
+      body.displayName = document.getElementById('displayName').value.trim();
+      body.phone = document.getElementById('phone').value.trim();
+    }
+
+    const url = isBootstrap ? '/admin/api/auth/bootstrap' : '/admin/api/auth/login';
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        err.textContent = data.error || 'Erro desconhecido';
         btn.disabled = false;
+        return;
       }
-    });
-  </script>
+      location.href = '/admin';
+    } catch {
+      err.textContent = 'Falha de conexão — verifique sua rede';
+      btn.disabled = false;
+    }
+  });
+</script>
 </body>
 </html>`);
 });
