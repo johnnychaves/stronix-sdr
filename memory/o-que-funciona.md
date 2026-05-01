@@ -4,6 +4,47 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-01 — Envio de áudio pra Meta Cloud API: usar MP3, não opus/ogg
+
+**Contexto:** Painel admin precisa permitir consultora gravar e enviar voice message via WhatsApp. MediaRecorder do browser produz webm (Chrome) ou mp4 (Safari).
+
+**Tentativas que NÃO funcionaram** (Meta aceitava upload + chamada `/messages` retornava 200 OK + `wamid.xxx`, mas mensagem **nunca chegava** no destinatário — silent reject sem webhook de erro):
+1. Mandar webm direto → Meta rejeita (webm não está na lista oficial)
+2. Transcode webm→ogg/opus com `-c:a copy` → falha silenciosa
+3. Transcode com opus 64kbps estéreo → falha silenciosa
+4. Transcode com opus mono 16kHz 32kbps `-application voip` (parâmetros "canônicos" de voice message) → falha silenciosa
+
+**Solução que funciona:** copiar o pipeline EXATO que `src/tts.js` (TTS via ElevenLabs) usa em produção há semanas:
+
+```js
+// src/whatsapp.js - transcodeAudio
+const args = [
+  '-loglevel', 'error',
+  '-i', 'pipe:0',
+  '-c:a', 'libmp3lame',
+  '-b:a', '64k',
+  '-ar', '44100',
+  '-ac', '1',
+  '-f', 'mp3',
+  'pipe:1',
+];
+
+// uploadMedia — fetch (NÃO axios) + ordem específica
+const blob = new Blob([buffer], { type: 'audio/mpeg' });
+const form = new FormData();
+form.append('file', blob, 'voice.mp3');     // file PRIMEIRO
+form.append('type', 'audio/mpeg');           // depois type
+form.append('messaging_product', 'whatsapp'); // por último
+
+await fetch(`.../media`, { method: 'POST', headers: { Authorization }, body: form });
+```
+
+**Aprendizado:** quando algo no pipeline já funciona em produção, **replique o caminho inteiro** em vez de tentar variações do que "deveria" funcionar segundo docs. A doc da Meta diz que aceita ogg/opus, mas na prática o caminho MP3 + fetch + ordem específica é o que entrega.
+
+**Onde está:** [src/whatsapp.js](../src/whatsapp.js) (`transcodeAudio` + `uploadMedia`), [src/admin.js](../src/admin.js) (endpoint `/api/conversations/:phone/reply-audio`).
+
+---
+
 ## 2026-05-01 — Debounce por chave em Map<phone, {messages, timer}>
 
 **Contexto:** Acumular mensagens fragmentadas do mesmo lead/aluno e processar em lote depois de janela de inatividade.
