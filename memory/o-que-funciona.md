@@ -4,9 +4,190 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-01 — Tag estruturada como sinal LLM → backend
+
+**Contexto:** Quando o LLM precisa "avisar" o sistema que algo aconteceu (agendamento confirmado, captura de info, mudança de stage).
+
+**Solução:** Inclui no prompt instrução pra LLM colocar tag formatada no início da resposta:
+```
+[AGENDAMENTO:nome=João|hora=9h|dia=terça|modalidade=musculação]
+Resposta normal pro lead aqui...
+```
+
+Backend faz regex match, extrai os dados, salva, e remove a tag antes de enviar ao usuário.
+
+```js
+const apptMatch = answer.match(/\[AGENDAMENTO:([^\]]+)\]/i);
+if (apptMatch) {
+  const data = {};
+  apptMatch[1].split('|').forEach(pair => {
+    const [k, v] = pair.split('=');
+    if (k && v) data[k.trim().toLowerCase()] = v.trim();
+  });
+  // ... salva no banco, notifica, etc.
+  cleanText = answer.replace(/\[AGENDAMENTO:[^\]]+\]/gi, '').trim();
+}
+```
+
+**Por que funciona:** O LLM já tem todo o contexto da conversa. Ele sabe quando algo importante aconteceu. Em vez de NLP/regex tentando adivinhar do texto cru, o LLM sinaliza explicitamente. Zero ambiguidade.
+
+---
+
+## 2026-05-01 — Prompt caching com cache_control ephemeral
+
+**Contexto:** Prompt grande (~38k chars) recalculado a cada mensagem é caro.
+
+**Solução:** (`src/agent.js`)
+```js
+const systemBlocks = [
+  {
+    type: 'text',
+    text: SYSTEM_PROMPT,
+    cache_control: { type: 'ephemeral' },  // cacheado por 5min
+  },
+];
+if (dynamicCtx) {
+  systemBlocks.push({ type: 'text', text: dynamicCtx });
+}
+
+const response = await client.messages.create({
+  model: 'claude-sonnet-4-5-20250929',
+  system: systemBlocks,
+  ...
+});
+```
+
+**Por que funciona:** Anthropic cobra 0.1x do input nos cache hits (90% desconto). Em conversa de 10+ mensagens em poucos minutos, paga só a 1ª e ganha desconto nas seguintes.
+
+---
+
+## 2026-05-01 — Prompt em 4 camadas (anti "lost in the middle")
+
+**Contexto:** LLMs dão menos atenção ao meio de prompts longos. Regras críticas no meio se diluem.
+
+**Solução:** Estrutura do prompt:
+1. **TOPO BLINDADO** (alta atenção): identidade + 5 regras inegociáveis + antipadrão real
+2. **REGRAS DETALHADAS** (meio): operacional comercial, base de conhecimento
+3. **EDGE CASES** (meio-fim): públicos, cenários de borda
+4. **LEMBRETE FINAL** (alta atenção): repete as 5 regras essenciais
+
+**Por que funciona:** Repetição estratégica nas zonas de alta atenção compensa o efeito de diluição central. Reduziu prompt de 56k → 38k chars sem perder regras.
+
+---
+
+## 2026-05-01 — Migração SQL idempotente
+
+**Contexto:** Adicionar coluna em tabela existente sem quebrar setup novos.
+
+**Solução:** (`src/db.js`)
+```js
+// CREATE TABLE IF NOT EXISTS já tem a nova coluna pra setups novos
+db.exec(`CREATE TABLE IF NOT EXISTS appointments (... scheduled_hour TEXT ...);`);
+
+// Migração pra setups antigos
+const cols = db.prepare('PRAGMA table_info(appointments)').all();
+if (!cols.find(c => c.name === 'scheduled_hour')) {
+  db.exec('ALTER TABLE appointments ADD COLUMN scheduled_hour TEXT');
+  console.log('[db] migração: coluna scheduled_hour adicionada');
+}
+```
+
+**Por que funciona:** Idempotente — roda em qualquer estado do banco. Bancos novos têm a coluna via CREATE TABLE; bancos antigos ganham via ALTER TABLE; bancos já migrados ignoram.
+
+---
+
+## 2026-04-30 — Estado por contato em SQLite com camada de normalização camelCase
+
+**Contexto:** DB usa snake_case (audio_permission), código JavaScript usa camelCase (audioPermission). Não vazar essa conversão pelos consumidores.
+
+**Solução:** (`src/agent.js`)
+```js
+function getContact(from) {
+  const c = db.getOrCreateContact(from);
+  return {
+    phone: c.phone,
+    name: c.name,
+    audioPermission: !!c.audio_permission,
+    awaitingAudioConfirm: !!c.awaiting_audio_confirm,
+    askedForAudio: !!c.asked_for_audio,
+    firstContactAt: c.first_contact_at,
+    lastContactAt: c.last_contact_at,
+  };
+}
+
+// Setter explícito (substitui mutação direta)
+function setAudioFlags(from, updates) {
+  const current = getContact(from);
+  db.updateAudioFlags(from, {
+    audioPermission: updates.audioPermission ?? current.audioPermission,
+    ...
+  });
+}
+```
+
+**Por que funciona:** Consumidor (webhook.js) chama `setAudioFlags(from, { awaitingAudioConfirm: false })` em vez de `contact.awaitingAudioConfirm = false`. DB é detalhe interno do agent.js.
+
+---
+
+## 2026-04-30 — Tag temporal contextual ([LEAD_RETORNANDO_APÓS_X_DIAS])
+
+**Contexto:** Quando lead volta depois de muito tempo (>30 dias), SDR não pode começar do zero — tem que reconhecer o retorno com naturalidade.
+
+**Solução:** Calcula dias desde último contato no `agent.js`, injeta tag dinâmica no system prompt:
+```js
+if (isReturning) {
+  dynamicCtx += `\n\n[LEAD_RETORNANDO_APÓS_${daysSinceLast}_DIAS] — esse lead já conversou contigo há ${daysSinceLast} dias. Histórico completo está no messages acima. Reconheça o retorno com zero julgamento. NÃO comece do zero, NÃO se reapresente. Tom acolhedor ("Bah, sumido!", "Tava te esperando").`;
+}
+```
+
+**Por que funciona:** Tag é dinâmica (não cacheada), contém o número exato de dias e instruções explícitas. SDR responde: "Bah, sumido! Então, a gente tava conversando sobre seu objetivo de emagrecer..."
+
+---
+
+## 2026-04-30 — Sanitização de em-dash no código (dupla camada)
+
+**Contexto:** Claude às vezes usa "—" (em-dash) mesmo com regra explícita no prompt. É marca registrada de IA em WhatsApp.
+
+**Solução:** (`src/agent.js`)
+```js
+const beforeSanitize = cleanText;
+cleanText = cleanText.replace(/\s*[—–]\s*/g, ', ');
+if (beforeSanitize !== cleanText) {
+  console.log(`[agent] sanitizou traço longo na resposta para ${from}`);
+}
+```
+
+**Por que funciona:** Garantia em código complementa instrução no prompt. Mesmo se LLM falhar a regra, o usuário nunca recebe em-dash.
+
+---
+
+## 2026-04-30 — Detecção de horário comercial fechado (timezone-aware)
+
+**Contexto:** Lead manda mensagem fora do horário (madrugada, domingo) — SDR precisa abrir avisando que é assistente virtual.
+
+**Solução:** (`src/agent.js`)
+```js
+function isOutsideBusinessHours() {
+  const now = new Date();
+  const brt = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const day = brt.getDay();
+  const hour = brt.getHours();
+  const min = brt.getMinutes();
+  if (day === 0) return true;                    // domingo
+  if (day === 6) return hour < 9 || hour >= 13;  // sábado 9h-13h
+  if (hour < 6 || hour > 22) return true;
+  if (hour === 22 && min >= 30) return true;
+  return false;
+}
+```
+
+Tag injetada como `[FORA_DO_HORÁRIO_COMERCIAL]` no contexto dinâmico só na 1ª mensagem.
+
+---
+
 ## 2026-04-30 — Normalização de número brasileiro para Meta API
 
-**Contexto:** Ao responder mensagens recebidas via webhook, o campo `from` vem com 12 dígitos (sem o 9º dígito móvel). A API de envio exige 13 dígitos.
+**Contexto:** Webhook recebe `from` com 12 dígitos (sem 9º dígito móvel). API de envio exige 13.
 
 **Solução:** (`src/whatsapp.js`)
 ```js
@@ -18,13 +199,13 @@ function normalizeBRNumber(number) {
 }
 ```
 
-**Por que funciona:** O Meta armazena o wa_id no formato antigo (8 dígitos após o DDD), mas a API de envio aceita apenas o formato atual com 9 dígitos. A função insere o `9` na posição correta (após país+DDD = 4 dígitos).
+**Por que funciona:** Insere `9` na posição correta (após país+DDD = 4 dígitos).
 
 ---
 
-## 2026-04-30 — Formato de token no webhook Meta
+## 2026-04-30 — Webhook verification do Meta
 
-**Contexto:** O Meta faz um GET no endpoint do webhook para verificação antes de aceitar a URL.
+**Contexto:** Meta faz GET no endpoint do webhook pra verificar antes de aceitar a URL.
 
 **Solução:** (`src/webhook.js`)
 ```js
@@ -36,7 +217,8 @@ router.get('/', (req, res) => {
   res.sendStatus(403);
 });
 ```
-**Por que funciona:** O Meta envia `hub.challenge` e espera receber exatamente esse valor de volta com status 200.
+
+**Por que funciona:** Meta envia `hub.challenge` e espera receber exatamente esse valor de volta com status 200.
 
 ---
 
