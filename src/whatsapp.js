@@ -33,7 +33,7 @@ async function sendMessage(to, text) {
 
 async function sendAudio(to, mediaId) {
   const recipient = normalizeBRNumber(to);
-  await axios.post(
+  const res = await axios.post(
     BASE_URL,
     {
       messaging_product: 'whatsapp',
@@ -48,6 +48,9 @@ async function sendAudio(to, mediaId) {
       },
     }
   );
+  // Log da resposta da Meta pra debug — mostra wa_id, message_id, status
+  console.log(`[whatsapp] sendAudio resposta:`, JSON.stringify(res.data));
+  return res.data;
 }
 
 // Faz upload de mídia (áudio/imagem/etc) pra Meta Cloud API e retorna media_id.
@@ -66,23 +69,31 @@ async function uploadMedia(buffer, mimeType, filename = 'upload.bin') {
   return res.data.id;
 }
 
-// Remuxa container de áudio via ffmpeg, mantendo o codec quando possível
-// (webm/opus → ogg/opus é -c:a copy, instantâneo). Pra outros formatos faz
-// re-encode pra opus 64kbps.
-// Necessário porque Chrome grava só em webm e WhatsApp Cloud API não aceita
-// webm — exige ogg/opus, mp4, mp3, aac ou amr.
+// Re-encoda áudio pro formato exato que WhatsApp aceita como voice message:
+// ogg/opus mono, 16kHz, 32kbps, application=voip.
+// Esses parâmetros batem com o que o WhatsApp app produz internamente — sem
+// eles, a Meta aceita o upload mas não exibe (ou exibe como arquivo de áudio
+// silencioso) no client do destinatário.
+//
+// Necessário porque MediaRecorder do browser produz containers (webm, mp4)
+// com parâmetros genéricos (44.1/48kHz, estéreo) que não casam com o que o
+// WhatsApp client espera pra renderizar voice message.
 function transcodeAudio(inputBuffer, inputMime) {
   return new Promise((resolve, reject) => {
-    const isOpusContainer = inputMime === 'audio/webm' || inputMime === 'audio/ogg';
-    const args = ['-loglevel', 'error', '-i', 'pipe:0'];
-    if (isOpusContainer) {
-      // Mesmo codec opus, só troca container — sem re-encode
-      args.push('-c:a', 'copy');
-    } else {
-      // Re-encode pra opus 64kbps (qualidade voz)
-      args.push('-c:a', 'libopus', '-b:a', '64k');
-    }
-    args.push('-f', 'ogg', 'pipe:1');
+    // Sempre re-encoda pra garantir parâmetros corretos. Custo: ~100-300ms
+    // por áudio. Ganho: entrega 100% confiável.
+    const args = [
+      '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-c:a', 'libopus',
+      '-b:a', '32k',           // bitrate baixo, suficiente pra voz
+      '-ar', '16000',          // sample rate típico de voice message
+      '-ac', '1',              // mono (voice message é sempre mono)
+      '-application', 'voip',  // dica pro encoder otimizar pra voz
+      '-vbr', 'on',
+      '-f', 'ogg',
+      'pipe:1',
+    ];
 
     let ff;
     try {
