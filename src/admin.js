@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
-const { sendMessage } = require('./whatsapp');
+const { sendMessage, sendAudio, uploadMedia } = require('./whatsapp');
 const db = require('./db');
 const auth = require('./auth');
 
@@ -602,6 +602,64 @@ router.post('/api/conversations/:phone/reply', async (req, res) => {
   } catch (err) {
     console.error('[admin] erro ao enviar reply humano:', err.message);
     res.status(500).json({ error: 'Falha ao enviar mensagem' });
+  }
+});
+
+// API — consultora/admin envia áudio na conversa
+router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
+  const { phone } = req.params;
+  const { audioBase64, mimeType, durationMs } = req.body || {};
+  if (!audioBase64) return res.status(400).json({ error: 'Áudio vazio' });
+  if (!mimeType || typeof mimeType !== 'string') return res.status(400).json({ error: 'mimeType obrigatório' });
+
+  const allowed = ['audio/ogg', 'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/aac', 'audio/webm', 'audio/m4a'];
+  const baseMime = mimeType.split(';')[0].trim().toLowerCase();
+  if (!allowed.some(a => baseMime === a)) {
+    return res.status(400).json({ error: `Tipo de áudio não suportado: ${baseMime}` });
+  }
+
+  // Decode base64 (aceita data:audio/...;base64,XXX ou só XXX)
+  const cleanB64 = audioBase64.replace(/^data:[^;]+;base64,/, '');
+  let buffer;
+  try {
+    buffer = Buffer.from(cleanB64, 'base64');
+  } catch {
+    return res.status(400).json({ error: 'Base64 inválido' });
+  }
+  if (buffer.length === 0) return res.status(400).json({ error: 'Áudio vazio (após decode)' });
+  if (buffer.length > 16 * 1024 * 1024) return res.status(400).json({ error: 'Áudio maior que 16MB (limite WhatsApp)' });
+
+  db.getOrCreateContact(phone);
+
+  const assignment = db.getContactAssignment(phone);
+  if (!assignment.assignedUserId) {
+    db.assumeConversation(phone, req.user.id);
+  } else if (assignment.assignedUserId !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Conversa já assumida por outra consultora' });
+  }
+
+  try {
+    const ext = baseMime === 'audio/ogg' ? 'ogg'
+              : baseMime === 'audio/mpeg' || baseMime === 'audio/mp3' ? 'mp3'
+              : baseMime === 'audio/webm' ? 'webm'
+              : baseMime === 'audio/mp4' || baseMime === 'audio/m4a' ? 'm4a'
+              : baseMime === 'audio/aac' ? 'aac'
+              : 'bin';
+    const mediaId = await uploadMedia(buffer, baseMime, `voice.${ext}`);
+    await sendAudio(phone, mediaId);
+
+    const seconds = durationMs ? Math.max(1, Math.round(durationMs / 1000)) : null;
+    const label = seconds
+      ? `🔊 Áudio enviado · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+      : '🔊 Áudio enviado';
+    db.addMessageWithSender(phone, 'assistant', label, true, req.user.id);
+    db.updateLastContact(phone);
+    console.log(`[admin] ${req.user.username} enviou áudio para ${phone} (${buffer.length} bytes, ${baseMime})`);
+    res.json({ ok: true });
+  } catch (err) {
+    const meta = err.response?.data || err.message;
+    console.error('[admin] erro ao enviar audio:', meta);
+    res.status(500).json({ error: 'Falha ao enviar áudio. Verifique se o número aceita áudio e tente novamente.' });
   }
 });
 
@@ -1370,6 +1428,69 @@ router.get('/', (req, res) => {
     .chat-send:active { transform: scale(.96); }
     .chat-send:disabled { background: var(--bg-4); color: var(--text-muted); cursor: not-allowed; transform: none; box-shadow: none; }
 
+    /* Botão de microfone (composer) */
+    .chat-mic {
+      background: var(--bg-4); color: var(--text-secondary);
+      border: none; width: 44px; height: 44px;
+      border-radius: 50%; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all var(--t-fast);
+    }
+    .chat-mic:hover { background: var(--bg-5); color: var(--text-primary); }
+    .chat-mic:active { transform: scale(.96); }
+    .chat-mic svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* Modo gravação — substitui temporariamente a input bar */
+    .chat-input-bar.recording {
+      gap: var(--sp-3);
+    }
+    .rec-status {
+      flex: 1; display: flex; align-items: center; gap: 10px;
+      padding: 11px 16px; background: var(--bg-2); border-radius: var(--r-md);
+      color: var(--text-primary); font-size: 14px;
+    }
+    .rec-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #f87171; flex-shrink: 0;
+      animation: recPulse 1s ease-in-out infinite;
+    }
+    @keyframes recPulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,.7); opacity: 1; }
+      50%     { box-shadow: 0 0 0 6px rgba(248,113,113,0); opacity: .85; }
+    }
+    .rec-label { color: var(--text-secondary); font-size: 13px; }
+    .rec-timer { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text-primary); font-size: 14px; }
+    .rec-cancel, .rec-stop, .audio-send {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: none; cursor: pointer; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: all var(--t-fast);
+    }
+    .rec-cancel { background: var(--bg-4); color: var(--text-secondary); }
+    .rec-cancel:hover { background: var(--danger-bg); color: var(--danger); }
+    .rec-stop { background: #f87171; color: #001f17; box-shadow: 0 4px 10px rgba(248,113,113,.25); }
+    .rec-stop:hover { background: #ef4444; transform: scale(1.05); }
+    .rec-cancel svg, .rec-stop svg, .audio-send svg {
+      width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .rec-stop svg { fill: currentColor; stroke: none; }
+
+    /* Modo preview — depois de gravar, antes de enviar */
+    .chat-input-bar.preview {
+      gap: var(--sp-3);
+    }
+    .rec-audio {
+      flex: 1; height: 40px; outline: none;
+    }
+    .rec-audio::-webkit-media-controls-panel { background: var(--bg-2); }
+    .rec-duration {
+      font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums;
+      padding: 0 4px; flex-shrink: 0;
+    }
+    .audio-send { background: var(--brand); color: #001f17; box-shadow: 0 4px 10px rgba(0,168,132,.25); }
+    .audio-send:hover:not(:disabled) { background: var(--brand-light); transform: scale(1.05); }
+    .audio-send:disabled { background: var(--bg-4); color: var(--text-muted); cursor: not-allowed; box-shadow: none; }
+
     .chat-input-disabled {
       padding: var(--sp-4); text-align: center;
       color: var(--text-muted); font-size: 13px;
@@ -2055,6 +2176,8 @@ router.get('/', (req, res) => {
     const canReply = isMine || (me && me.role === 'admin');
     const wrap = document.getElementById('chat-input-wrap');
     if (!wrap) return;
+    // Não rebuild durante gravação ou preview de áudio (preserva o estado da UI temporária).
+    if (wrap.dataset.mode === 'recording' || wrap.dataset.mode === 'preview') return;
     const desiredMode = canReply ? 'reply' : (isHuman ? 'taken' : 'ai');
     if (wrap.dataset.mode === desiredMode) return;
     // Estado mudou (ex: alguém assumiu, ou eu assumi/devolvi). Reconstrói só essa barra.
@@ -2286,6 +2409,9 @@ router.get('/', (req, res) => {
         \${banner}
         <div class="chat-input-bar">
           <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}..." rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)"></textarea>
+          <button class="chat-mic" onclick="startRecording('\${c.from}')" title="Gravar áudio">
+            <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
           <button class="chat-send" onclick="sendChatReply('\${c.from}')" title="Enviar (Enter)">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21l20.99-9L2.01 3 2 10l15 2-15 2z"/></svg>
           </button>
@@ -2381,6 +2507,219 @@ router.get('/', (req, res) => {
     } catch (e2) {
       alert('Falha de conexão');
       ta.disabled = false;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Gravação de áudio pelo composer (consultora/admin manda voz)
+  // ─────────────────────────────────────────────────────────────────
+  let recState = null;          // { mediaRecorder, stream, chunks, startTime, mimeType, blob, duration, phone }
+  let recTimerInterval = null;
+  let recAudioUrl = null;        // URL.createObjectURL — limpa no cancel/send
+
+  function pickRecorderMime() {
+    if (typeof MediaRecorder === 'undefined') return null;
+    const candidates = [
+      'audio/mp4',
+      'audio/mp4;codecs=mp4a.40.2',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+      'audio/webm;codecs=opus',
+      'audio/webm',
+    ];
+    for (const m of candidates) {
+      try { if (MediaRecorder.isTypeSupported(m)) return m; } catch {}
+    }
+    return null;
+  }
+
+  async function startRecording(phone) {
+    if (recState) return;
+    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices) {
+      alert('Seu navegador não suporta gravar áudio.');
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      console.error('[audio] getUserMedia falhou', e);
+      alert('Não consegui acessar o microfone. Permita o acesso nas configurações do navegador.');
+      return;
+    }
+    const mime = pickRecorderMime();
+    let mr;
+    try {
+      mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (e) {
+      console.error('[audio] MediaRecorder init falhou', e);
+      stream.getTracks().forEach(t => t.stop());
+      alert('Falha ao iniciar gravação.');
+      return;
+    }
+    const chunks = [];
+    mr.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+    mr.onstop = () => onRecordingStop();
+    mr.onerror = e => { console.error('[audio] mediarecorder error', e); cancelRecording(); };
+
+    recState = {
+      mediaRecorder: mr, stream, chunks,
+      startTime: Date.now(),
+      mimeType: mr.mimeType || mime || 'audio/webm',
+      blob: null, duration: 0, phone,
+    };
+    mr.start();
+    swapInputToRecording(phone);
+    startRecTimer();
+
+    // Cap de 5min — evita arquivos absurdos e roubar contexto
+    setTimeout(() => {
+      if (recState && recState.mediaRecorder && recState.mediaRecorder.state === 'recording') {
+        stopRecording();
+      }
+    }, 5 * 60 * 1000);
+  }
+
+  function startRecTimer() {
+    const tEl = () => document.getElementById('rec-timer');
+    const tick = () => {
+      if (!recState) return;
+      const sec = Math.floor((Date.now() - recState.startTime) / 1000);
+      const m = Math.floor(sec / 60), s = sec % 60;
+      const el = tEl();
+      if (el) el.textContent = m + ':' + String(s).padStart(2, '0');
+    };
+    tick();
+    clearInterval(recTimerInterval);
+    recTimerInterval = setInterval(tick, 250);
+  }
+
+  function stopRecording() {
+    if (!recState || !recState.mediaRecorder) return;
+    if (recState.mediaRecorder.state !== 'inactive') {
+      recState.mediaRecorder.stop();
+    }
+  }
+
+  function onRecordingStop() {
+    if (!recState) return;
+    clearInterval(recTimerInterval);
+    recTimerInterval = null;
+    const blob = new Blob(recState.chunks, { type: recState.mimeType });
+    recState.blob = blob;
+    recState.duration = Date.now() - recState.startTime;
+    if (recState.stream) recState.stream.getTracks().forEach(t => t.stop());
+    swapInputToPreview(recState.phone);
+  }
+
+  function cancelRecording() {
+    clearInterval(recTimerInterval);
+    recTimerInterval = null;
+    if (recState) {
+      try {
+        if (recState.mediaRecorder && recState.mediaRecorder.state !== 'inactive') {
+          recState.mediaRecorder.stop();
+        }
+      } catch {}
+      if (recState.stream) recState.stream.getTracks().forEach(t => t.stop());
+    }
+    if (recAudioUrl) { try { URL.revokeObjectURL(recAudioUrl); } catch {} recAudioUrl = null; }
+    const phone = recState ? recState.phone : selectedPhone;
+    recState = null;
+    // Volta pra input bar normal
+    const c = allConversations.find(x => x.from === phone);
+    const wrap = document.getElementById('chat-input-wrap');
+    if (wrap && c) {
+      wrap.dataset.mode = 'fresh';
+      syncChatInputBar(c);
+    }
+  }
+
+  function swapInputToRecording(phone) {
+    const wrap = document.getElementById('chat-input-wrap');
+    if (!wrap) return;
+    wrap.dataset.mode = 'recording';
+    wrap.innerHTML = \`
+      <div class="chat-input-bar recording">
+        <button class="rec-cancel" onclick="cancelRecording()" title="Cancelar gravação">
+          <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <div class="rec-status">
+          <span class="rec-dot"></span>
+          <span class="rec-label">Gravando</span>
+          <span class="rec-timer" id="rec-timer">0:00</span>
+        </div>
+        <button class="rec-stop" onclick="stopRecording()" title="Parar (vai pro preview)">
+          <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/></svg>
+        </button>
+      </div>
+    \`;
+  }
+
+  function swapInputToPreview(phone) {
+    const wrap = document.getElementById('chat-input-wrap');
+    if (!wrap || !recState || !recState.blob) return;
+    wrap.dataset.mode = 'preview';
+    if (recAudioUrl) { try { URL.revokeObjectURL(recAudioUrl); } catch {} }
+    recAudioUrl = URL.createObjectURL(recState.blob);
+    const sec = Math.max(1, Math.round(recState.duration / 1000));
+    const dur = Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+    wrap.innerHTML = \`
+      <div class="chat-input-bar preview">
+        <button class="rec-cancel" onclick="cancelRecording()" title="Descartar">
+          <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6 17.6 20a2 2 0 0 1-2 1.8H8.4a2 2 0 0 1-2-1.8L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+        </button>
+        <audio controls src="\${recAudioUrl}" class="rec-audio"></audio>
+        <span class="rec-duration">\${dur}</span>
+        <button class="audio-send" id="audio-send-btn" onclick="sendAudioRecording('\${phone}')" title="Enviar áudio">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21l20.99-9L2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
+    \`;
+  }
+
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  async function sendAudioRecording(phone) {
+    if (!recState || !recState.blob) return;
+    const sendBtn = document.getElementById('audio-send-btn');
+    if (sendBtn) sendBtn.disabled = true;
+    const blob = recState.blob;
+    const mimeType = (blob.type || recState.mimeType || 'audio/webm').split(';')[0].trim();
+    const durationMs = recState.duration;
+    try {
+      const buf = await blob.arrayBuffer();
+      const b64 = arrayBufferToBase64(buf);
+      const r = await fetch('/admin/api/conversations/' + phone + '/reply-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioBase64: b64, mimeType, durationMs }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert('Erro ao enviar áudio: ' + (data.error || 'falhou'));
+        if (sendBtn) sendBtn.disabled = false;
+        return;
+      }
+      // sucesso — limpa estado, recarrega
+      if (recAudioUrl) { try { URL.revokeObjectURL(recAudioUrl); } catch {} recAudioUrl = null; }
+      recState = null;
+      const wrap = document.getElementById('chat-input-wrap');
+      if (wrap) wrap.dataset.mode = 'fresh';
+      chatScrollPinned = true;
+      await loadConversations({ force: true });
+    } catch (e2) {
+      console.error('[audio] sendAudio falhou', e2);
+      alert('Falha de conexão. Tenta de novo.');
+      if (sendBtn) sendBtn.disabled = false;
     }
   }
 
