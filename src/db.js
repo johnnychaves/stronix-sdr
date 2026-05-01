@@ -81,6 +81,28 @@ db.exec(`
     notes TEXT,
     created_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('admin','consultora')),
+    phone TEXT,
+    active INTEGER DEFAULT 1,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at DESC);
 `);
 
 // Migração: adiciona scheduled_hour em bancos que já existiam antes dessa coluna
@@ -96,6 +118,24 @@ const flaggedCount = db.prepare("SELECT COUNT(*) as c FROM conversation_reviews 
 if (flaggedCount && flaggedCount.c > 0) {
   db.exec("UPDATE conversation_reviews SET rating = 'bad' WHERE rating = 'flagged'");
   console.log(`[db] migração: ${flaggedCount.c} review(s) com rating='flagged' convertidas pra 'bad'`);
+}
+
+// Migração: assignment + handoff IA↔humano por contato
+const contactCols = db.prepare('PRAGMA table_info(contacts)').all();
+if (!contactCols.find(c => c.name === 'assigned_user_id')) {
+  db.exec('ALTER TABLE contacts ADD COLUMN assigned_user_id INTEGER');
+  console.log('[db] migração: coluna assigned_user_id adicionada em contacts');
+}
+if (!contactCols.find(c => c.name === 'human_assumed_at')) {
+  db.exec('ALTER TABLE contacts ADD COLUMN human_assumed_at INTEGER');
+  console.log('[db] migração: coluna human_assumed_at adicionada em contacts');
+}
+
+// Migração: rastreia quem enviou cada mensagem (NULL = IA, ou user_id da consultora)
+const msgCols = db.prepare('PRAGMA table_info(messages)').all();
+if (!msgCols.find(c => c.name === 'sent_by_user_id')) {
+  db.exec('ALTER TABLE messages ADD COLUMN sent_by_user_id INTEGER');
+  console.log('[db] migração: coluna sent_by_user_id adicionada em messages');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -203,6 +243,64 @@ const stmts = {
   getStudent: db.prepare('SELECT * FROM students WHERE phone = ?'),
   getAllStudents: db.prepare('SELECT * FROM students ORDER BY created_at DESC'),
   deleteStudent: db.prepare('DELETE FROM students WHERE phone = ?'),
+
+  // Users
+  insertUser: db.prepare(`
+    INSERT INTO users (username, password_hash, display_name, role, phone, active, created_at)
+    VALUES (?, ?, ?, ?, ?, 1, ?)
+  `),
+  getUserByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
+  getUserById: db.prepare('SELECT * FROM users WHERE id = ?'),
+  getAllUsers: db.prepare('SELECT id, username, display_name, role, phone, active, created_at FROM users ORDER BY created_at DESC'),
+  setUserActive: db.prepare('UPDATE users SET active = ? WHERE id = ?'),
+  setUserPassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
+  setUserRole: db.prepare('UPDATE users SET role = ? WHERE id = ?'),
+  setUserPhone: db.prepare('UPDATE users SET phone = ? WHERE id = ?'),
+  setUserDisplayName: db.prepare('UPDATE users SET display_name = ? WHERE id = ?'),
+  deleteUserStmt: db.prepare('DELETE FROM users WHERE id = ?'),
+  countUsers: db.prepare('SELECT COUNT(*) as c FROM users'),
+  countAdmins: db.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND active = 1"),
+  getUsersByRole: db.prepare('SELECT * FROM users WHERE role = ? AND active = 1'),
+
+  // Sessions
+  insertSession: db.prepare(`
+    INSERT INTO sessions (token, user_id, created_at, expires_at)
+    VALUES (?, ?, ?, ?)
+  `),
+  getSessionByToken: db.prepare(`
+    SELECT s.token, s.user_id, s.created_at, s.expires_at,
+           u.id as u_id, u.username, u.display_name, u.role, u.phone, u.active
+    FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.token = ?
+  `),
+  deleteSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
+  deleteSessionsForUser: db.prepare('DELETE FROM sessions WHERE user_id = ?'),
+  cleanExpiredSessions: db.prepare('DELETE FROM sessions WHERE expires_at < ?'),
+
+  // Conversation assignment
+  assumeConversationStmt: db.prepare(`
+    UPDATE contacts SET assigned_user_id = ?, human_assumed_at = ?
+    WHERE phone = ? AND assigned_user_id IS NULL
+  `),
+  forceAssumeConversation: db.prepare(`
+    UPDATE contacts SET assigned_user_id = ?, human_assumed_at = ?
+    WHERE phone = ?
+  `),
+  releaseConversationStmt: db.prepare(`
+    UPDATE contacts SET assigned_user_id = NULL, human_assumed_at = NULL
+    WHERE phone = ?
+  `),
+  getContactWithAssignment: db.prepare('SELECT * FROM contacts WHERE phone = ?'),
+
+  // Messages with sender tracking
+  insertMessageWithSender: db.prepare(`
+    INSERT INTO messages (phone, role, content, was_audio, sent_by_user_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `),
+  getMessagesWithSender: db.prepare(`
+    SELECT role, content, was_audio, sent_by_user_id, created_at FROM messages
+    WHERE phone = ? ORDER BY id ASC
+  `),
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -270,9 +368,16 @@ function getDaysSinceLastContact(phone) {
 function getAllConversations() {
   const contacts = stmts.getAllContacts.all();
   return contacts.map(c => {
-    const history = stmts.getMessagesForContact.all(c.phone);
+    const history = stmts.getMessagesWithSender.all(c.phone).map(m => ({
+      role: m.role,
+      content: m.content,
+      wasAudio: !!m.was_audio,
+      sentByUserId: m.sent_by_user_id || null,
+      createdAt: m.created_at,
+    }));
     const lastMessage = history.length > 0 ? history[history.length - 1] : null;
     const review = stmts.getReview.get(c.phone) || null;
+    const assignedUser = c.assigned_user_id ? stmts.getUserById.get(c.assigned_user_id) : null;
     return {
       from: c.phone,
       fromDisplay: c.phone.slice(0, 2) + '...' + c.phone.slice(-4),
@@ -281,6 +386,9 @@ function getAllConversations() {
       audioPermission: !!c.audio_permission,
       firstContactAt: c.first_contact_at,
       lastContactAt: c.last_contact_at,
+      assignedUserId: c.assigned_user_id || null,
+      assignedUserName: assignedUser ? assignedUser.display_name : null,
+      humanAssumedAt: c.human_assumed_at || null,
       lastMessage,
       history,
       review: review ? {
@@ -372,6 +480,170 @@ function deleteStudent(phone) {
   stmts.deleteStudent.run(phone);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// USERS + AUTH (scrypt do crypto built-in, sem dep nova)
+// ─────────────────────────────────────────────────────────────────────
+
+const crypto = require('crypto');
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}$${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = stored.split('$');
+  if (!salt || !hash) return false;
+  const candidate = crypto.scryptSync(password, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(candidate, 'hex'), Buffer.from(hash, 'hex'));
+}
+
+function createUser({ username, password, displayName, role, phone }) {
+  if (!['admin', 'consultora'].includes(role)) throw new Error('role inválida');
+  if (!username || !password || !displayName) throw new Error('username, password e displayName obrigatórios');
+  const result = stmts.insertUser.run(
+    username.trim().toLowerCase(),
+    hashPassword(password),
+    displayName.trim(),
+    role,
+    phone ? String(phone).replace(/\D/g, '') || null : null,
+    Date.now()
+  );
+  console.log(`[db] usuário criado id=${result.lastInsertRowid} username=${username} role=${role}`);
+  return result.lastInsertRowid;
+}
+
+function authenticateUser(username, password) {
+  const u = stmts.getUserByUsername.get(String(username || '').trim().toLowerCase());
+  if (!u || !u.active) return null;
+  if (!verifyPassword(password, u.password_hash)) return null;
+  return u;
+}
+
+function getUserById(id) {
+  return stmts.getUserById.get(id) || null;
+}
+
+function getAllUsers() {
+  return stmts.getAllUsers.all();
+}
+
+function setUserActive(id, active) {
+  stmts.setUserActive.run(active ? 1 : 0, id);
+}
+
+function setUserPassword(id, password) {
+  stmts.setUserPassword.run(hashPassword(password), id);
+  // Invalida todas as sessões do user — força re-login após reset
+  stmts.deleteSessionsForUser.run(id);
+}
+
+function setUserRole(id, role) {
+  if (!['admin', 'consultora'].includes(role)) throw new Error('role inválida');
+  stmts.setUserRole.run(role, id);
+}
+
+function setUserPhone(id, phone) {
+  stmts.setUserPhone.run(phone ? String(phone).replace(/\D/g, '') || null : null, id);
+}
+
+function setUserDisplayName(id, displayName) {
+  stmts.setUserDisplayName.run(displayName.trim(), id);
+}
+
+function deleteUser(id) {
+  stmts.deleteSessionsForUser.run(id);
+  stmts.deleteUserStmt.run(id);
+}
+
+function countUsers() {
+  return stmts.countUsers.get().c;
+}
+
+function countAdmins() {
+  return stmts.countAdmins.get().c;
+}
+
+function getActiveConsultors() {
+  return stmts.getUsersByRole.all('consultora');
+}
+
+function getActiveAdmins() {
+  return stmts.getUsersByRole.all('admin');
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// SESSIONS
+// ─────────────────────────────────────────────────────────────────────
+
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
+
+function createSession(userId, ttlMs = SESSION_TTL_MS) {
+  const token = crypto.randomUUID();
+  const now = Date.now();
+  stmts.insertSession.run(token, userId, now, now + ttlMs);
+  return { token, expires: now + ttlMs };
+}
+
+function getSessionUser(token) {
+  if (!token) return null;
+  const row = stmts.getSessionByToken.get(token);
+  if (!row) return null;
+  if (row.expires_at < Date.now()) {
+    stmts.deleteSession.run(token);
+    return null;
+  }
+  if (!row.active) return null;
+  return {
+    id: row.u_id,
+    username: row.username,
+    displayName: row.display_name,
+    role: row.role,
+    phone: row.phone,
+  };
+}
+
+function deleteSession(token) {
+  stmts.deleteSession.run(token);
+}
+
+function cleanExpiredSessions() {
+  const result = stmts.cleanExpiredSessions.run(Date.now());
+  if (result.changes > 0) console.log(`[db] removidas ${result.changes} sessões expiradas`);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// CONVERSATION ASSIGNMENT (handoff IA ↔ humano)
+// ─────────────────────────────────────────────────────────────────────
+
+// Tenta assumir; retorna true se conseguiu, false se outro user já assumiu
+// (pool aberto: primeiro a clicar pega).
+function assumeConversation(phone, userId) {
+  // Garante contato existe
+  getOrCreateContact(phone);
+  const result = stmts.assumeConversationStmt.run(userId, Date.now(), phone);
+  return result.changes > 0;
+}
+
+function releaseConversation(phone) {
+  stmts.releaseConversationStmt.run(phone);
+}
+
+function getContactAssignment(phone) {
+  const c = stmts.getContactWithAssignment.get(phone);
+  if (!c) return null;
+  return {
+    assignedUserId: c.assigned_user_id || null,
+    humanAssumedAt: c.human_assumed_at || null,
+  };
+}
+
+// Mensagem com sender (NULL = IA, ou user_id da consultora)
+function addMessageWithSender(phone, role, content, wasAudio, sentByUserId) {
+  stmts.insertMessageWithSender.run(phone, role, content, wasAudio ? 1 : 0, sentByUserId || null, Date.now());
+}
+
 // Insere múltiplos alunos numa única transação. Retorna { inserted, updated, skipped }.
 // items: array de { phone, name?, notes? }. Phones com menos de 10 dígitos são skipped.
 function bulkUpsertStudents(items) {
@@ -415,4 +687,29 @@ module.exports = {
   getAllStudents,
   deleteStudent,
   bulkUpsertStudents,
+  // users + auth
+  createUser,
+  authenticateUser,
+  getUserById,
+  getAllUsers,
+  setUserActive,
+  setUserPassword,
+  setUserRole,
+  setUserPhone,
+  setUserDisplayName,
+  deleteUser,
+  countUsers,
+  countAdmins,
+  getActiveConsultors,
+  getActiveAdmins,
+  // sessions
+  createSession,
+  getSessionUser,
+  deleteSession,
+  cleanExpiredSessions,
+  // assignment
+  assumeConversation,
+  releaseConversation,
+  getContactAssignment,
+  addMessageWithSender,
 };

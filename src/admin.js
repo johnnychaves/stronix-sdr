@@ -1,8 +1,175 @@
 const { Router } = require('express');
 const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
 const db = require('./db');
+const auth = require('./auth');
 
 const router = Router();
+
+// ─────────────────────────────────────────────────────────────────────
+// AUTH — endpoints públicos (NÃO passam pelo requireAuth)
+// ─────────────────────────────────────────────────────────────────────
+
+// Status: indica se está em modo bootstrap (nenhum admin criado ainda)
+router.get('/api/auth/status', (req, res) => {
+  res.json({
+    bootstrap: auth.isBootstrapMode(),
+    userCount: db.countUsers(),
+  });
+});
+
+// Bootstrap: cria o PRIMEIRO admin. Só funciona se não tem nenhum admin ativo.
+router.post('/api/auth/bootstrap', (req, res) => {
+  if (!auth.isBootstrapMode()) {
+    return res.status(403).json({ error: 'Bootstrap já concluído — use login normal' });
+  }
+  const { username, password, displayName, phone } = req.body || {};
+  if (!username || !password || !displayName) {
+    return res.status(400).json({ error: 'username, password e displayName obrigatórios' });
+  }
+  if (password.length < 8) return res.status(400).json({ error: 'Senha precisa ter pelo menos 8 caracteres' });
+  try {
+    const id = db.createUser({ username, password, displayName, role: 'admin', phone });
+    const session = db.createSession(id);
+    auth.setSessionCookie(res, session.token);
+    res.json({ ok: true, user: { id, username, displayName, role: 'admin' } });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Login com username + senha
+router.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'username e password obrigatórios' });
+  const u = db.authenticateUser(username, password);
+  if (!u) return res.status(401).json({ error: 'Credenciais inválidas' });
+  const session = db.createSession(u.id);
+  auth.setSessionCookie(res, session.token);
+  res.json({
+    ok: true,
+    user: { id: u.id, username: u.username, displayName: u.display_name, role: u.role },
+  });
+});
+
+// Logout — invalida sessão atual e limpa cookie
+router.post('/api/auth/logout', (req, res) => {
+  const cookies = auth.parseCookies(req);
+  const token = cookies[auth.COOKIE_NAME];
+  if (token) db.deleteSession(token);
+  auth.clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// Tela de login HTML — pública (sem auth)
+router.get('/login', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STRONIX SDR — Login</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 32px; width: 380px; max-width: calc(100vw - 32px); }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    h1 .accent { color: #22c55e; }
+    .subtitle { font-size: 13px; color: #666; margin-bottom: 24px; }
+    .bootstrap-banner { background: #1e2a1e; color: #4ade80; border: 1px solid #22c55e44; padding: 12px 14px; border-radius: 8px; font-size: 12px; line-height: 1.5; margin-bottom: 18px; }
+    label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; margin-top: 14px; }
+    input { width: 100%; background: #0f0f0f; color: #d4d4d4; border: 1px solid #2a2a2a; border-radius: 6px; padding: 10px 12px; font-size: 14px; outline: none; font-family: inherit; }
+    input:focus { border-color: #22c55e44; }
+    button { width: 100%; margin-top: 20px; padding: 11px; background: #22c55e; color: #000; border: none; border-radius: 7px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s; }
+    button:hover { background: #16a34a; }
+    button:disabled { background: #1a4a2a; color: #555; cursor: not-allowed; }
+    .error { color: #f87171; font-size: 13px; margin-top: 12px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚡ STRONIX <span class="accent">SDR</span></h1>
+    <p class="subtitle" id="subtitle">Acesse o painel</p>
+    <div class="bootstrap-banner" id="banner" style="display:none">
+      Nenhum admin cadastrado ainda. Cadastre o <strong>primeiro admin</strong> abaixo — ele terá acesso total ao painel.
+    </div>
+    <form id="form">
+      <label>Usuário</label>
+      <input id="username" autocomplete="username" required>
+      <label>Senha <span id="pw-hint" style="color:#444;font-weight:400" hidden> (mín 8 caracteres)</span></label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <div id="extra-fields" style="display:none">
+        <label>Nome completo</label>
+        <input id="displayName" autocomplete="name">
+        <label>Telefone (opcional, formato 5551XXXXXXXX)</label>
+        <input id="phone" inputmode="numeric">
+      </div>
+      <button type="submit" id="submit">Entrar</button>
+      <div class="error" id="err"></div>
+    </form>
+  </div>
+  <script>
+    let bootstrap = false;
+    fetch('/admin/api/auth/status').then(r => r.json()).then(s => {
+      bootstrap = !!s.bootstrap;
+      if (bootstrap) {
+        document.getElementById('subtitle').textContent = 'Configuração inicial';
+        document.getElementById('banner').style.display = 'block';
+        document.getElementById('extra-fields').style.display = 'block';
+        document.getElementById('submit').textContent = 'Criar admin e entrar';
+        document.getElementById('pw-hint').hidden = false;
+        document.getElementById('password').autocomplete = 'new-password';
+      }
+    });
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('submit');
+      const err = document.getElementById('err');
+      err.textContent = '';
+      btn.disabled = true;
+
+      const body = {
+        username: document.getElementById('username').value.trim(),
+        password: document.getElementById('password').value,
+      };
+      if (bootstrap) {
+        body.displayName = document.getElementById('displayName').value.trim();
+        body.phone = document.getElementById('phone').value.trim();
+      }
+
+      const url = bootstrap ? '/admin/api/auth/bootstrap' : '/admin/api/auth/login';
+      try {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          err.textContent = data.error || 'Erro';
+          btn.disabled = false;
+          return;
+        }
+        location.href = '/admin';
+      } catch (e2) {
+        err.textContent = 'Falha de conexão';
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>`);
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// AUTH GATE — todas as rotas a seguir exigem usuário autenticado
+// ─────────────────────────────────────────────────────────────────────
+router.use(auth.requireAuth);
+
+// Dados do usuário logado
+router.get('/api/me', (req, res) => {
+  res.json({ user: req.user });
+});
 
 // API — retorna o prompt atual
 router.get('/api/prompt', (req, res) => {
@@ -223,6 +390,10 @@ router.get('/', (req, res) => {
   </div>
   <span>Painel de treinamento</span>
   <div class="badge">● Online</div>
+  <div class="user-area" style="margin-left:auto;display:flex;align-items:center;gap:12px">
+    <span id="user-info" style="font-size:13px;color:#aaa"></span>
+    <button class="btn-logout" onclick="logout()" style="background:transparent;border:1px solid #2a2a2a;color:#888;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer">Sair</button>
+  </div>
 </header>
 
 <div class="tabs">
@@ -616,6 +787,25 @@ router.get('/', (req, res) => {
     });
   }
 
+  let me = null;
+  async function loadMe() {
+    try {
+      const r = await fetch('/admin/api/me');
+      if (!r.ok) { location.href = '/admin/login'; return; }
+      const data = await r.json();
+      me = data.user;
+      document.getElementById('user-info').textContent = \`\${me.displayName} · \${me.role === 'admin' ? '👑 admin' : '🎯 consultora'}\`;
+    } catch {
+      location.href = '/admin/login';
+    }
+  }
+
+  async function logout() {
+    await fetch('/admin/api/auth/logout', { method: 'POST' });
+    location.href = '/admin/login';
+  }
+
+  loadMe();
   loadPrompt();
 </script>
 </body>
