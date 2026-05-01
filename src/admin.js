@@ -1016,6 +1016,34 @@ router.get('/', (req, res) => {
     }
     .btn-clear:hover { border-color: var(--danger); color: var(--danger); background: var(--danger-bg); }
 
+    /* Agendamentos */
+    .appt-card {
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: var(--r-md); padding: var(--sp-3) var(--sp-4);
+      display: grid; grid-template-columns: 32px 1fr 1.2fr auto auto;
+      gap: var(--sp-4); align-items: center;
+      margin-bottom: 8px; transition: border-color var(--t-fast);
+    }
+    .appt-card:hover { border-color: var(--border-strong); }
+    .appt-icon { font-size: 22px; opacity: .85; }
+    .appt-when-text { font-size: 14.5px; color: var(--text-primary); font-weight: 600; letter-spacing: -.005em; }
+    .appt-modality { font-size: 12px; color: var(--brand); margin-top: 2px; text-transform: capitalize; }
+    .appt-lead-name { font-size: 13.5px; color: var(--text-primary); font-weight: 500; }
+    .appt-lead-phone { font-size: 12px; color: var(--text-muted); margin-top: 2px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .appt-date { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+    .appt-status-select {
+      background: var(--bg-3); color: var(--text-secondary);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--r-md); padding: 6px 10px;
+      font-size: 12px; font-family: inherit; cursor: pointer;
+      outline: none; transition: border-color var(--t-fast);
+    }
+    .appt-status-select:hover { border-color: var(--text-muted); }
+    .appt-status-select:focus { border-color: var(--brand); }
+    .appt-status-select[data-status="confirmed"] { color: var(--success); border-color: rgba(74,222,128,.25); }
+    .appt-status-select[data-status="cancelled"] { color: var(--danger); border-color: rgba(248,113,113,.25); }
+    .appt-status-select[data-status="no_show"] { color: var(--text-muted); }
+
     /* Cards de métrica */
     .metric-card {
       background: var(--bg-2); border: 1px solid var(--border);
@@ -1955,10 +1983,10 @@ router.get('/', (req, res) => {
     }
     const m = await res.json();
     const card = (title, value, sub) => \`
-      <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:18px">
-        <div style="font-size:12px;color:#666;margin-bottom:6px">\${title}</div>
-        <div style="font-size:28px;font-weight:700;color:#fff">\${value}</div>
-        \${sub ? \`<div style="font-size:11px;color:#555;margin-top:4px">\${sub}</div>\` : ''}
+      <div class="metric-card">
+        <div class="metric-card-label">\${title}</div>
+        <div class="metric-card-value">\${value}</div>
+        \${sub ? \`<div class="metric-card-sub">\${sub}</div>\` : ''}
       </div>
     \`;
     let html = '';
@@ -1969,10 +1997,11 @@ router.get('/', (req, res) => {
     html += card('Pendentes de assumir', m.unassignedActive, 'conversas com msgs nas últ 24h sem dono');
     html += card('Total de alunos cadastrados', m.studentsCount, '');
     if (m.byConsultor && m.byConsultor.length) {
-      html += '<div style="grid-column:1/-1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:18px">';
-      html += '<div style="font-size:12px;color:#666;margin-bottom:10px">Conversas atendidas por consultora (30d)</div>';
-      html += m.byConsultor.map(c => \`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #2a2a2a"><span>\${c.display_name}</span><span style="font-weight:600">\${c.count}</span></div>\`).join('');
-      html += '</div>';
+      html += '<div class="metric-card" style="grid-column:1/-1">';
+      html += '<div class="metric-card-label">Conversas atendidas por consultora (30d)</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:0;margin-top:8px">';
+      html += m.byConsultor.map(c => \`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-subtle)"><span style="color:var(--text-primary);font-size:14px">\${escapeHtml(c.display_name)}</span><span style="font-weight:600;font-size:15px;color:var(--brand);font-variant-numeric:tabular-nums">\${c.count}</span></div>\`).join('');
+      html += '</div></div>';
     }
     grid.innerHTML = html;
   }
@@ -2040,35 +2069,33 @@ router.get('/', (req, res) => {
     const list = document.getElementById('appt-list');
 
     if (!appts.length) {
-      list.innerHTML = '<div class="empty">Nenhum agendamento ainda</div>';
+      list.innerHTML = '<div class="empty">📅 Nenhum agendamento ainda</div>';
       return;
     }
 
     list.innerHTML = appts.map(a => {
       const date = new Date(a.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-      const phone = a.phone.replace(/^55(\\d{2})(\\d{5})(\\d{4})$/, '($1) $2-$3');
-      // Mostra "terça às 9h" se tem hora, senão "terça — manhã"
+      const phone = fmtPhone(a.phone);
       const when = a.scheduled_hour
         ? \`\${a.scheduled_day || '—'} às \${a.scheduled_hour}\`
         : \`\${a.scheduled_day || '—'} — \${a.scheduled_turn || '—'}\`;
       return \`
-        <div class="conv-card" style="margin-bottom:12px">
-          <div class="conv-card-header" style="cursor:default">
-            <div class="conv-info" style="flex-wrap:wrap;gap:8px">
-              <span class="conv-phone">📅 \${when}</span>
-              <div class="conv-stats">
-                <span class="stat">\${a.name || 'Sem nome'}</span>
-                <span class="stat">\${phone}</span>
-                <span class="stat \${a.modality}">\${a.modality || '—'}</span>
-              </div>
-              <span style="font-size:12px;color:#555">\${date}</span>
-            </div>
-            <select onchange="updateStatus(\${a.id}, this.value)" style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:6px;padding:4px 8px;font-size:12px">
-              \${['pending','confirmed','cancelled','no_show'].map(s =>
-                \`<option value="\${s}" \${a.status === s ? 'selected' : ''}>\${STATUS_LABEL[s]}</option>\`
-              ).join('')}
-            </select>
+        <div class="appt-card">
+          <div class="appt-icon">📅</div>
+          <div class="appt-when">
+            <div class="appt-when-text">\${escapeHtml(when)}</div>
+            <div class="appt-modality">\${escapeHtml(a.modality || '—')}</div>
           </div>
+          <div class="appt-lead">
+            <div class="appt-lead-name">\${escapeHtml(a.name || 'Sem nome')}</div>
+            <div class="appt-lead-phone">\${phone}</div>
+          </div>
+          <div class="appt-date">\${date}</div>
+          <select class="appt-status-select" onchange="updateStatus(\${a.id}, this.value)" data-status="\${a.status}">
+            \${['pending','confirmed','cancelled','no_show'].map(s =>
+              \`<option value="\${s}" \${a.status === s ? 'selected' : ''}>\${STATUS_LABEL[s]}</option>\`
+            ).join('')}
+          </select>
         </div>
       \`;
     }).join('');
