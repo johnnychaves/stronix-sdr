@@ -30,4 +30,5 @@ COPY . .
 ENV NODE_ENV=production
 EXPOSE 8080
 
-CMD ["npm", "start"]
+# node direto (sem npm wrapper) pra stack traces aparecerem nos logs
+CMD ["node", "src/index.js"]
