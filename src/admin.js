@@ -42,6 +42,27 @@ router.patch('/api/appointments/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// API — lista reviews
+router.get('/api/reviews', (req, res) => {
+  res.json(db.getAllReviews());
+});
+
+// API — cria/atualiza review de uma conversa
+router.put('/api/reviews/:phone', (req, res) => {
+  const { rating, comment } = req.body;
+  const validRatings = ['good', 'bad'];
+  if (!validRatings.includes(rating)) return res.status(400).json({ error: 'Rating inválido' });
+  if (!db.getContact(req.params.phone)) return res.status(404).json({ error: 'Conversa não encontrada' });
+  db.upsertReview(req.params.phone, rating, comment);
+  res.json({ ok: true });
+});
+
+// API — remove review
+router.delete('/api/reviews/:phone', (req, res) => {
+  db.deleteReview(req.params.phone);
+  res.json({ ok: true });
+});
+
 // Painel HTML
 router.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -110,6 +131,30 @@ router.get('/', (req, res) => {
 
     .conv-messages { border-top: 1px solid #2a2a2a; padding: 16px 18px; display: none; max-height: 400px; overflow-y: auto; }
     .conv-messages.open { display: block; }
+
+    /* Review */
+    .review-bar { border-top: 1px solid #2a2a2a; padding: 12px 18px; display: flex; flex-direction: column; gap: 10px; background: #141414; }
+    .review-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .review-label { font-size: 12px; color: #666; margin-right: 4px; }
+    .rate-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #aaa; padding: 5px 12px; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all .15s; }
+    .rate-btn:hover { border-color: #444; }
+    .rate-btn.active.good { background: #1e2a1e; border-color: #22c55e; color: #4ade80; }
+    .rate-btn.active.bad { background: #2a1e1e; border-color: #ef4444; color: #f87171; }
+    .rate-btn.clear { color: #555; font-size: 12px; }
+    .review-comment { width: 100%; background: #1a1a1a; color: #d4d4d4; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical; min-height: 36px; outline: none; }
+    .review-comment:focus { border-color: #444; }
+    .review-meta { font-size: 11px; color: #555; }
+
+    /* Badge no header da conversa */
+    .review-badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .review-badge.good { background: #1e2a1e; color: #4ade80; }
+    .review-badge.bad { background: #2a1e1e; color: #f87171; }
+
+    /* Filtros */
+    .filter-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+    .filter-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all .15s; }
+    .filter-btn:hover { color: #ccc; border-color: #444; }
+    .filter-btn.active { background: #22c55e22; border-color: #22c55e44; color: #4ade80; }
     .msg { margin-bottom: 12px; }
     .msg-role { font-size: 11px; font-weight: 600; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
     .msg-role.user { color: #60a5fa; }
@@ -160,6 +205,14 @@ router.get('/', (req, res) => {
   <div class="conv-header">
     <h2>Conversas em memória</h2>
     <button class="refresh-btn" onclick="loadConversations()">↻ Atualizar</button>
+  </div>
+  <div class="filter-bar" id="filter-bar">
+    <span class="review-label">Filtrar:</span>
+    <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">Todas</button>
+    <button class="filter-btn" data-filter="unrated" onclick="setFilter('unrated')">Não avaliadas</button>
+    <button class="filter-btn" data-filter="bad" onclick="setFilter('bad')">👎 Não gostei</button>
+    <button class="filter-btn" data-filter="good" onclick="setFilter('good')">👍 Gostei</button>
+    <span class="review-meta" id="filter-count" style="margin-left:auto"></span>
   </div>
   <div class="conv-list" id="conv-list">
     <div class="empty">Carregando...</div>
@@ -251,44 +304,126 @@ router.get('/', (req, res) => {
     updateCharCount(originalPrompt);
   }
 
+  let allConversations = [];
+  let currentFilter = 'all';
+  const openCards = new Set();
+
+  const RATE_LABEL = { good: '👍 Gostei', bad: '👎 Não gostei' };
+
   async function loadConversations() {
     const res = await fetch('/admin/api/conversations');
-    const convs = await res.json();
+    allConversations = await res.json();
+    renderConversations();
+  }
+
+  function renderConversations() {
     const list = document.getElementById('conv-list');
+    const convs = allConversations.filter(c => {
+      if (currentFilter === 'all') return true;
+      if (currentFilter === 'unrated') return !c.review;
+      return c.review && c.review.rating === currentFilter;
+    });
+
+    document.getElementById('filter-count').textContent =
+      \`\${convs.length} de \${allConversations.length}\`;
 
     if (convs.length === 0) {
-      list.innerHTML = '<div class="empty">Nenhuma conversa ativa no momento</div>';
+      list.innerHTML = '<div class="empty">Nenhuma conversa nesse filtro</div>';
       return;
     }
 
-    list.innerHTML = convs.map((c, i) => \`
-      <div class="conv-card">
-        <div class="conv-card-header" onclick="toggleMessages(\${i})">
-          <div class="conv-info">
-            <span class="conv-phone">\${c.fromDisplay}</span>
-            <div class="conv-stats">
-              <span class="stat">\${c.messageCount} msgs</span>
-              \${c.audioPermission ? '<span class="stat audio">🔊 áudio</span>' : ''}
+    list.innerHTML = convs.map((c, i) => {
+      const r = c.review;
+      const badge = r ? \`<span class="review-badge \${r.rating}">\${RATE_LABEL[r.rating]}</span>\` : '';
+      const commentVal = r && r.comment ? r.comment.replace(/"/g, '&quot;') : '';
+      const reviewedAt = r ? new Date(r.reviewedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
+      return \`
+        <div class="conv-card">
+          <div class="conv-card-header" onclick="toggleMessages(\${i})">
+            <div class="conv-info">
+              <span class="conv-phone">\${c.fromDisplay}</span>
+              <div class="conv-stats">
+                <span class="stat">\${c.messageCount} msgs</span>
+                \${c.audioPermission ? '<span class="stat audio">🔊 áudio</span>' : ''}
+                \${badge}
+              </div>
+              \${c.lastMessage ? \`<span class="conv-last">\${c.lastMessage.role === 'assistant' ? '🤖' : '👤'} \${c.lastMessage.content.slice(0, 60)}...\</span>\` : ''}
             </div>
-            \${c.lastMessage ? \`<span class="conv-last">\${c.lastMessage.role === 'assistant' ? '🤖' : '👤'} \${c.lastMessage.content.slice(0, 60)}...\</span>\` : ''}
+            <button class="btn-clear" onclick="clearConv(event, '\${c.from}')">Limpar</button>
           </div>
-          <button class="btn-clear" onclick="clearConv(event, '\${c.from}')">Limpar</button>
-        </div>
-        <div class="conv-messages" id="msgs-\${i}">
-          \${c.history.map(m => \`
-            <div class="msg">
-              <div class="msg-role \${m.role}">\${m.role === 'user' ? '👤 Lead' : '🤖 SDR'}</div>
-              <div class="msg-content">\${m.content}</div>
+          <div class="conv-messages \${openCards.has(c.from) ? 'open' : ''}" id="msgs-\${i}" data-phone="\${c.from}">
+            \${c.history.map(m => \`
+              <div class="msg">
+                <div class="msg-role \${m.role}">\${m.role === 'user' ? '👤 Lead' : '🤖 SDR'}</div>
+                <div class="msg-content">\${m.content}</div>
+              </div>
+            \`).join('')}
+          </div>
+          <div class="review-bar">
+            <div class="review-row">
+              <span class="review-label">Avaliação:</span>
+              <button class="rate-btn good \${r && r.rating === 'good' ? 'active' : ''}" onclick="rateConv('\${c.from}', 'good')">👍 Gostei</button>
+              <button class="rate-btn bad \${r && r.rating === 'bad' ? 'active' : ''}" onclick="rateConv('\${c.from}', 'bad')">👎 Não gostei</button>
+              \${r ? \`<button class="rate-btn clear" onclick="clearReview('\${c.from}')">remover</button>\` : ''}
+              \${reviewedAt ? \`<span class="review-meta">avaliada em \${reviewedAt}</span>\` : ''}
             </div>
-          \`).join('')}
+            <textarea class="review-comment" id="cmt-\${i}" placeholder="Comentário (o que foi bom/ruim, o que mudar no prompt...)" oninput="onCommentChange('\${c.from}', \${i})">\${commentVal}</textarea>
+          </div>
         </div>
-      </div>
-    \`).join('');
+      \`;
+    }).join('');
+  }
+
+  function setFilter(f) {
+    currentFilter = f;
+    document.querySelectorAll('#filter-bar .filter-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === f);
+    });
+    renderConversations();
+  }
+
+  async function rateConv(phone, rating) {
+    const conv = allConversations.find(c => c.from === phone);
+    const comment = conv && conv.review ? conv.review.comment : '';
+    await fetch('/admin/api/reviews/' + phone, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating, comment }),
+    });
+    if (conv) conv.review = { rating, comment, reviewedAt: Date.now() };
+    renderConversations();
+  }
+
+  async function clearReview(phone) {
+    await fetch('/admin/api/reviews/' + phone, { method: 'DELETE' });
+    const conv = allConversations.find(c => c.from === phone);
+    if (conv) conv.review = null;
+    renderConversations();
+  }
+
+  // Salva comentário com debounce de 600ms
+  const commentTimers = {};
+  function onCommentChange(phone, idx) {
+    const text = document.getElementById('cmt-' + idx).value;
+    clearTimeout(commentTimers[phone]);
+    commentTimers[phone] = setTimeout(async () => {
+      const conv = allConversations.find(c => c.from === phone);
+      const rating = conv && conv.review ? conv.review.rating : 'bad';
+      await fetch('/admin/api/reviews/' + phone, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating, comment: text }),
+      });
+      if (conv) conv.review = { rating, comment: text, reviewedAt: Date.now() };
+    }, 600);
   }
 
   function toggleMessages(i) {
     const el = document.getElementById('msgs-' + i);
     el.classList.toggle('open');
+    const phone = el.dataset.phone;
+    if (el.classList.contains('open')) openCards.add(phone);
+    else openCards.delete(phone);
   }
 
   async function clearConv(e, from) {

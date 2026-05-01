@@ -4,6 +4,64 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-01 — UPSERT idempotente com ON CONFLICT DO UPDATE
+
+**Contexto:** Quando precisa criar OU atualizar um registro pelo mesmo PK (ex: review por phone) sem 2 statements separados.
+
+**Solução:** (`src/db.js`)
+```js
+db.prepare(`
+  INSERT INTO conversation_reviews (phone, rating, comment, reviewed_at)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(phone) DO UPDATE SET
+    rating = excluded.rating,
+    comment = excluded.comment,
+    reviewed_at = excluded.reviewed_at
+`);
+```
+
+**Por que funciona:** Um único statement faz INSERT se não existe, UPDATE se existe. `excluded.col` = valor que SERIA inserido. Não precisa SELECT antes nem lógica de "se exists".
+
+---
+
+## 2026-05-01 — Estado aberto preservado entre rerenders (Set por phone)
+
+**Contexto:** Painel admin re-renderiza lista de conversas a cada ação (avaliar, filtrar). Cards expandidos colapsavam, perdia contexto.
+
+**Solução:** `Set<phone>` global no client. Toggle adiciona/remove. Ao re-renderizar, classe `.open` é aplicada baseado no Set.
+```js
+const openCards = new Set();
+// no render:
+<div class="conv-messages ${openCards.has(c.from) ? 'open' : ''}" data-phone="${c.from}">
+// no toggle:
+if (el.classList.contains('open')) openCards.add(phone);
+else openCards.delete(phone);
+```
+
+**Por que funciona:** chave estável (phone) sobrevive a re-render que pode reorganizar índices. Estado é client-side, não precisa persistir.
+
+---
+
+## 2026-05-01 — Debounce de 600ms pra autosave de input
+
+**Contexto:** Salvar comentário de review a cada keystroke = N requisições inúteis. Salvar só ao desfocar = perder dado se fechar aba.
+
+**Solução:** (admin panel JS)
+```js
+const commentTimers = {};
+function onCommentChange(phone, idx) {
+  const text = document.getElementById('cmt-' + idx).value;
+  clearTimeout(commentTimers[phone]);
+  commentTimers[phone] = setTimeout(async () => {
+    await fetch('/admin/api/reviews/' + phone, { method: 'PUT', ... });
+  }, 600);
+}
+```
+
+**Por que funciona:** Cada tecla cancela o timer anterior. Só dispara fetch quando para de digitar por 600ms. Por-phone evita interferência entre múltiplos inputs abertos.
+
+---
+
 ## 2026-05-01 — Tag estruturada como sinal LLM → backend
 
 **Contexto:** Quando o LLM precisa "avisar" o sistema que algo aconteceu (agendamento confirmado, captura de info, mudança de stage).

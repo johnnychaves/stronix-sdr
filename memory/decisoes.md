@@ -4,6 +4,27 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-01 — Coleta de feedback em camadas (Camada 1 antes de Mixpanel/RAG)
+
+**Decisão:** Construir sistema de avaliação manual de conversas (👍/👎/🚩 + comentário) antes de qualquer ferramenta externa de analytics ou solução técnica pra "esquecimento" do SDR.
+
+**Por quê:** O usuário pediu solução pra "SDR esquecer coisas / lidar com toda objeção". Sem dados reais de produção, qualquer arquitetura (RAG, function calling, state machine, self-critique) é chute caro. Camada 1 dá munição pra atacar problema específico em vez de teórico.
+
+**Arquitetura escolhida (3 camadas):**
+1. **Camada 1 (feita):** review manual no painel — botões + comentário, salva em SQLite
+2. **Camada 2 (futura):** funil + métricas operacionais — eventos `qualified`, `price_revealed`, `appointment_scheduled`, etc.
+3. **Camada 3 (futura):** tracking de custo por lead — input/output/cache tokens da Anthropic API
+
+**Alternativas descartadas (todas pra "depois", se precisar):**
+- Mixpanel/Posthog/Amplitude → overkill pra 1 cliente, dado já no SQLite
+- Auto-análise diária com LLM → vale só depois de Camada 1 mostrar onde dói
+- Grafana/Prometheus → observabilidade industrial pra SDR de 1 academia é piada
+- RAG / function calling / self-critique → primeiro identificar QUAL problema real antes de escolher solução
+
+**Princípio sócio:** "Não construa antiesquecimento universal sem ter visto o esquecimento real." Mesma lógica que evitou state machine: trocar Haiku → Sonnet em 1 linha resolveu. Aqui: 2 semanas de marcação manual mostram onde atacar.
+
+---
+
 ## 2026-05-01 — Tag-based appointment detection (não NLP/regex)
 
 **Decisão:** SDR coloca tag `[AGENDAMENTO:nome=X|dia=X|hora=X|modalidade=X]` no início da resposta quando lead confirma. Sistema parseia, salva, remove a tag antes de enviar.

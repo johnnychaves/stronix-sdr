@@ -63,6 +63,17 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_appointments_phone ON appointments(phone);
   CREATE INDEX IF NOT EXISTS idx_appointments_created_at ON appointments(created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS conversation_reviews (
+    phone TEXT PRIMARY KEY,
+    rating TEXT NOT NULL CHECK(rating IN ('good', 'bad')),
+    comment TEXT,
+    reviewed_at INTEGER NOT NULL,
+    FOREIGN KEY (phone) REFERENCES contacts(phone) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_reviews_rating ON conversation_reviews(rating);
+  CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON conversation_reviews(reviewed_at DESC);
 `);
 
 // Migração: adiciona scheduled_hour em bancos que já existiam antes dessa coluna
@@ -70,6 +81,14 @@ const apptCols = db.prepare('PRAGMA table_info(appointments)').all();
 if (!apptCols.find(c => c.name === 'scheduled_hour')) {
   db.exec('ALTER TABLE appointments ADD COLUMN scheduled_hour TEXT');
   console.log('[db] migração: coluna scheduled_hour adicionada em appointments');
+}
+
+// Migração: simplifica rating de 3 valores ('good','bad','flagged') pra 2 ('good','bad')
+// Converte qualquer 'flagged' existente em 'bad'
+const flaggedCount = db.prepare("SELECT COUNT(*) as c FROM conversation_reviews WHERE rating = 'flagged'").get();
+if (flaggedCount && flaggedCount.c > 0) {
+  db.exec("UPDATE conversation_reviews SET rating = 'bad' WHERE rating = 'flagged'");
+  console.log(`[db] migração: ${flaggedCount.c} review(s) com rating='flagged' convertidas pra 'bad'`);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -152,6 +171,19 @@ const stmts = {
   updateAppointmentStatus: db.prepare(`
     UPDATE appointments SET status = ? WHERE id = ?
   `),
+
+  // Reviews
+  upsertReview: db.prepare(`
+    INSERT INTO conversation_reviews (phone, rating, comment, reviewed_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(phone) DO UPDATE SET
+      rating = excluded.rating,
+      comment = excluded.comment,
+      reviewed_at = excluded.reviewed_at
+  `),
+  getReview: db.prepare('SELECT * FROM conversation_reviews WHERE phone = ?'),
+  getAllReviews: db.prepare('SELECT * FROM conversation_reviews ORDER BY reviewed_at DESC'),
+  deleteReview: db.prepare('DELETE FROM conversation_reviews WHERE phone = ?'),
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -221,6 +253,7 @@ function getAllConversations() {
   return contacts.map(c => {
     const history = stmts.getMessagesForContact.all(c.phone);
     const lastMessage = history.length > 0 ? history[history.length - 1] : null;
+    const review = stmts.getReview.get(c.phone) || null;
     return {
       from: c.phone,
       fromDisplay: c.phone.slice(0, 2) + '...' + c.phone.slice(-4),
@@ -231,6 +264,11 @@ function getAllConversations() {
       lastContactAt: c.last_contact_at,
       lastMessage,
       history,
+      review: review ? {
+        rating: review.rating,
+        comment: review.comment,
+        reviewedAt: review.reviewed_at,
+      } : null,
     };
   });
 }
@@ -271,6 +309,26 @@ function updateAppointmentStatus(id, status) {
   stmts.updateAppointmentStatus.run(status, id);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// REVIEWS
+// ─────────────────────────────────────────────────────────────────────
+
+function upsertReview(phone, rating, comment) {
+  stmts.upsertReview.run(phone, rating, comment || null, Date.now());
+}
+
+function getReview(phone) {
+  return stmts.getReview.get(phone) || null;
+}
+
+function getAllReviews() {
+  return stmts.getAllReviews.all();
+}
+
+function deleteReview(phone) {
+  stmts.deleteReview.run(phone);
+}
+
 module.exports = {
   getContact,
   getOrCreateContact,
@@ -286,4 +344,8 @@ module.exports = {
   getAppointments,
   getAppointmentsByPhone,
   updateAppointmentStatus,
+  upsertReview,
+  getReview,
+  getAllReviews,
+  deleteReview,
 };

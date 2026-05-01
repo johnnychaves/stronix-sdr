@@ -55,6 +55,23 @@ O SDR está rodando 24/7 no Railway com Sonnet 4.5. Bugs críticos de compliance
 
 ---
 
+## Sistema de Coleta de Feedback — Camada 1 (concluído 2026-05-01)
+
+| Item | Status |
+|---|---|
+| Tabela `conversation_reviews` (phone PK, rating, comment, reviewed_at) | ✅ |
+| Helpers no db.js: upsertReview, getReview, getAllReviews, deleteReview | ✅ |
+| Review embutida em `getAllConversations` | ✅ |
+| API: GET/PUT/DELETE /admin/api/reviews — validação de rating + 404 se phone não existe | ✅ |
+| UI no painel: botões 👍 Gostei / 👎 Não gostei + textarea comentário com debounce 600ms | ✅ |
+| Filtros: Todas / Não avaliadas / 👎 / 👍 + contador | ✅ |
+| Badge da avaliação visível no header do card | ✅ |
+| Estado aberto preservado entre rerenders (Set por phone) | ✅ |
+
+**Próximo passo:** soltar pra leads reais por 2 semanas, marcar conversas, decidir Camada 2 baseado no que aparecer.
+
+---
+
 ## Sistema de Agendamento (concluído 2026-05-01)
 
 | Item | Status |

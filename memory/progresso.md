@@ -4,6 +4,38 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-01 — Simplificação da Camada 1: 2 ratings em vez de 3
+
+**Contexto:** Camada 1 saiu com 3 botões (👍 Boa / 👎 Ruim / 🚩 Marcada). Usuário achou confuso. Sócio-mode: 🚩 era redundante — tu pode marcar 👎 sem certeza ainda e refinar depois. 3ª categoria pra "talvez" complica sem ganho real.
+
+**O que mudou:**
+- DB: CHECK constraint de `rating` reduzido pra `('good', 'bad')`. Migração idempotente: `UPDATE` qualquer row com `rating='flagged'` pra `'bad'`.
+- Endpoint: validação aceita só `good`/`bad` (testado: PUT com `flagged` retorna 400).
+- UI: botão 🚩 e filtro 🚩 removidos. Labels atualizados pra "👍 Gostei" e "👎 Não gostei" (linguagem do usuário). CSS de `.flagged` removido (código morto).
+- Default em `onCommentChange`: era `'flagged'` se não tinha review, agora é `'bad'` (premissa: se tu tá comentando sem clicar, é problema).
+
+**Smoke test:** server reiniciou, PUT good ✅, PUT flagged → 400 ✅, PUT bad ✅. Review do lead fake limpa pra teste fresh.
+
+---
+
+## 2026-05-01 — Camada 1 do sistema de coleta de feedback
+
+**Contexto:** Antes de mexer em arquitetura pra "esquecimento" do SDR, precisa de evidência real. Sócio-mode: não otimize o que não está medido. Camada 1 = avaliação manual de conversas.
+
+**O que foi feito:**
+- Tabela `conversation_reviews` (phone PK + FK pra contacts, rating, comment, reviewed_at) com índices em rating e reviewed_at
+- Helpers no `db.js`: `upsertReview` (ON CONFLICT DO UPDATE), `getReview`, `getAllReviews`, `deleteReview`. Review embutida em `getAllConversations` pra rendering único.
+- 3 endpoints REST: `GET /admin/api/reviews`, `PUT /admin/api/reviews/:phone` (com validação de rating + 404 se phone inexistente), `DELETE /admin/api/reviews/:phone`
+- UI no painel admin (aba Conversas): badge da avaliação no header + barra inferior por card com botões 👍 / 👎 / 🚩 + textarea de comentário (debounce 600ms pra autosave)
+- Filtros no topo: Todas / Não avaliadas / 🚩 / 👎 / 👍 com contador "X de Y"
+- Estado aberto/fechado dos cards preservado entre rerenders via `Set<phone>` (evita perder contexto ao avaliar)
+
+**Smoke test:** server sobe, upsert funciona (cria → atualiza), 404 em phone inexistente, 400 em rating inválido, DELETE remove, review aparece embutida em GET conversations.
+
+**Decisão sócio:** descartado fazer Camada 2 (funil/métricas) e Camada 3 (custo por lead) agora. Aguardar 2 semanas de uso real e ler comentários pra decidir o que faz sentido construir depois.
+
+---
+
 ## 2026-05-01 — Sistema de agendamento completo + hora específica
 
 **O que foi feito:**
