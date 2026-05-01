@@ -132,7 +132,7 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
   }
 
   const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-sonnet-4-5-20250929',
     max_tokens: 1024,
     system: systemBlocks,
     messages: history,
