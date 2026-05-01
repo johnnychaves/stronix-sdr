@@ -49,6 +49,22 @@ async function sendAudio(to, mediaId) {
   );
 }
 
+// Faz upload de mídia (áudio/imagem/etc) pra Meta Cloud API e retorna media_id.
+// Buffer = conteúdo binário; mimeType ex: 'audio/ogg', 'audio/mpeg', 'audio/mp4'.
+async function uploadMedia(buffer, mimeType, filename = 'upload.bin') {
+  const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}/media`;
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('type', mimeType);
+  form.append('file', new Blob([buffer], { type: mimeType }), filename);
+  const res = await axios.post(url, form, {
+    headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
+    maxBodyLength: 32 * 1024 * 1024,
+    maxContentLength: 32 * 1024 * 1024,
+  });
+  return res.data.id;
+}
+
 // Formata número BR pra exibição: 5551995304633 → (51) 99530-4633
 function formatBRPhoneDisplay(phone) {
   const n = phone.replace(/\D/g, '');
@@ -162,4 +178,4 @@ async function notifyAssignedConsultor({ leadPhone, assignedUser, fallbackUsers,
   }
 }
 
-module.exports = { sendMessage, sendAudio, notifyOwner, notifyStudent, notifyAssignedConsultor };
+module.exports = { sendMessage, sendAudio, uploadMedia, notifyOwner, notifyStudent, notifyAssignedConsultor };

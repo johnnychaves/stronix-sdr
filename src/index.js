@@ -4,8 +4,9 @@ const webhook = require('./webhook');
 const admin   = require('./admin');
 
 const app = express();
-// 1MB cobre import bulk de ~10k clientes — default 100KB era apertado
-app.use(express.json({ limit: '1mb' }));
+// 25MB pra suportar áudio enviado pelo painel (WhatsApp aceita até 16MB,
+// + overhead de ~33% do base64). 1MB era o anterior, default Express é 100KB.
+app.use(express.json({ limit: '25mb' }));
 
 app.use('/webhook', webhook);
 app.use('/admin', admin);
