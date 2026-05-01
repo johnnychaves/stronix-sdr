@@ -170,8 +170,24 @@ router.post('/', async (req, res) => {
 
   const entry = req.body?.entry?.[0];
   const change = entry?.changes?.[0];
-  const message = change?.value?.messages?.[0];
+  const value = change?.value;
 
+  // ─── Status callbacks (✓ enviado / ✓✓ entregue / ✓✓ lido) ───
+  // Meta envia eventos de status pra cada msg que enviamos. Captura aqui
+  // pra gravar no DB e renderizar checkmarks no painel.
+  const statuses = value?.statuses;
+  if (Array.isArray(statuses) && statuses.length) {
+    for (const s of statuses) {
+      try {
+        db.updateMessageDeliveryStatus(s.id, s.status, s.timestamp ? Number(s.timestamp) : null);
+      } catch (e) {
+        console.error('[webhook] erro ao atualizar status:', e.message);
+      }
+    }
+    return; // status-only, sem mensagem nova pra processar
+  }
+
+  const message = value?.messages?.[0];
   if (!message) return;
 
   const from = message.from;

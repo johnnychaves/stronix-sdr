@@ -1,6 +1,20 @@
 const { Router } = require('express');
 const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
 const { sendMessage, sendAudio, uploadMedia, transcodeAudio } = require('./whatsapp');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// Diretório onde gravamos áudios pra player no painel.
+// Usa mesmo dir do DB (volume Railway persistente).
+const MEDIA_DIR = process.env.MEDIA_DIR || (() => {
+  const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'database.sqlite');
+  return path.join(path.dirname(dbPath), 'media');
+})();
+if (!fs.existsSync(MEDIA_DIR)) {
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  console.log(`[admin] criado MEDIA_DIR ${MEDIA_DIR}`);
+}
 const db = require('./db');
 const auth = require('./auth');
 
@@ -595,14 +609,37 @@ router.post('/api/conversations/:phone/reply', async (req, res) => {
   }
 
   try {
-    await sendMessage(phone, text);
-    db.addMessageWithSender(phone, 'assistant', text, false, req.user.id);
+    const sendResp = await sendMessage(phone, text);
+    const wamid = sendResp?.messages?.[0]?.id || null;
+    db.addMessageWithSender(phone, 'assistant', text, false, req.user.id, null, wamid);
     db.updateLastContact(phone);
     res.json({ ok: true });
   } catch (err) {
     console.error('[admin] erro ao enviar reply humano:', err.message);
     res.status(500).json({ error: 'Falha ao enviar mensagem' });
   }
+});
+
+// API — serve arquivo de mídia (áudio) salvo localmente
+router.get('/api/media/:filename', (req, res) => {
+  const filename = req.params.filename;
+  // Sanitização: só aceita nomes seguros (uuid + ext)
+  if (!/^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$/.test(filename)) {
+    return res.status(400).json({ error: 'Nome de arquivo inválido' });
+  }
+  const full = path.join(MEDIA_DIR, filename);
+  if (!fs.existsSync(full)) {
+    return res.status(404).json({ error: 'Arquivo não encontrado' });
+  }
+  // Inferência simples de Content-Type pelo ext
+  const ext = path.extname(filename).slice(1).toLowerCase();
+  const mime = ext === 'mp3' ? 'audio/mpeg'
+            : ext === 'ogg' ? 'audio/ogg'
+            : ext === 'mp4' || ext === 'm4a' ? 'audio/mp4'
+            : 'application/octet-stream';
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  fs.createReadStream(full).pipe(res);
 });
 
 // API — consultora/admin envia áudio na conversa
@@ -662,15 +699,26 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
     }
 
     const mediaId = await uploadMedia(finalBuffer, finalMime, `voice.${finalExt}`);
-    await sendAudio(phone, mediaId);
+    const sendResp = await sendAudio(phone, mediaId);
+    const wamid = sendResp?.messages?.[0]?.id || null;
+
+    // Salva o MP3 localmente pro player no painel
+    const filename = `${crypto.randomUUID()}.${finalExt}`;
+    const fullPath = path.join(MEDIA_DIR, filename);
+    try {
+      fs.writeFileSync(fullPath, finalBuffer);
+    } catch (e) {
+      console.error('[admin] falha ao salvar áudio em disco:', e.message);
+      // não falha o envio — Meta já recebeu
+    }
 
     const seconds = durationMs ? Math.max(1, Math.round(durationMs / 1000)) : null;
     const label = seconds
       ? `🔊 Áudio enviado · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
       : '🔊 Áudio enviado';
-    db.addMessageWithSender(phone, 'assistant', label, true, req.user.id);
+    db.addMessageWithSender(phone, 'assistant', label, true, req.user.id, filename, wamid);
     db.updateLastContact(phone);
-    console.log(`[admin] ${req.user.username} enviou áudio para ${phone} (${finalBuffer.length} bytes, ${finalMime})`);
+    console.log(`[admin] ${req.user.username} enviou áudio para ${phone} (${finalBuffer.length} bytes, ${finalMime}, wamid=${wamid})`);
     res.json({ ok: true });
   } catch (err) {
     const meta = err.response?.data || err.message;
@@ -1307,6 +1355,29 @@ router.get('/', (req, res) => {
       font-variant-numeric: tabular-nums;
     }
     .bubble.in .bubble-meta { color: var(--text-faint); }
+
+    /* Checkmarks de status (✓ enviado / ✓✓ entregue / ✓✓ azul = lido) */
+    .msg-check {
+      display: inline-block; font-size: 12px; line-height: 1;
+      margin-left: 2px; letter-spacing: -2px;
+      color: rgba(255,255,255,.55);
+    }
+    .msg-check.delivered { color: rgba(255,255,255,.7); }
+    .msg-check.read { color: #53bdeb; }       /* azul WhatsApp pra "lido" */
+    .msg-check.failed { color: var(--danger); letter-spacing: 0; }
+
+    /* Player de áudio dentro da bubble */
+    .bubble-audio {
+      display: block; width: 280px; max-width: 100%;
+      height: 36px; outline: none;
+      margin: 2px 0 4px;
+    }
+    .bubble.out .bubble-audio,
+    .bubble.in .bubble-audio { filter: none; }
+    /* Tema escuro do controle nativo (Chrome/Edge) */
+    .bubble-audio::-webkit-media-controls-panel {
+      background: rgba(255,255,255,.1);
+    }
     .bubble-sender {
       font-size: 12px; color: #58e8c9; font-weight: 600;
       margin-bottom: 2px; letter-spacing: -.005em;
@@ -2148,12 +2219,17 @@ router.get('/', (req, res) => {
     }
     // Atualiza status + ações no header
     syncChatHeader(c);
-    // Re-renderiza mensagens só se a contagem mudou
-    const currentCount = msgsEl.dataset.msgCount ? parseInt(msgsEl.dataset.msgCount, 10) : 0;
-    if (c.history.length !== currentCount) {
+    // Re-renderiza mensagens se mudou contagem OU status de entrega
+    const stamp = messagesStamp(c);
+    if (msgsEl.dataset.stamp !== stamp) {
+      const currentCount = msgsEl.dataset.msgCount ? parseInt(msgsEl.dataset.msgCount, 10) : 0;
       msgsEl.innerHTML = renderChatMessages(c);
       msgsEl.dataset.msgCount = c.history.length;
-      if (chatScrollPinned) msgsEl.scrollTop = msgsEl.scrollHeight;
+      msgsEl.dataset.stamp = stamp;
+      // Só rola pro fim se chegou msg nova (não em mudança de status)
+      if (chatScrollPinned && c.history.length !== currentCount) {
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
     }
     // Sincroniza estado do input bar (caso tenha mudado de assumida pra livre etc)
     syncChatInputBar(c);
@@ -2400,14 +2476,56 @@ router.get('/', (req, res) => {
       const senderHtml = (isOut && fromHuman) ? '<div class="bubble-sender">' + escapeHtml(senderName) + '</div>' : '';
       const inOrOut = isOut ? 'out' : 'in';
       const humanCls = fromHuman ? ' human' : '';
+
+      // Player de áudio inline (se a msg tem mediaPath salvo)
+      let bodyHtml;
+      if (m.wasAudio && m.mediaPath) {
+        bodyHtml = senderHtml +
+          '<audio class="bubble-audio" controls preload="metadata" src="/admin/api/media/' + encodeURIComponent(m.mediaPath) + '"></audio>';
+      } else if (m.wasAudio) {
+        // Áudio antigo (sem mediaPath salvo) — mostra só o texto descritivo
+        bodyHtml = senderHtml + escapeHtml(m.content);
+      } else {
+        bodyHtml = senderHtml + escapeHtml(m.content);
+      }
+
+      // Checkmarks de status (só pra msgs OUTgoing — IA ou consultora)
+      let statusHtml = '';
+      if (isOut) {
+        const st = m.deliveryStatus;
+        if (st === 'read') {
+          statusHtml = '<span class="msg-check read" title="Lido">✓✓</span>';
+        } else if (st === 'delivered') {
+          statusHtml = '<span class="msg-check delivered" title="Entregue">✓✓</span>';
+        } else if (st === 'sent' || m.wamid) {
+          statusHtml = '<span class="msg-check sent" title="Enviado">✓</span>';
+        } else if (st === 'failed') {
+          statusHtml = '<span class="msg-check failed" title="Falhou">⚠</span>';
+        }
+      }
+
       return dayHtml +
-        '<div class="bubble-row ' + inOrOut + '">' +
+        '<div class="bubble-row ' + inOrOut + '" data-mid="' + (m.id || '') + '">' +
           '<div class="bubble ' + inOrOut + humanCls + '">' +
-            senderHtml + escapeHtml(m.content) +
-            '<div class="bubble-meta">' + fmtMessageTime(m.createdAt) + '</div>' +
+            bodyHtml +
+            '<div class="bubble-meta">' + fmtMessageTime(m.createdAt) + statusHtml + '</div>' +
           '</div>' +
         '</div>';
     }).join('');
+  }
+
+  // "Stamp" das mensagens pra detectar mudanças (count, último delivered/read).
+  // Usado no render parcial pra evitar re-render quando nada mudou, e forçar
+  // re-render quando o status muda mesmo sem msg nova.
+  function messagesStamp(c) {
+    if (!c.history.length) return '0';
+    const last = c.history[c.history.length - 1];
+    let maxStatus = 0;
+    for (const m of c.history) {
+      if (m.readAt && m.readAt > maxStatus) maxStatus = m.readAt;
+      else if (m.deliveredAt && m.deliveredAt > maxStatus) maxStatus = m.deliveredAt;
+    }
+    return c.history.length + '|' + (last.createdAt || 0) + '|' + maxStatus;
   }
 
   function buildInputBar(c) {

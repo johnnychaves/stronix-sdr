@@ -14,7 +14,7 @@ function normalizeBRNumber(number) {
 
 async function sendMessage(to, text) {
   const recipient = normalizeBRNumber(to);
-  await axios.post(
+  const res = await axios.post(
     BASE_URL,
     {
       messaging_product: 'whatsapp',
@@ -29,6 +29,7 @@ async function sendMessage(to, text) {
       },
     }
   );
+  return res.data;
 }
 
 async function sendAudio(to, mediaId) {

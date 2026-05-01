@@ -137,6 +137,24 @@ if (!msgCols.find(c => c.name === 'sent_by_user_id')) {
   db.exec('ALTER TABLE messages ADD COLUMN sent_by_user_id INTEGER');
   console.log('[db] migração: coluna sent_by_user_id adicionada em messages');
 }
+// Migração: caminho do arquivo de mídia salvo localmente (relativo a MEDIA_DIR)
+// Usado pra renderizar player de áudio no painel
+if (!msgCols.find(c => c.name === 'media_path')) {
+  db.exec('ALTER TABLE messages ADD COLUMN media_path TEXT');
+  console.log('[db] migração: coluna media_path adicionada em messages');
+}
+// Migração: ID da mensagem na Meta (wamid.XXX) — pra correlacionar com webhooks de status
+if (!msgCols.find(c => c.name === 'wamid')) {
+  db.exec('ALTER TABLE messages ADD COLUMN wamid TEXT');
+  console.log('[db] migração: coluna wamid adicionada em messages');
+}
+// Migração: status da entrega (sent / delivered / read / failed) — atualizado via webhook
+if (!msgCols.find(c => c.name === 'delivery_status')) {
+  db.exec('ALTER TABLE messages ADD COLUMN delivery_status TEXT');
+  db.exec('ALTER TABLE messages ADD COLUMN delivered_at INTEGER');
+  db.exec('ALTER TABLE messages ADD COLUMN read_at INTEGER');
+  console.log('[db] migração: colunas delivery_status/delivered_at/read_at adicionadas em messages');
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // PREPARED STATEMENTS (otimizadas, reusadas)
@@ -294,13 +312,24 @@ const stmts = {
 
   // Messages with sender tracking
   insertMessageWithSender: db.prepare(`
-    INSERT INTO messages (phone, role, content, was_audio, sent_by_user_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (phone, role, content, was_audio, sent_by_user_id, created_at, media_path, wamid)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
   getMessagesWithSender: db.prepare(`
-    SELECT role, content, was_audio, sent_by_user_id, created_at FROM messages
-    WHERE phone = ? ORDER BY id ASC
+    SELECT id, role, content, was_audio, sent_by_user_id, created_at,
+           media_path, wamid, delivery_status, delivered_at, read_at
+    FROM messages WHERE phone = ? ORDER BY id ASC
   `),
+
+  // Status updates (delivery receipts)
+  updateMessageStatus: db.prepare(`
+    UPDATE messages
+    SET delivery_status = COALESCE(?, delivery_status),
+        delivered_at    = COALESCE(?, delivered_at),
+        read_at         = COALESCE(?, read_at)
+    WHERE wamid = ?
+  `),
+  getMessageByWamid: db.prepare('SELECT * FROM messages WHERE wamid = ?'),
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -335,8 +364,15 @@ function updateAudioFlags(phone, { audioPermission, awaitingAudioConfirm, askedF
   );
 }
 
-function addMessage(phone, role, content, wasAudio = false) {
-  stmts.insertMessage.run(phone, role, content, wasAudio ? 1 : 0, Date.now());
+function addMessage(phone, role, content, wasAudio = false, mediaPath = null) {
+  // Mantém schema antigo (5 colunas) por compat — wamid sempre NULL aqui
+  // (mensagens entrantes do lead não têm wamid próprio relevante)
+  if (mediaPath) {
+    db.prepare('INSERT INTO messages (phone, role, content, was_audio, media_path, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(phone, role, content, wasAudio ? 1 : 0, mediaPath, Date.now());
+  } else {
+    stmts.insertMessage.run(phone, role, content, wasAudio ? 1 : 0, Date.now());
+  }
 }
 
 // Retorna histórico no formato esperado pelo Claude: [{role, content}, ...]
@@ -369,11 +405,17 @@ function getAllConversations() {
   const contacts = stmts.getAllContacts.all();
   return contacts.map(c => {
     const history = stmts.getMessagesWithSender.all(c.phone).map(m => ({
+      id: m.id,
       role: m.role,
       content: m.content,
       wasAudio: !!m.was_audio,
       sentByUserId: m.sent_by_user_id || null,
       createdAt: m.created_at,
+      mediaPath: m.media_path || null,
+      wamid: m.wamid || null,
+      deliveryStatus: m.delivery_status || null,
+      deliveredAt: m.delivered_at || null,
+      readAt: m.read_at || null,
     }));
     const lastMessage = history.length > 0 ? history[history.length - 1] : null;
     const review = stmts.getReview.get(c.phone) || null;
@@ -640,8 +682,23 @@ function getContactAssignment(phone) {
 }
 
 // Mensagem com sender (NULL = IA, ou user_id da consultora)
-function addMessageWithSender(phone, role, content, wasAudio, sentByUserId) {
-  stmts.insertMessageWithSender.run(phone, role, content, wasAudio ? 1 : 0, sentByUserId || null, Date.now());
+// Retorna o lastInsertRowid pra quem precisar atualizar wamid/status depois.
+function addMessageWithSender(phone, role, content, wasAudio, sentByUserId, mediaPath = null, wamid = null) {
+  const r = stmts.insertMessageWithSender.run(
+    phone, role, content, wasAudio ? 1 : 0,
+    sentByUserId || null, Date.now(),
+    mediaPath || null, wamid || null
+  );
+  return r.lastInsertRowid;
+}
+
+// Atualiza status de entrega via webhook (delivered/read)
+function updateMessageDeliveryStatus(wamid, status, timestamp) {
+  if (!wamid) return;
+  const ts = timestamp ? timestamp * 1000 : Date.now(); // Meta envia em segundos
+  const deliveredAt = (status === 'delivered' || status === 'read') ? ts : null;
+  const readAt      = (status === 'read') ? ts : null;
+  stmts.updateMessageStatus.run(status, deliveredAt, readAt, wamid);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -771,6 +828,7 @@ module.exports = {
   releaseConversation,
   getContactAssignment,
   addMessageWithSender,
+  updateMessageDeliveryStatus,
   // metrics
   getMetrics,
 };
