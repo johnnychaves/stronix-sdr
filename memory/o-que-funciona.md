@@ -4,6 +4,63 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-01 — Bulk insert transacional com better-sqlite3
+
+**Contexto:** Importar 594 registros via 594 PUTs separados é lento e martela o servidor. Bulk em transação única é ordens de grandeza mais rápido.
+
+**Solução:** (`src/db.js`)
+```js
+function bulkUpsertStudents(items) {
+  let inserted = 0, updated = 0, skipped = 0;
+  const tx = db.transaction((items) => {
+    const now = Date.now();
+    for (const item of items) {
+      const phone = String(item.phone || '').replace(/\D/g, '');
+      if (phone.length < 10) { skipped++; continue; }
+      const existed = !!stmts.getStudent.get(phone);
+      stmts.upsertStudent.run(phone, item.name || null, item.notes || null, now);
+      if (existed) updated++; else inserted++;
+    }
+  });
+  tx(items);
+  return { inserted, updated, skipped };
+}
+```
+
+**Por que funciona:** `db.transaction()` do better-sqlite3 envolve em BEGIN/COMMIT automaticamente, com rollback em erro. Sem network round-trip por linha (é tudo in-process). 594 inserts em ~50ms.
+
+---
+
+## 2026-05-01 — Agrupar duplicatas em planilha externa antes de importar
+
+**Contexto:** Planilha de clientes da STRONIX tinha 8 phones com 2 clientes ativos cada (famílias compartilhando número). Bulk simples sobrescreveria nomes silenciosamente.
+
+**Solução:** (`scripts/import_students.py`)
+```python
+grouped = {}
+for row in rows:
+    phone = normalize(row.telefone)
+    if phone not in grouped:
+        grouped[phone] = {'names': [], 'contratos': []}
+    grouped[phone]['names'].append(row.nome)
+    grouped[phone]['contratos'].append(row.contrato)
+
+items = [{
+    'phone': phone,
+    'name': ' / '.join(d['names']),
+    'notes': ' + '.join(set(d['contratos'])),
+} for phone, d in grouped.items()]
+```
+
+E no webhook, extrair primeiro nome do primeiro cliente:
+```js
+const firstName = student.name.split(/\s*\/\s*/)[0].split(/\s+/)[0];
+```
+
+**Por que funciona:** Em vez de "qual venceu o upsert?", o registro fica explícito ("Alana / Sofia") e a UX fica humana — saudação usa nome de uma das pessoas, e a equipe vê ambos na notificação.
+
+---
+
 ## 2026-05-01 — UPSERT idempotente com ON CONFLICT DO UPDATE
 
 **Contexto:** Quando precisa criar OU atualizar um registro pelo mesmo PK (ex: review por phone) sem 2 statements separados.

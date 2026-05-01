@@ -4,6 +4,25 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-01 — Importação em massa de alunos (planilha STRONIX)
+
+**Contexto:** STRONIX compartilhou XLSX `clientes-01_05_2026.xlsx` com 621 linhas, 602 contratos ativos. Construir bulk import era o próximo bloqueio antes de ligar o número real.
+
+**O que foi feito:**
+- Endpoint `POST /admin/api/students/bulk` com transação única (limite 5000 itens). Retorna `{ inserted, updated, skipped }`.
+- Helper `bulkUpsertStudents` em `db.js` usando `db.transaction()` do better-sqlite3 (rollback automático em erro).
+- Limite de body do Express subido pra 1MB (default 100KB era apertado pros 594 itens).
+- Script `scripts/import_students.py` com openpyxl: filtra `Situação do contrato == Ativo` AND `Situação do cliente == Ativo`, normaliza phone `(51) 9 9984-9349 → 5551999849349`, agrupa múltiplos clientes ativos no mesmo phone (família) num único registro com nomes concatenados por " / ".
+- Webhook ajustado: `firstName` extrai 1º nome do 1º cliente em registros agrupados (`"Alana / Sofia" → "Alana"`).
+
+**Achado interessante:** 8 phones na planilha aparecem com 2 clientes ativos cada — todos casos óbvios de família (mãe/filha, irmãos, casal). Pelos sobrenomes: Tozin, Silveira, Medeiros/Gusmão, Nunes, Pereira (×2), Silveira/Pacheco, Maria/Rielem. Não é erro de cadastro — é realidade. Pro propósito do roteamento, agrupar funciona: IA desvia igual, e a notificação pra equipe mostra ambos os nomes.
+
+**Smoke test local:** 602 itens enviados → 594 phones únicos no banco. Família Tozin agrupada como esperado. Bulk endpoint testado com banco zerado (594 inserted, 0 updated) e re-execução (0 inserted, 594 updated) — idempotência confirmada.
+
+**Resultado em produção:** 594 alunos ativos cadastrados. Quando qualquer um deles mandar msg, IA NÃO roda → resposta padrão + notificação WhatsApp pro dono.
+
+---
+
 ## 2026-05-01 — Roteamento aluno vs lead + delay de digitação
 
 **Contexto:** Pergunta do usuário sobre como o sistema vai lidar quando virar número oficial da STRONIX — alunos atuais e leads novos no mesmo canal. Decisão: Modelo A (mais simples e seguro).
