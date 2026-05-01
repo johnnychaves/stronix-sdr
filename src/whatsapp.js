@@ -121,4 +121,45 @@ async function notifyStudent(studentPhone, student, incomingText) {
   }
 }
 
-module.exports = { sendMessage, sendAudio, notifyOwner, notifyStudent };
+// Notifica consultora atribuída (ou todos os admins se ainda não atribuída) que
+// um lead enviou mensagem enquanto o atendimento humano está ativo.
+async function notifyAssignedConsultor({ leadPhone, assignedUser, fallbackUsers, incomingText }) {
+  const display = formatBRPhoneDisplay(leadPhone);
+  const preview = incomingText.length > 200 ? incomingText.slice(0, 200) + '...' : incomingText;
+
+  // Lista de destinos: a consultora atribuída (se tem phone) OU os admins/consultoras de fallback
+  const targets = [];
+  if (assignedUser && assignedUser.phone) {
+    targets.push({ phone: assignedUser.phone, name: assignedUser.display_name });
+  } else if (Array.isArray(fallbackUsers)) {
+    for (const u of fallbackUsers) {
+      if (u.phone) targets.push({ phone: u.phone, name: u.display_name });
+    }
+  }
+
+  if (!targets.length) {
+    console.log('[whatsapp] notifyAssignedConsultor: sem destinos com phone cadastrado, pulando');
+    return;
+  }
+
+  const headerLine = assignedUser
+    ? `📩 *Nova mensagem do lead que você assumiu*`
+    : `📩 *Nova mensagem de lead em atendimento humano (ainda sem dono)*`;
+
+  const message =
+    `${headerLine}\n\n` +
+    `📱 ${display}\n\n` +
+    `💬 _"${preview}"_\n\n` +
+    `Acesse o painel pra responder: https://stronix-sdr-production.up.railway.app/admin`;
+
+  for (const t of targets) {
+    try {
+      await sendMessage(t.phone, message);
+      console.log(`[whatsapp] notificação de mensagem humana enviada pra ${t.name} (${t.phone})`);
+    } catch (err) {
+      console.error(`[whatsapp] erro ao notificar ${t.name}:`, err.message);
+    }
+  }
+}
+
+module.exports = { sendMessage, sendAudio, notifyOwner, notifyStudent, notifyAssignedConsultor };

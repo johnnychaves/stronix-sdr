@@ -4,6 +4,72 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-01 — Inbox multi-agente integrado (10 dias de plano executados em 1)
+
+**Contexto:** Decisão estratégica de NÃO migrar pra ChatPro/Wati (R$ 200-500/mês recorrente + IA genérica) e construir o inbox no nosso próprio painel. Mantém custom IA (Sonnet 4.5 + 38k prompt + voz clonada) + adiciona multi-agente. Custo recorrente extra: R$ 0.
+
+**Plano original em 10 dias úteis, executado em 1 sessão por deploy incremental.**
+
+**Day 1 — Schema (DB):**
+- Tabelas `users` (id, username, password_hash, display_name, role, phone, active) e `sessions` (token UUID, user_id, expires_at)
+- Colunas em `contacts`: `assigned_user_id` (FK soft), `human_assumed_at` (timestamp)
+- Coluna em `messages`: `sent_by_user_id` (NULL = IA, ID = consultora)
+- 12 helpers novos: createUser/authenticateUser/getUserById/getAllUsers/setUserActive/setUserPassword/setUserRole/setUserPhone/setUserDisplayName/deleteUser/countUsers/countAdmins/getActiveConsultors/getActiveAdmins
+- Migrações idempotentes (PRAGMA table_info)
+
+**Day 2 — Auth (src/auth.js):**
+- Hash com scrypt do crypto built-in (sem dep nova) — formato `salt$hash`
+- `verifyPassword` usa `crypto.timingSafeEqual` (resistente a timing attacks)
+- Parser de cookie manual (~10 linhas, sem cookie-parser)
+- Middleware `requireAuth` e `requireAdmin`
+- Cookie `sdr_session` httpOnly + sameSite=lax + secure em prod
+- Detecta produção via NODE_ENV ou RAILWAY_ENVIRONMENT
+
+**Day 3 — Login UI:**
+- Tela /admin/login com modo bootstrap quando `countAdmins() === 0`
+- Form muda dinamicamente: bootstrap pede displayName + phone, login normal só user/senha
+- Header do painel com nome do user + role + botão "Sair"
+- Endpoint /api/auth/status público pra cliente saber se está em bootstrap
+
+**Day 4-5 — Reply + assume/release:**
+- POST /api/conversations/:phone/reply: garante contato, assume se ninguém pegou, salva msg como assistant com sent_by_user_id, envia via Cloud API
+- POST /api/conversations/:phone/assume: race protection com UPDATE WHERE assigned_user_id IS NULL
+- POST /api/conversations/:phone/release: limpa assignment, IA volta a atender
+- UI: badges (🤖 IA / 👤 nome / ⭐ minha), botão Assumir/Devolver/Enviar, input dentro do card
+- Filtros novos: IA atendendo / Humano atendendo / Minhas
+
+**Day 6 — Webhook handoff:**
+- `processBatch` checka `human_assumed_at` antes da IA. Se assumida: salva msg do user, NÃO chama Claude, notifica consultora ou fallback de admins.
+- `notifyAssignedConsultor` em whatsapp.js: prioriza consultora atribuída, fallback pros admins. Pula se ninguém tem phone cadastrado.
+
+**Day 7 — Polling + Notifications:**
+- Polling 5s na aba Inbox, pausa nas outras
+- Detecção de msgs novas comparando `lastContactAt` entre loads
+- Browser Notification API (permissão pedida no carregamento)
+- Contador de não-lidas no título (só conta com aba oculta)
+- visibilitychange + focus zera o counter
+
+**Day 8 — Aba Usuários (admin only):**
+- CRUD com proteção: não desativa nem rebaixa o último admin, não exclui a si mesmo
+- Reset de senha invalida todas as sessões do user (força re-login)
+- Endpoint enxuto /api/users-public retorna só id+display_name+role pra renderizar nomes em mensagens
+
+**Day 9 — Aba Métricas (admin only):**
+- 6 cards: total conversas 30d, em atendimento humano agora, % handoff, tempo médio 1ª resposta IA, pendentes de assumir 24h, total alunos
+- Lista de conversas atendidas por consultora 30d (count distinct phones)
+- Tudo via `db.getMetrics()` em prepared statements
+
+**Day 10 — QA + memory + deploy.**
+
+**Smoke tests passados (auto):**
+- Auth: 11/11 (redirect, 401, bootstrap, login, logout, cookie invalidado)
+- Handoff: lead manda msg pra conversa assumida → IA NÃO roda, log "em atendimento humano (Johnny) — IA não responde"
+- Users CRUD: cria, lista, role-based access (consultora 403 em /users e /metrics), proteção último admin
+
+**Princípio sócio aplicado:** zero deps novas (scrypt + cookie parser manual), polling em vez de websocket, HTML inline em vez de React. Mantém o estilo simples do código, sem build, sem framework.
+
+---
+
 ## 2026-05-01 — Buffer de mensagens (debouncing por phone)
 
 **Contexto:** Lead/aluno costuma fragmentar pensamento em várias msgs curtas ("oi" → "tem aula?" → "qual valor?"). Sem buffer, cada uma virava webhook independente, IA processava 3x e respondia fora de ordem — especialmente crítico depois que o delay de digitação subiu pra 1-3 min, abrindo janela enorme pra race condition.

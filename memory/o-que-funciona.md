@@ -36,6 +36,96 @@ function flushBuffer(from) {
 
 ---
 
+## 2026-05-01 — Auth + sessões em SQLite sem deps novas (scrypt + cookie manual)
+
+**Contexto:** Adicionar login multi-usuário sem trazer bcrypt, jsonwebtoken, express-session, cookie-parser ou passport. Mantém footprint enxuto.
+
+**Solução:**
+```js
+// Hash com scrypt do crypto built-in (Node 18+)
+const crypto = require('crypto');
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}$${hash}`;
+}
+function verifyPassword(password, stored) {
+  const [salt, hash] = stored.split('$');
+  const candidate = crypto.scryptSync(password, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(candidate, 'hex'), Buffer.from(hash, 'hex'));
+}
+```
+
+```js
+// Parser de cookie manual (~10 linhas, sem cookie-parser)
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  if (!header) return {};
+  const out = {};
+  for (const pair of header.split(';')) {
+    const idx = pair.indexOf('=');
+    if (idx === -1) continue;
+    const k = pair.slice(0, idx).trim();
+    out[k] = decodeURIComponent(pair.slice(idx + 1).trim());
+  }
+  return out;
+}
+```
+
+```js
+// Sessão = UUID + row em SQLite com expires_at
+function createSession(userId, ttlMs) {
+  const token = crypto.randomUUID();
+  // INSERT INTO sessions (token, user_id, created_at, expires_at)
+  return token;
+}
+function getSessionUser(token) {
+  const row = stmt.getSessionByToken.get(token);
+  if (!row || row.expires_at < Date.now() || !row.active) return null;
+  return { id: row.u_id, username: row.username, ... };
+}
+```
+
+**Por que funciona:**
+- scrypt é resistente a brute-force (ASIC-hard) e timingSafeEqual neutraliza timing attacks
+- Cookie httpOnly + sameSite=lax + secure-em-prod cobre XSS + CSRF + sniffing
+- Sessão em DB permite logout server-side (vs JWT que precisa de blacklist) e expiração natural
+- Zero deps novas → zero risco de cadeia de supply-chain
+
+---
+
+## 2026-05-01 — Bootstrap UI dinâmico em vez de senha-padrão
+
+**Contexto:** Como criar o primeiro admin sem hardcodar senha (vergonhoso e inseguro) nem precisar rodar script CLI em produção.
+
+**Solução:**
+- Endpoint público `/api/auth/status` retorna `{ bootstrap: countAdmins() === 0 }`
+- Tela de login JS lê isso e muda o form: bootstrap mostra campos extras (displayName + phone) e POSTa em `/api/auth/bootstrap`
+- Endpoint bootstrap só funciona se NÃO existe admin ativo. Depois disso, retorna 403
+
+**Por que funciona:**
+- Zero senha hardcoded
+- Zero variável de ambiente sensível
+- Zero comando manual
+- Self-service: 1ª pessoa que acessa cria o primeiro admin com a senha que quiser
+
+---
+
+## 2026-05-01 — Race protection em "assumir conversa" sem lock
+
+**Contexto:** Pool aberto — múltiplas consultoras podem clicar "Assumir" quase simultâneo. Sem proteção, a 2ª clicada ganha (last write wins) e a 1ª acha que pegou.
+
+**Solução:** UPDATE com WHERE da condição prévia + checagem de rows-affected.
+```js
+const result = stmt.assumeConversationStmt.run(userId, Date.now(), phone);
+// stmt: UPDATE contacts SET assigned_user_id=?, human_assumed_at=? WHERE phone=? AND assigned_user_id IS NULL
+return result.changes > 0; // true = pegou; false = outro pegou primeiro
+```
+
+**Por que funciona:** SQLite atomiza o UPDATE. WHERE assigned_user_id IS NULL impede sobrescrever assignment existente. Se 2 cliques simultâneos: o 1º faz changes=1, o 2º faz changes=0 e o frontend mostra "alguém já assumiu".
+
+---
+
 ## 2026-05-01 — Bulk insert transacional com better-sqlite3
 
 **Contexto:** Importar 594 registros via 594 PUTs separados é lento e martela o servidor. Bulk em transação única é ordens de grandeza mais rápido.

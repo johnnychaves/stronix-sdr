@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const config    = require('./config');
 const { reply, isAffirmative, isNegative, getContact, setAudioFlags } = require('./agent');
-const { sendMessage, sendAudio, notifyStudent } = require('./whatsapp');
+const { sendMessage, sendAudio, notifyStudent, notifyAssignedConsultor } = require('./whatsapp');
 const { transcribeAudio } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
 const db = require('./db');
@@ -78,6 +78,25 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
     await sleep(typingDelayMs(studentReply));
     await sendMessage(from, studentReply);
     await notifyStudent(from, student, text);
+    return;
+  }
+
+  // Handoff humano: se uma consultora/admin assumiu essa conversa, IA NÃO responde.
+  // Salva a msg do lead no histórico (não chama Claude) e notifica a consultora.
+  const assignment = db.getContactAssignment(from);
+  if (assignment && assignment.humanAssumedAt) {
+    db.getOrCreateContact(from);
+    db.addMessageWithSender(from, 'user', text, anyAudio, null);
+    db.updateLastContact(from);
+    const assignedUser = assignment.assignedUserId ? db.getUserById(assignment.assignedUserId) : null;
+    const fallbackUsers = assignedUser ? [] : [...db.getActiveAdmins(), ...db.getActiveConsultors()];
+    console.log(`[webhook] ${from} em atendimento humano (${assignedUser?.display_name || 'sem dono'}) — IA não responde`);
+    await notifyAssignedConsultor({
+      leadPhone: from,
+      assignedUser,
+      fallbackUsers,
+      incomingText: text,
+    });
     return;
   }
 

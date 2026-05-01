@@ -4,6 +4,36 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-01 — Inbox multi-agente próprio em vez de ChatPro/Wati
+
+**Decisão:** Construir inbox + handoff IA-humano dentro do painel /admin existente, em vez de migrar pra plataforma SaaS de WhatsApp Business (ChatPro, Wati, Kommo, Z-API).
+
+**Por quê:**
+- ChatPro/Wati = R$ 200-500/mês recorrente + obrigaria abandonar a IA customizada (38k de prompt + voz clonada + scripts A.V.I.A.R.C.)
+- A IA delas é genérica (GPT-3.5/4o-mini com prompt configurável), produto inferior
+- Custo do nosso stack atual: R$ 180-650/mês (Claude + ElevenLabs + Whisper + Railway)
+- Pagar AMBOS não fecha conta. Migrar tudo pra ChatPro joga fora 1 mês de trabalho de prompt
+- Construir multi-agente próprio: ~10 dias úteis, R$ 0 recorrente extra, mantém o diferencial
+
+**Alternativas descartadas:**
+- ChatPro/Wati → analisado acima
+- Meta Business Manager Inbox embutido → grátis mas UX ruim (cada consultora cria conta Meta, interface lenta)
+- Hybrid (2 números: bot Cloud API + consultoras WhatsApp Business) → fragmenta UX do lead, perde handoff seamless
+
+**Tradeoffs aceitos:**
+- ❌ Sem app mobile dedicado (consultora usa o painel pelo browser do celular)
+- ❌ Sem mensagens agendadas, broadcast em massa, templates pré-prontos, Kanban visual
+- Se algum desses virar crítico, avalia plataforma específica DEPOIS de medir necessidade real
+
+**Arquitetura escolhida:**
+- Auth multi-usuário com role admin/consultora (scrypt + cookie httpOnly + sessions em SQLite, sem deps novas)
+- Pool aberto: qualquer consultora pode "assumir" qualquer conversa (race protection com UPDATE WHERE NULL)
+- Webhook checa `human_assumed_at` antes da IA. Se humano assumiu, IA NÃO roda
+- Polling de 5s + Notification API (sem websocket, sem React, sem build)
+- Bootstrap UI em vez de senha-padrão hardcoded ou script CLI
+
+---
+
 ## 2026-05-01 — Roteamento aluno vs lead determinístico (não NLP)
 
 **Decisão:** Aluno é identificado por phone cadastrado em tabela `students`, NÃO por o SDR detectar via NLP. Se phone está cadastrado, IA não roda — resposta padrão + notifica dono.

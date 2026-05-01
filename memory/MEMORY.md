@@ -25,7 +25,7 @@ Este arquivo é o ponto de entrada do sistema de memória. Leia-o primeiro para 
 ## Contexto rápido
 
 - **Projeto:** SDR de IA pelo WhatsApp pra STRONIX Academia (Av. Edgar Pires de Castro, 9392, Lageado, Porto Alegre/RS)
-- **Status:** SDR em produção 24/7 no Railway. Agendamento + Camada 1 de coleta de feedback (review manual no painel) prontos. Aguardando 2 semanas de uso real pra decidir Camada 2.
+- **Status:** SDR em produção 24/7 no Railway. Agendamento + roteamento aluno-vs-lead + buffer de mensagens + Inbox multi-agente com auth completo (login, handoff IA↔humano, métricas, CRUD de usuários). Aguardando migração pro número real STRONIX.
 - **Stack:** Node.js + Express + Claude Sonnet 4.5 + SQLite + Whisper + ElevenLabs + Meta Cloud API
 - **URL produção:** https://stronix-sdr-production.up.railway.app
 - **Repo:** github.com/johnnychaves/stronix-sdr (privado)

@@ -644,6 +644,65 @@ function addMessageWithSender(phone, role, content, wasAudio, sentByUserId) {
   stmts.insertMessageWithSender.run(phone, role, content, wasAudio ? 1 : 0, sentByUserId || null, Date.now());
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// METRICS (agregações pra aba Métricas — admin only)
+// ─────────────────────────────────────────────────────────────────────
+
+function getMetrics() {
+  const now = Date.now();
+  const cutoff30d = now - (30 * 24 * 60 * 60 * 1000);
+  const last24h   = now - (24 * 60 * 60 * 1000);
+
+  const totalConversations30d = db.prepare('SELECT COUNT(*) as c FROM contacts WHERE first_contact_at >= ?').get(cutoff30d).c;
+  const handoffCount = db.prepare('SELECT COUNT(*) as c FROM contacts WHERE first_contact_at >= ? AND human_assumed_at IS NOT NULL').get(cutoff30d).c;
+  const activeHumanHandoff = db.prepare('SELECT COUNT(*) as c FROM contacts WHERE human_assumed_at IS NOT NULL').get().c;
+
+  const unassignedActive = db.prepare(`
+    SELECT COUNT(DISTINCT c.phone) as c
+    FROM contacts c
+    JOIN messages m ON m.phone = c.phone
+    WHERE c.assigned_user_id IS NULL
+      AND m.created_at >= ?
+      AND m.role = 'user'
+  `).get(last24h).c;
+
+  const firstReplyRow = db.prepare(`
+    SELECT
+      AVG((SELECT MIN(m2.created_at) FROM messages m2
+            WHERE m2.phone = c.phone
+              AND m2.role = 'assistant'
+              AND m2.sent_by_user_id IS NULL
+              AND m2.created_at >= c.first_contact_at) - c.first_contact_at) AS avg_ms,
+      COUNT(*) AS samples
+    FROM contacts c
+    WHERE c.first_contact_at >= ?
+      AND EXISTS (SELECT 1 FROM messages WHERE phone = c.phone AND role = 'assistant' AND sent_by_user_id IS NULL)
+  `).get(cutoff30d);
+
+  const byConsultor = db.prepare(`
+    SELECT u.id, u.display_name, COUNT(DISTINCT m.phone) as count
+    FROM messages m
+    JOIN users u ON u.id = m.sent_by_user_id
+    WHERE m.created_at >= ? AND m.sent_by_user_id IS NOT NULL
+    GROUP BY u.id, u.display_name
+    ORDER BY count DESC
+  `).all(cutoff30d);
+
+  const studentsCount = stmts.getAllStudents.all().length;
+
+  return {
+    totalConversations30d,
+    handoffCount,
+    handoffPct: totalConversations30d ? handoffCount / totalConversations30d : 0,
+    activeHumanHandoff,
+    unassignedActive,
+    avgFirstReplySec: firstReplyRow && firstReplyRow.avg_ms ? firstReplyRow.avg_ms / 1000 : null,
+    firstReplySamples: firstReplyRow ? firstReplyRow.samples : 0,
+    byConsultor,
+    studentsCount,
+  };
+}
+
 // Insere múltiplos alunos numa única transação. Retorna { inserted, updated, skipped }.
 // items: array de { phone, name?, notes? }. Phones com menos de 10 dígitos são skipped.
 function bulkUpsertStudents(items) {
@@ -712,4 +771,6 @@ module.exports = {
   releaseConversation,
   getContactAssignment,
   addMessageWithSender,
+  // metrics
+  getMetrics,
 };

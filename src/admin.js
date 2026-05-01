@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
+const { sendMessage } = require('./whatsapp');
 const db = require('./db');
 const auth = require('./auth');
 
@@ -171,6 +172,88 @@ router.get('/api/me', (req, res) => {
   res.json({ user: req.user });
 });
 
+// Lista enxuta dos users ativos pra renderizar nomes em mensagens enviadas por humanos
+router.get('/api/users-public', (req, res) => {
+  res.json(db.getAllUsers().filter(u => u.active).map(u => ({
+    id: u.id,
+    display_name: u.display_name,
+    role: u.role,
+  })));
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// USERS CRUD (admin only)
+// ─────────────────────────────────────────────────────────────────────
+
+router.get('/api/users', auth.requireAdmin, (req, res) => {
+  res.json(db.getAllUsers());
+});
+
+router.post('/api/users', auth.requireAdmin, (req, res) => {
+  const { username, password, displayName, role, phone } = req.body || {};
+  if (!username || !password || !displayName || !role) {
+    return res.status(400).json({ error: 'username, password, displayName e role obrigatórios' });
+  }
+  if (password.length < 8) return res.status(400).json({ error: 'Senha precisa ter pelo menos 8 caracteres' });
+  if (!['admin', 'consultora'].includes(role)) return res.status(400).json({ error: 'role inválida' });
+  try {
+    const id = db.createUser({ username, password, displayName, role, phone });
+    res.json({ ok: true, id });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.patch('/api/users/:id', auth.requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'id inválido' });
+  const target = db.getUserById(id);
+  if (!target) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+  const { active, role, phone, displayName } = req.body || {};
+
+  // Não pode desativar o último admin nem rebaixar o próprio role se é o último admin
+  if ((active === false || (role && role !== 'admin' && target.role === 'admin')) && db.countAdmins() === 1) {
+    return res.status(400).json({ error: 'Não pode desativar/rebaixar o último admin ativo' });
+  }
+
+  if (typeof active === 'boolean') db.setUserActive(id, active);
+  if (role) db.setUserRole(id, role);
+  if (phone !== undefined) db.setUserPhone(id, phone);
+  if (displayName) db.setUserDisplayName(id, displayName);
+  res.json({ ok: true });
+});
+
+router.post('/api/users/:id/password', auth.requireAuth, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  // Self-reset OU admin
+  if (req.user.id !== id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { password } = req.body || {};
+  if (!password || password.length < 8) return res.status(400).json({ error: 'Senha precisa ter pelo menos 8 caracteres' });
+  if (!db.getUserById(id)) return res.status(404).json({ error: 'Usuário não encontrado' });
+  db.setUserPassword(id, password);
+  res.json({ ok: true });
+});
+
+// Métricas agregadas dos últimos 30 dias (admin only)
+router.get('/api/metrics', auth.requireAdmin, (req, res) => {
+  res.json(db.getMetrics());
+});
+
+router.delete('/api/users/:id', auth.requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const target = db.getUserById(id);
+  if (!target) return res.status(404).json({ error: 'Usuário não encontrado' });
+  if (target.role === 'admin' && db.countAdmins() === 1) {
+    return res.status(400).json({ error: 'Não pode excluir o último admin ativo' });
+  }
+  if (req.user.id === id) return res.status(400).json({ error: 'Você não pode excluir a si mesmo' });
+  db.deleteUser(id);
+  res.json({ ok: true });
+});
+
 // API — retorna o prompt atual
 router.get('/api/prompt', (req, res) => {
   res.json({ prompt: getSystemPrompt() });
@@ -193,6 +276,65 @@ router.get('/api/conversations', (req, res) => {
 router.delete('/api/conversations/:from', (req, res) => {
   clearConversation(req.params.from);
   res.json({ ok: true });
+});
+
+// API — assume conversa (pool aberto: primeiro a clicar pega)
+router.post('/api/conversations/:phone/assume', (req, res) => {
+  const { phone } = req.params;
+  db.getOrCreateContact(phone);
+  const ok = db.assumeConversation(phone, req.user.id);
+  if (!ok) {
+    const a = db.getContactAssignment(phone);
+    if (a.assignedUserId === req.user.id) return res.json({ ok: true, alreadyMine: true });
+    const other = a.assignedUserId ? db.getUserById(a.assignedUserId) : null;
+    return res.status(409).json({
+      error: 'Conversa já assumida',
+      by: other ? other.display_name : null,
+    });
+  }
+  console.log(`[admin] ${req.user.username} assumiu conversa ${phone}`);
+  res.json({ ok: true });
+});
+
+// API — devolve conversa pra IA (libera assignment)
+router.post('/api/conversations/:phone/release', (req, res) => {
+  const a = db.getContactAssignment(req.params.phone);
+  if (a.assignedUserId && a.assignedUserId !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Você não pode devolver conversa de outra consultora' });
+  }
+  db.releaseConversation(req.params.phone);
+  console.log(`[admin] ${req.user.username} devolveu conversa ${req.params.phone} pra IA`);
+  res.json({ ok: true });
+});
+
+// API — consultora/admin envia mensagem na conversa (atendimento humano)
+router.post('/api/conversations/:phone/reply', async (req, res) => {
+  const { phone } = req.params;
+  const { text } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'Texto vazio' });
+  if (text.length > 4096) return res.status(400).json({ error: 'Texto longo demais (máx 4096)' });
+
+  // Garante contato existe (na pior das hipóteses cria entrada)
+  db.getOrCreateContact(phone);
+
+  // Se ninguém assumiu ainda, o ato de mandar mensagem implica assumir.
+  // Pool aberto: o primeiro a mandar pega.
+  const assignment = db.getContactAssignment(phone);
+  if (!assignment.assignedUserId) {
+    db.assumeConversation(phone, req.user.id);
+  } else if (assignment.assignedUserId !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Conversa já assumida por outra consultora' });
+  }
+
+  try {
+    await sendMessage(phone, text);
+    db.addMessageWithSender(phone, 'assistant', text, false, req.user.id);
+    db.updateLastContact(phone);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[admin] erro ao enviar reply humano:', err.message);
+    res.status(500).json({ error: 'Falha ao enviar mensagem' });
+  }
 });
 
 // API — lista agendamentos
@@ -348,6 +490,27 @@ router.get('/', (req, res) => {
     .review-badge.good { background: #1e2a1e; color: #4ade80; }
     .review-badge.bad { background: #2a1e1e; color: #f87171; }
 
+    /* Assignment badge + botões */
+    .assign-badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .assign-badge.ai    { background: #1a1a2e; color: #818cf8; }
+    .assign-badge.mine  { background: #1e2a1e; color: #4ade80; }
+    .assign-badge.other { background: #2a261a; color: #fbbf24; }
+    .btn-assume  { background: #22c55e; color: #000; border: none; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .btn-assume:hover { background: #16a34a; }
+    .btn-release { background: #1a2a1e; color: #4ade80; border: 1px solid #22c55e44; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+    .btn-release:hover { background: #1e3a2a; }
+
+    /* Mensagem enviada por humano */
+    .msg-role.human { color: #fbbf24; }
+
+    /* Caixa de envio de resposta humana */
+    .reply-bar { display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: #1a1a1a; border-top: 1px solid #2a2a2a; border-radius: 0 0 8px 8px; }
+    .reply-input { flex: 1; background: #0f0f0f; color: #d4d4d4; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical; outline: none; min-height: 40px; max-height: 200px; }
+    .reply-input:focus { border-color: #22c55e44; }
+    .btn-send { background: #22c55e; color: #000; border: none; padding: 0 18px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; align-self: stretch; }
+    .btn-send:hover { background: #16a34a; }
+    .btn-send:disabled { background: #1a4a2a; color: #555; cursor: not-allowed; }
+
     /* Filtros */
     .filter-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
     .filter-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all .15s; }
@@ -401,6 +564,8 @@ router.get('/', (req, res) => {
   <div class="tab" onclick="switchTab('conversas')">Conversas ativas</div>
   <div class="tab" onclick="switchTab('agendamentos')">📅 Agendamentos</div>
   <div class="tab" onclick="switchTab('alunos')">🎓 Alunos</div>
+  <div class="tab admin-only" onclick="switchTab('users')" style="display:none">👥 Usuários</div>
+  <div class="tab admin-only" onclick="switchTab('metrics')" style="display:none">📊 Métricas</div>
 </div>
 
 <div id="tab-prompt" class="panel active">
@@ -428,6 +593,9 @@ router.get('/', (req, res) => {
   <div class="filter-bar" id="filter-bar">
     <span class="review-label">Filtrar:</span>
     <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">Todas</button>
+    <button class="filter-btn" data-filter="ai" onclick="setFilter('ai')">🤖 IA atendendo</button>
+    <button class="filter-btn" data-filter="human" onclick="setFilter('human')">👤 Humano atendendo</button>
+    <button class="filter-btn" data-filter="mine" onclick="setFilter('mine')">⭐ Minhas</button>
     <button class="filter-btn" data-filter="unrated" onclick="setFilter('unrated')">Não avaliadas</button>
     <button class="filter-btn" data-filter="bad" onclick="setFilter('bad')">👎 Não gostei</button>
     <button class="filter-btn" data-filter="good" onclick="setFilter('good')">👍 Gostei</button>
@@ -446,6 +614,39 @@ router.get('/', (req, res) => {
   <div id="appt-list">
     <div class="empty">Carregando...</div>
   </div>
+</div>
+
+<div id="tab-users" class="panel">
+  <div class="conv-header">
+    <h2>Usuários do painel — admins e consultoras</h2>
+    <button class="refresh-btn" onclick="loadUsers()">↻ Atualizar</button>
+  </div>
+  <div class="student-help">
+    Cada pessoa que precisa acessar o painel ganha um login próprio. <strong>Admins</strong> têm acesso total (editam prompt, criam usuários, veem métricas). <strong>Consultoras</strong> só veem inbox + agendamentos + alunos pra atender.<br>
+    Telefone (opcional, formato 5551XXXXXXXX) é usado pra notificar via WhatsApp quando lead em atendimento humano envia mensagem.
+  </div>
+  <div class="student-form">
+    <input class="phone" id="u-username" placeholder="Usuário (login)" maxlength="40" style="width:160px">
+    <input class="name" id="u-displayname" placeholder="Nome completo" style="width:200px">
+    <select id="u-role" style="background:#0f0f0f;color:#d4d4d4;border:1px solid #2a2a2a;border-radius:6px;padding:8px 10px;font-size:13px">
+      <option value="consultora">Consultora</option>
+      <option value="admin">Admin</option>
+    </select>
+    <input class="phone" id="u-phone" placeholder="Phone (opcional)" maxlength="13" style="width:140px">
+    <input id="u-password" type="password" placeholder="Senha (mín 8)" style="background:#0f0f0f;color:#d4d4d4;border:1px solid #2a2a2a;border-radius:6px;padding:8px 10px;font-size:13px;width:140px">
+    <button class="btn-add" onclick="addUser()">Adicionar</button>
+  </div>
+  <div id="users-list">
+    <div class="empty">Carregando...</div>
+  </div>
+</div>
+
+<div id="tab-metrics" class="panel">
+  <div class="conv-header">
+    <h2>Métricas (últimos 30 dias)</h2>
+    <button class="refresh-btn" onclick="loadMetrics()">↻ Atualizar</button>
+  </div>
+  <div id="metrics-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px"></div>
 </div>
 
 <div id="tab-alunos" class="panel">
@@ -547,18 +748,83 @@ router.get('/', (req, res) => {
   let currentFilter = 'all';
   const openCards = new Set();
 
+  // Polling + notificações: estado pra detectar mensagens novas
+  let pollTimer = null;
+  let lastSeenLastContact = {}; // phone → lastContactAt do último load
+  let unreadCount = 0;
+  let baseTitle = document.title;
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(loadConversations, 5000);
+  }
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function updateTitleCounter() {
+    document.title = unreadCount > 0 ? \`(\${unreadCount}) \${baseTitle}\` : baseTitle;
+  }
+
+  function detectNewMessages(convs) {
+    let newOnesForMe = 0;
+    for (const c of convs) {
+      const prev = lastSeenLastContact[c.from];
+      if (prev !== undefined && c.lastContactAt > prev && c.lastMessage && c.lastMessage.role === 'user') {
+        // Mensagem nova vinda do lead/aluno. Conta como "minha" se eu assumi ou está sem dono
+        const isMine = me && c.assignedUserId === me.id;
+        const isUnassigned = !c.assignedUserId;
+        if (isMine || isUnassigned) {
+          newOnesForMe++;
+          showBrowserNotification(c, isMine);
+        }
+      }
+      lastSeenLastContact[c.from] = c.lastContactAt;
+    }
+    if (newOnesForMe > 0 && document.hidden) {
+      unreadCount += newOnesForMe;
+      updateTitleCounter();
+    }
+  }
+
+  function showBrowserNotification(c, isMine) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!document.hidden) return; // Só notifica se aba não está visível
+    const tag = 'sdr-' + c.from;
+    const title = isMine ? '👤 Sua conversa: nova mensagem' : '⏳ Nova conversa sem dono';
+    const body = c.lastMessage ? c.lastMessage.content.slice(0, 100) : '';
+    new Notification(title, { body, tag });
+  }
+
+  function clearUnreadOnFocus() {
+    if (!document.hidden) {
+      unreadCount = 0;
+      updateTitleCounter();
+    }
+  }
+  document.addEventListener('visibilitychange', clearUnreadOnFocus);
+  window.addEventListener('focus', clearUnreadOnFocus);
+
   const RATE_LABEL = { good: '👍 Gostei', bad: '👎 Não gostei' };
 
   async function loadConversations() {
-    const res = await fetch('/admin/api/conversations');
-    allConversations = await res.json();
-    renderConversations();
+    try {
+      const res = await fetch('/admin/api/conversations');
+      if (!res.ok) return;
+      const fresh = await res.json();
+      detectNewMessages(fresh);
+      allConversations = fresh;
+      renderConversations();
+    } catch (e) { /* polling silencioso */ }
   }
 
   function renderConversations() {
     const list = document.getElementById('conv-list');
     const convs = allConversations.filter(c => {
       if (currentFilter === 'all') return true;
+      if (currentFilter === 'ai') return !c.assignedUserId;
+      if (currentFilter === 'human') return !!c.assignedUserId;
+      if (currentFilter === 'mine') return me && c.assignedUserId === me.id;
       if (currentFilter === 'unrated') return !c.review;
       return c.review && c.review.rating === currentFilter;
     });
@@ -573,9 +839,49 @@ router.get('/', (req, res) => {
 
     list.innerHTML = convs.map((c, i) => {
       const r = c.review;
-      const badge = r ? \`<span class="review-badge \${r.rating}">\${RATE_LABEL[r.rating]}</span>\` : '';
+      const reviewBadge = r ? \`<span class="review-badge \${r.rating}">\${RATE_LABEL[r.rating]}</span>\` : '';
       const commentVal = r && r.comment ? r.comment.replace(/"/g, '&quot;') : '';
       const reviewedAt = r ? new Date(r.reviewedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
+
+      // Badge de quem está atendendo
+      const isHuman = !!c.assignedUserId;
+      const isMine  = isHuman && me && c.assignedUserId === me.id;
+      const assignBadge = isHuman
+        ? \`<span class="assign-badge \${isMine ? 'mine' : 'other'}">👤 \${c.assignedUserName || '—'}\${isMine ? ' (você)' : ''}</span>\`
+        : '<span class="assign-badge ai">🤖 IA atendendo</span>';
+
+      // Botões de assumir/devolver
+      let actionBtns = '';
+      if (!isHuman) {
+        actionBtns = \`<button class="btn-assume" onclick="assumeConv(event, '\${c.from}')">Assumir</button>\`;
+      } else if (isMine || (me && me.role === 'admin')) {
+        actionBtns = \`<button class="btn-release" onclick="releaseConv(event, '\${c.from}')">Devolver pra IA</button>\`;
+      }
+
+      // Pode enviar mensagem nessa conversa? (assumida por mim, ou eu sou admin)
+      const canReply = isMine || (me && me.role === 'admin');
+
+      // Histórico com sender (IA vs humano)
+      const historyHtml = c.history.map(m => {
+        const senderLabel = m.role === 'user'
+          ? '👤 Lead'
+          : (m.sentByUserId ? '👨‍💼 ' + (getUserDisplay(m.sentByUserId) || 'Atendente') : '🤖 SDR');
+        const senderClass = m.role === 'user' ? 'user' : (m.sentByUserId ? 'human' : 'assistant');
+        return \`
+          <div class="msg">
+            <div class="msg-role \${senderClass}">\${senderLabel}</div>
+            <div class="msg-content">\${m.content}</div>
+          </div>
+        \`;
+      }).join('');
+
+      const replyBoxHtml = canReply ? \`
+        <div class="reply-bar">
+          <textarea class="reply-input" id="reply-\${i}" placeholder="Digite sua resposta como \${me.displayName}..." rows="2"></textarea>
+          <button class="btn-send" onclick="sendReply('\${c.from}', \${i})">Enviar</button>
+        </div>
+      \` : '';
+
       return \`
         <div class="conv-card">
           <div class="conv-card-header" onclick="toggleMessages(\${i})">
@@ -584,19 +890,19 @@ router.get('/', (req, res) => {
               <div class="conv-stats">
                 <span class="stat">\${c.messageCount} msgs</span>
                 \${c.audioPermission ? '<span class="stat audio">🔊 áudio</span>' : ''}
-                \${badge}
+                \${assignBadge}
+                \${reviewBadge}
               </div>
-              \${c.lastMessage ? \`<span class="conv-last">\${c.lastMessage.role === 'assistant' ? '🤖' : '👤'} \${c.lastMessage.content.slice(0, 60)}...\</span>\` : ''}
+              \${c.lastMessage ? \`<span class="conv-last">\${c.lastMessage.role === 'assistant' ? (c.lastMessage.sentByUserId ? '👨‍💼' : '🤖') : '👤'} \${c.lastMessage.content.slice(0, 60)}...\</span>\` : ''}
             </div>
-            <button class="btn-clear" onclick="clearConv(event, '\${c.from}')">Limpar</button>
+            <div style="display:flex;gap:6px;align-items:center" onclick="event.stopPropagation()">
+              \${actionBtns}
+              <button class="btn-clear" onclick="clearConv(event, '\${c.from}')">Limpar</button>
+            </div>
           </div>
           <div class="conv-messages \${openCards.has(c.from) ? 'open' : ''}" id="msgs-\${i}" data-phone="\${c.from}">
-            \${c.history.map(m => \`
-              <div class="msg">
-                <div class="msg-role \${m.role}">\${m.role === 'user' ? '👤 Lead' : '🤖 SDR'}</div>
-                <div class="msg-content">\${m.content}</div>
-              </div>
-            \`).join('')}
+            \${historyHtml}
+            \${replyBoxHtml}
           </div>
           <div class="review-bar">
             <div class="review-row">
@@ -640,6 +946,62 @@ router.get('/', (req, res) => {
     renderConversations();
   }
 
+  // Cache simples de display_names dos users (id → display_name)
+  let userCache = {};
+  async function refreshUserCache() {
+    try {
+      const r = await fetch('/admin/api/users-public');
+      if (r.ok) {
+        const u = await r.json();
+        userCache = Object.fromEntries(u.map(x => [x.id, x.display_name]));
+      }
+    } catch {}
+  }
+  function getUserDisplay(id) { return userCache[id]; }
+
+  async function assumeConv(e, phone) {
+    e.stopPropagation();
+    const r = await fetch('/admin/api/conversations/' + phone + '/assume', { method: 'POST' });
+    if (!r.ok) {
+      const data = await r.json();
+      alert('Não consegui assumir: ' + (data.by ? data.by + ' já assumiu' : data.error));
+    }
+    loadConversations();
+  }
+
+  async function releaseConv(e, phone) {
+    e.stopPropagation();
+    if (!confirm('Devolver pra IA? A IA volta a responder essa conversa.')) return;
+    await fetch('/admin/api/conversations/' + phone + '/release', { method: 'POST' });
+    loadConversations();
+  }
+
+  async function sendReply(phone, idx) {
+    const ta = document.getElementById('reply-' + idx);
+    const text = ta.value.trim();
+    if (!text) return;
+    const btn = ta.parentElement.querySelector('.btn-send');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/admin/api/conversations/' + phone + '/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) {
+        const data = await r.json();
+        alert('Erro: ' + (data.error || 'falha ao enviar'));
+        btn.disabled = false;
+        return;
+      }
+      ta.value = '';
+      loadConversations();
+    } catch (e2) {
+      alert('Falha de conexão');
+      btn.disabled = false;
+    }
+  }
+
   // Salva comentário com debounce de 600ms
   const commentTimers = {};
   function onCommentChange(phone, idx) {
@@ -677,9 +1039,150 @@ router.get('/', (req, res) => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     event.target.classList.add('active');
     document.getElementById('tab-' + tab).classList.add('active');
-    if (tab === 'conversas') loadConversations();
+    // Polling só na aba Inbox — outras paradas
+    if (tab === 'conversas') {
+      loadConversations();
+      startPolling();
+    } else {
+      stopPolling();
+    }
     if (tab === 'agendamentos') loadAppointments();
     if (tab === 'alunos') loadStudents();
+    if (tab === 'users') loadUsers();
+    if (tab === 'metrics') loadMetrics();
+  }
+
+  // ─── USERS ───
+  async function loadUsers() {
+    const res = await fetch('/admin/api/users');
+    if (!res.ok) {
+      document.getElementById('users-list').innerHTML = '<div class="empty">Acesso negado</div>';
+      return;
+    }
+    const users = await res.json();
+    const list = document.getElementById('users-list');
+    if (!users.length) {
+      list.innerHTML = '<div class="empty">Nenhum usuário cadastrado</div>';
+      return;
+    }
+    list.innerHTML = users.map(u => {
+      const phone = u.phone ? formatBRPhone(u.phone) : '<span style="color:#555">sem telefone</span>';
+      const created = new Date(u.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const roleBadge = u.role === 'admin'
+        ? '<span class="review-badge good">👑 admin</span>'
+        : '<span class="assign-badge ai">🎯 consultora</span>';
+      const activeBadge = u.active
+        ? '<span class="assign-badge mine">✓ ativo</span>'
+        : '<span class="review-badge bad">✗ inativo</span>';
+      const isMe = me && me.id === u.id;
+      return \`
+        <div class="student-row">
+          <span class="phone">\${u.username}\${isMe ? ' <small style=\"color:#666\">(você)</small>' : ''}</span>
+          <span class="name">\${u.display_name}</span>
+          <span class="notes">\${roleBadge} \${activeBadge}</span>
+          <span style="color:#888;font-size:12px">\${phone}</span>
+          \${u.active
+            ? \`<button class="btn-clear" onclick="setUserActive(\${u.id}, false)">Desativar</button>\`
+            : \`<button class="btn-clear" style="border-color:#22c55e44;color:#4ade80" onclick="setUserActive(\${u.id}, true)">Reativar</button>\`}
+          <button class="btn-clear" onclick="resetUserPassword(\${u.id})">Reset senha</button>
+          \${isMe ? '' : \`<button class="btn-clear" onclick="removeUser(\${u.id})">Excluir</button>\`}
+        </div>
+      \`;
+    }).join('');
+  }
+
+  async function addUser() {
+    const username    = document.getElementById('u-username').value.trim();
+    const displayName = document.getElementById('u-displayname').value.trim();
+    const role        = document.getElementById('u-role').value;
+    const phone       = document.getElementById('u-phone').value.trim();
+    const password    = document.getElementById('u-password').value;
+    if (!username || !displayName || !password) { alert('Preencha usuário, nome e senha.'); return; }
+    if (password.length < 8) { alert('Senha precisa ter pelo menos 8 caracteres.'); return; }
+    const r = await fetch('/admin/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, displayName, role, phone }),
+    });
+    const data = await r.json();
+    if (!r.ok) { alert('Erro: ' + (data.error || 'falha')); return; }
+    ['u-username','u-displayname','u-phone','u-password'].forEach(id => document.getElementById(id).value = '');
+    refreshUserCache();
+    loadUsers();
+  }
+
+  async function setUserActive(id, active) {
+    const r = await fetch('/admin/api/users/' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active }),
+    });
+    if (!r.ok) {
+      const data = await r.json();
+      alert('Erro: ' + (data.error || 'falha'));
+    }
+    refreshUserCache();
+    loadUsers();
+  }
+
+  async function resetUserPassword(id) {
+    const newPwd = prompt('Nova senha (mín 8 caracteres):');
+    if (!newPwd) return;
+    if (newPwd.length < 8) { alert('Senha precisa ter pelo menos 8 caracteres.'); return; }
+    const r = await fetch('/admin/api/users/' + id + '/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: newPwd }),
+    });
+    if (!r.ok) {
+      const data = await r.json();
+      alert('Erro: ' + (data.error || 'falha'));
+    } else {
+      alert('Senha redefinida. Próximo login do usuário usará a nova.');
+    }
+  }
+
+  async function removeUser(id) {
+    if (!confirm('Excluir esse usuário definitivamente? Sessões ativas serão invalidadas.')) return;
+    const r = await fetch('/admin/api/users/' + id, { method: 'DELETE' });
+    if (!r.ok) {
+      const data = await r.json();
+      alert('Erro: ' + (data.error || 'falha'));
+    }
+    refreshUserCache();
+    loadUsers();
+  }
+
+  // ─── METRICS ───
+  async function loadMetrics() {
+    const res = await fetch('/admin/api/metrics');
+    const grid = document.getElementById('metrics-grid');
+    if (!res.ok) {
+      grid.innerHTML = '<div class="empty">Acesso negado ou métricas indisponíveis</div>';
+      return;
+    }
+    const m = await res.json();
+    const card = (title, value, sub) => \`
+      <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:18px">
+        <div style="font-size:12px;color:#666;margin-bottom:6px">\${title}</div>
+        <div style="font-size:28px;font-weight:700;color:#fff">\${value}</div>
+        \${sub ? \`<div style="font-size:11px;color:#555;margin-top:4px">\${sub}</div>\` : ''}
+      </div>
+    \`;
+    let html = '';
+    html += card('Conversas iniciadas (30d)', m.totalConversations30d, '');
+    html += card('Em atendimento humano agora', m.activeHumanHandoff, '');
+    html += card('% c/ handoff humano', (m.handoffPct * 100).toFixed(1) + '%', m.handoffCount + ' de ' + m.totalConversations30d);
+    html += card('Tempo médio 1ª resposta IA', m.avgFirstReplySec ? Math.round(m.avgFirstReplySec) + 's' : '—', m.firstReplySamples + ' amostras');
+    html += card('Pendentes de assumir', m.unassignedActive, 'conversas com msgs nas últ 24h sem dono');
+    html += card('Total de alunos cadastrados', m.studentsCount, '');
+    if (m.byConsultor && m.byConsultor.length) {
+      html += '<div style="grid-column:1/-1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:18px">';
+      html += '<div style="font-size:12px;color:#666;margin-bottom:10px">Conversas atendidas por consultora (30d)</div>';
+      html += m.byConsultor.map(c => \`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #2a2a2a"><span>\${c.display_name}</span><span style="font-weight:600">\${c.count}</span></div>\`).join('');
+      html += '</div>';
+    }
+    grid.innerHTML = html;
   }
 
   function formatBRPhone(phone) {
@@ -795,6 +1298,10 @@ router.get('/', (req, res) => {
       const data = await r.json();
       me = data.user;
       document.getElementById('user-info').textContent = \`\${me.displayName} · \${me.role === 'admin' ? '👑 admin' : '🎯 consultora'}\`;
+      // Mostra abas só de admin
+      if (me.role === 'admin') {
+        document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
+      }
     } catch {
       location.href = '/admin/login';
     }
@@ -805,8 +1312,16 @@ router.get('/', (req, res) => {
     location.href = '/admin/login';
   }
 
-  loadMe();
-  loadPrompt();
+  (async () => {
+    await loadMe();
+    await refreshUserCache();
+    loadPrompt();
+
+    // Permissão de notificação (silencioso se já concedida ou negada)
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  })();
 </script>
 </body>
 </html>`);

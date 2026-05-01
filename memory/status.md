@@ -76,6 +76,43 @@ O SDR está rodando 24/7 no Railway com Sonnet 4.5. Bugs críticos de compliance
 
 ---
 
+## Inbox Multi-agente + Auth (concluído 2026-05-01)
+
+| Item | Status |
+|---|---|
+| Tabelas `users` (admin/consultora) e `sessions` (token UUID + 7d TTL) | ✅ |
+| Colunas `assigned_user_id` + `human_assumed_at` em contacts | ✅ |
+| Coluna `sent_by_user_id` em messages (NULL = IA, ID = consultora) | ✅ |
+| Hash de senha com scrypt do crypto built-in (sem dep nova) | ✅ |
+| Middleware `requireAuth`/`requireAdmin` em src/auth.js | ✅ |
+| Cookie httpOnly + sameSite=lax + secure em prod | ✅ |
+| Bootstrap UI: 1ª pessoa cria primeiro admin sem senha-padrão hardcoded | ✅ |
+| Tela /admin/login com modo bootstrap dinâmico | ✅ |
+| Endpoint reply humano com check de assignment | ✅ |
+| Endpoint assume com race protection (UPDATE WHERE NULL) | ✅ |
+| Endpoint release (devolver pra IA) | ✅ |
+| Webhook: check `human_assumed_at` antes da IA + notifyAssignedConsultor | ✅ |
+| `notifyAssignedConsultor` envia WhatsApp pra consultora dona ou fallback admins | ✅ |
+| Aba Inbox com badges (🤖 IA, 👤 nome consultora, ⭐ minha) + botões assumir/devolver | ✅ |
+| Filtros: Todas / IA / Humano / Minhas / Não avaliadas / 👍 / 👎 | ✅ |
+| Histórico mostra IA vs humano (cor diferente, nome do atendente) | ✅ |
+| Polling 5s na aba Inbox (pausa nas outras) | ✅ |
+| Notification API + contador no título (só com aba oculta) | ✅ |
+| Aba Usuários (admin only): CRUD + ativar/desativar/reset senha | ✅ |
+| Proteção: não desativa nem rebaixa último admin | ✅ |
+| Aba Métricas (admin only): conversas/handoff/tempo médio 1ª resposta/por consultora | ✅ |
+| 11/11 testes de auth + handoff + roles passando | ✅ |
+
+**Como começar a usar (em produção):**
+1. Acessar https://stronix-sdr-production.up.railway.app/admin
+2. Criar primeiro admin (Johnny) na tela de bootstrap
+3. Login → aba Usuários → adicionar coordenadora, assistente RH (admin) + 2 consultoras
+4. Quando lead começar conversa, aparece em Inbox com badge "🤖 IA atendendo"
+5. Clicar "Assumir" → IA para de responder, consultora envia mensagens pelo painel
+6. Clicar "Devolver pra IA" quando terminar atendimento humano
+
+---
+
 ## Sistema de Coleta de Feedback — Camada 1 (concluído 2026-05-01)
 
 | Item | Status |
