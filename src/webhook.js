@@ -8,10 +8,18 @@ const db = require('./db');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Delay simulando digitação humana antes de enviar resposta de texto.
-// 25ms/char ≈ 40 chars/s (digitação ágil). Mín 1s, máx 3s.
+// Delay antes de enviar resposta de texto, simulando SDR humano que está
+// atendendo várias conversas em paralelo. Range 1-3 min, proporcional ao
+// tamanho — resposta curta ~60s, média ~120s, longa (300+ chars) ~180s.
+// LIMITAÇÃO: lead que manda várias msgs em sequência pode receber respostas
+// fora de ordem (cada webhook POST processa independente). Atacar só se virar
+// problema real via review do painel.
 function typingDelayMs(text) {
-  return Math.min(3000, Math.max(1000, text.length * 25));
+  const MIN_MS = 60 * 1000;   // 1 min — resposta curta
+  const MAX_MS = 180 * 1000;  // 3 min — resposta longa
+  const FULL_LEN = 300;       // chars que justificam o teto
+  const ratio = Math.min(1, (text || '').length / FULL_LEN);
+  return Math.round(MIN_MS + (MAX_MS - MIN_MS) * ratio);
 }
 
 // Detecta quando o lead pede explicitamente áudio por texto
