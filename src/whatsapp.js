@@ -49,4 +49,43 @@ async function sendAudio(to, mediaId) {
   );
 }
 
-module.exports = { sendMessage, sendAudio };
+// Formata número BR pra exibição: 5551995304633 → (51) 99530-4633
+function formatBRPhoneDisplay(phone) {
+  const n = phone.replace(/\D/g, '');
+  if (n.startsWith('55') && n.length === 13) {
+    return `(${n.slice(2, 4)}) ${n.slice(4, 9)}-${n.slice(9)}`;
+  }
+  return phone;
+}
+
+// Envia notificação de agendamento pro dono da academia
+async function notifyOwner(leadPhone, apptData) {
+  const ownerPhone = process.env.OWNER_PHONE_NUMBER;
+  if (!ownerPhone) {
+    console.log('[whatsapp] OWNER_PHONE_NUMBER não configurado, pulando notificação');
+    return;
+  }
+
+  const name       = apptData.nome       || 'Não informado';
+  const day        = apptData.dia        || '—';
+  const turn       = apptData.turno      || '—';
+  const modality   = apptData.modalidade || '—';
+  const display    = formatBRPhoneDisplay(leadPhone);
+
+  const message =
+    `🎯 *Novo agendamento STRONIX*\n\n` +
+    `👤 Nome: ${name}\n` +
+    `📱 Telefone: ${display}\n` +
+    `📅 Quando: ${day} — ${turn}\n` +
+    `🏋️ Modalidade: ${modality}\n\n` +
+    `Ver conversa: https://stronix-sdr-production.up.railway.app/admin`;
+
+  try {
+    await sendMessage(ownerPhone, message);
+    console.log(`[whatsapp] notificação de agendamento enviada para ${ownerPhone}`);
+  } catch (err) {
+    console.error('[whatsapp] erro ao notificar dono:', err.message);
+  }
+}
+
+module.exports = { sendMessage, sendAudio, notifyOwner };

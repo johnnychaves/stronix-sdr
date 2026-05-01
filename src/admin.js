@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
+const db = require('./db');
 
 const router = Router();
 
@@ -24,6 +25,20 @@ router.get('/api/conversations', (req, res) => {
 // API — limpa conversa de um número
 router.delete('/api/conversations/:from', (req, res) => {
   clearConversation(req.params.from);
+  res.json({ ok: true });
+});
+
+// API — lista agendamentos
+router.get('/api/appointments', (req, res) => {
+  res.json(db.getAppointments(100));
+});
+
+// API — atualiza status do agendamento
+router.patch('/api/appointments/:id', (req, res) => {
+  const { status } = req.body;
+  const validStatuses = ['pending', 'confirmed', 'cancelled', 'no_show'];
+  if (!validStatuses.includes(status)) return res.status(400).json({ error: 'Status inválido' });
+  db.updateAppointmentStatus(req.params.id, status);
   res.json({ ok: true });
 });
 
@@ -121,6 +136,7 @@ router.get('/', (req, res) => {
 <div class="tabs">
   <div class="tab active" onclick="switchTab('prompt')">Prompt do SDR</div>
   <div class="tab" onclick="switchTab('conversas')">Conversas ativas</div>
+  <div class="tab" onclick="switchTab('agendamentos')">📅 Agendamentos</div>
 </div>
 
 <div id="tab-prompt" class="panel active">
@@ -146,6 +162,16 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadConversations()">↻ Atualizar</button>
   </div>
   <div class="conv-list" id="conv-list">
+    <div class="empty">Carregando...</div>
+  </div>
+</div>
+
+<div id="tab-agendamentos" class="panel">
+  <div class="conv-header">
+    <h2>Agendamentos</h2>
+    <button class="refresh-btn" onclick="loadAppointments()">↻ Atualizar</button>
+  </div>
+  <div id="appt-list">
     <div class="empty">Carregando...</div>
   </div>
 </div>
@@ -278,6 +304,58 @@ router.get('/', (req, res) => {
     event.target.classList.add('active');
     document.getElementById('tab-' + tab).classList.add('active');
     if (tab === 'conversas') loadConversations();
+    if (tab === 'agendamentos') loadAppointments();
+  }
+
+  const STATUS_LABEL = {
+    pending:   '🟡 Pendente',
+    confirmed: '🟢 Confirmado',
+    cancelled: '🔴 Cancelado',
+    no_show:   '⚫ Não compareceu',
+  };
+
+  async function loadAppointments() {
+    const res = await fetch('/admin/api/appointments');
+    const appts = await res.json();
+    const list = document.getElementById('appt-list');
+
+    if (!appts.length) {
+      list.innerHTML = '<div class="empty">Nenhum agendamento ainda</div>';
+      return;
+    }
+
+    list.innerHTML = appts.map(a => {
+      const date = new Date(a.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const phone = a.phone.replace(/^55(\\d{2})(\\d{5})(\\d{4})$/, '($1) $2-$3');
+      return \`
+        <div class="conv-card" style="margin-bottom:12px">
+          <div class="conv-card-header" style="cursor:default">
+            <div class="conv-info" style="flex-wrap:wrap;gap:8px">
+              <span class="conv-phone">📅 \${a.scheduled_day || '—'} — \${a.scheduled_turn || '—'}</span>
+              <div class="conv-stats">
+                <span class="stat">\${a.name || 'Sem nome'}</span>
+                <span class="stat">\${phone}</span>
+                <span class="stat \${a.modality}">\${a.modality || '—'}</span>
+              </div>
+              <span style="font-size:12px;color:#555">\${date}</span>
+            </div>
+            <select onchange="updateStatus(\${a.id}, this.value)" style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:6px;padding:4px 8px;font-size:12px">
+              \${['pending','confirmed','cancelled','no_show'].map(s =>
+                \`<option value="\${s}" \${a.status === s ? 'selected' : ''}>\${STATUS_LABEL[s]}</option>\`
+              ).join('')}
+            </select>
+          </div>
+        </div>
+      \`;
+    }).join('');
+  }
+
+  async function updateStatus(id, status) {
+    await fetch('/admin/api/appointments/' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
   }
 
   loadPrompt();

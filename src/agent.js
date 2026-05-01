@@ -1,6 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 require('dotenv').config({ override: true });
 const db = require('./db');
+const { notifyOwner } = require('./whatsapp');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -156,6 +157,35 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
 
   if (askingForAudio) {
     setAudioFlags(from, { awaitingAudioConfirm: true, askedForAudio: true });
+  }
+
+  // ─── DETECÇÃO DE AGENDAMENTO ───
+  // Extrai tag [AGENDAMENTO:nome=X|dia=X|turno=X|modalidade=X] se presente,
+  // salva no banco e notifica o dono. A tag é removida antes de enviar ao lead.
+  const apptMatch = cleanText.match(/\[AGENDAMENTO:([^\]]+)\]/i);
+  if (apptMatch) {
+    const apptData = {};
+    apptMatch[1].split('|').forEach(pair => {
+      const [key, val] = pair.split('=');
+      if (key && val) apptData[key.trim().toLowerCase()] = val.trim();
+    });
+
+    const currentContact = getContact(from);
+    db.createAppointment(from, {
+      name:          apptData.nome       || currentContact?.name || null,
+      modality:      apptData.modalidade || null,
+      scheduledDay:  apptData.dia        || null,
+      scheduledTurn: apptData.turno      || null,
+    });
+
+    // Notifica o dono de forma assíncrona (não bloqueia a resposta)
+    notifyOwner(from, apptData).catch(err =>
+      console.error('[agent] erro ao notificar dono:', err.message)
+    );
+
+    // Remove a tag do texto antes de enviar ao lead
+    cleanText = cleanText.replace(/\[AGENDAMENTO:[^\]]+\]/gi, '').trim();
+    console.log(`[agent] 📅 agendamento registrado para ${from}: ${JSON.stringify(apptData)}`);
   }
 
   // Sanitiza em-dash (—) e en-dash (–) que o Claude insiste em usar

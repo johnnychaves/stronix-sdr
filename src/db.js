@@ -46,6 +46,22 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_messages_phone ON messages(phone);
   CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS appointments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone TEXT NOT NULL,
+    name TEXT,
+    modality TEXT,
+    scheduled_day TEXT,
+    scheduled_turn TEXT,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'confirmed', 'cancelled', 'no_show')),
+    created_at INTEGER NOT NULL,
+    notes TEXT,
+    FOREIGN KEY (phone) REFERENCES contacts(phone) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_appointments_phone ON appointments(phone);
+  CREATE INDEX IF NOT EXISTS idx_appointments_created_at ON appointments(created_at DESC);
 `);
 
 // ─────────────────────────────────────────────────────────────────────
@@ -109,6 +125,25 @@ const stmts = {
 
   deleteMessages: db.prepare('DELETE FROM messages WHERE phone = ?'),
   deleteContact: db.prepare('DELETE FROM contacts WHERE phone = ?'),
+
+  // Appointments
+  createAppointment: db.prepare(`
+    INSERT INTO appointments (phone, name, modality, scheduled_day, scheduled_turn, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `),
+  getAppointments: db.prepare(`
+    SELECT a.*, c.name as contact_name
+    FROM appointments a
+    LEFT JOIN contacts c ON c.phone = a.phone
+    ORDER BY a.created_at DESC
+    LIMIT ?
+  `),
+  getAppointmentsByPhone: db.prepare(`
+    SELECT * FROM appointments WHERE phone = ? ORDER BY created_at DESC
+  `),
+  updateAppointmentStatus: db.prepare(`
+    UPDATE appointments SET status = ? WHERE id = ?
+  `),
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -198,6 +233,35 @@ function clearConversation(phone) {
   console.log(`[db] conversa limpa: ${phone}`);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// APPOINTMENTS
+// ─────────────────────────────────────────────────────────────────────
+
+function createAppointment(phone, { name, modality, scheduledDay, scheduledTurn }) {
+  const result = stmts.createAppointment.run(
+    phone,
+    name || null,
+    modality || null,
+    scheduledDay || null,
+    scheduledTurn || null,
+    Date.now()
+  );
+  console.log(`[db] agendamento criado id=${result.lastInsertRowid} para ${phone}`);
+  return result.lastInsertRowid;
+}
+
+function getAppointments(limit = 50) {
+  return stmts.getAppointments.all(limit);
+}
+
+function getAppointmentsByPhone(phone) {
+  return stmts.getAppointmentsByPhone.all(phone);
+}
+
+function updateAppointmentStatus(id, status) {
+  stmts.updateAppointmentStatus.run(status, id);
+}
+
 module.exports = {
   getContact,
   getOrCreateContact,
@@ -209,4 +273,8 @@ module.exports = {
   getDaysSinceLastContact,
   getAllConversations,
   clearConversation,
+  createAppointment,
+  getAppointments,
+  getAppointmentsByPhone,
+  updateAppointmentStatus,
 };
