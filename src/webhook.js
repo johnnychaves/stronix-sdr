@@ -1,9 +1,18 @@
 const { Router } = require('express');
 const config    = require('./config');
 const { reply, isAffirmative, isNegative, getContact, setAudioFlags } = require('./agent');
-const { sendMessage, sendAudio } = require('./whatsapp');
+const { sendMessage, sendAudio, notifyStudent } = require('./whatsapp');
 const { transcribeAudio } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
+const db = require('./db');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Delay simulando digitação humana antes de enviar resposta de texto.
+// 25ms/char ≈ 40 chars/s (digitação ágil). Mín 1s, máx 3s.
+function typingDelayMs(text) {
+  return Math.min(3000, Math.max(1000, text.length * 25));
+}
 
 // Detecta quando o lead pede explicitamente áudio por texto
 function isExplicitAudioRequest(text) {
@@ -70,6 +79,20 @@ router.post('/', async (req, res) => {
   }
 
   try {
+    // Roteamento aluno vs lead — antes de qualquer IA
+    // Se o phone está cadastrado em students, IA NÃO roda. Resposta padrão + notifica dono.
+    const student = db.getStudent(from);
+    if (student) {
+      const firstName = student.name ? student.name.split(/\s+/)[0] : '';
+      const greet = firstName ? `Oi ${firstName}!` : 'Oi!';
+      const studentReply = `${greet} Aqui é o assistente da academia, mas pra coisas de aluno eu te passo direto pra equipe. Já avisei eles e logo te respondem 👋`;
+      console.log(`[webhook] phone ${from} é aluno cadastrado (${student.name || 'sem nome'}) — desviando IA`);
+      await sleep(typingDelayMs(studentReply));
+      await sendMessage(from, studentReply);
+      await notifyStudent(from, student, text);
+      return;
+    }
+
     const contact = getContact(from);
 
     // Determina se o código deve forçar resposta em áudio
@@ -104,15 +127,18 @@ router.post('/', async (req, res) => {
     const shouldSendAudio = forceAudio || result.useAudio;
 
     if (shouldSendAudio) {
+      // Áudio já tem latência natural do TTS (~2-3s) — não adiciona delay extra.
       console.log(`[webhook] enviando resposta em áudio para ${from}`);
       try {
         const mediaId = await textToAudioMessage(result.text);
         await sendAudio(from, mediaId);
       } catch (err) {
         console.error('[webhook] erro ao gerar/enviar áudio, enviando como texto:', err.message);
+        await sleep(typingDelayMs(result.text));
         await sendMessage(from, result.text);
       }
     } else {
+      await sleep(typingDelayMs(result.text));
       await sendMessage(from, result.text);
     }
 

@@ -55,6 +55,27 @@ O SDR está rodando 24/7 no Railway com Sonnet 4.5. Bugs críticos de compliance
 
 ---
 
+## Roteamento Aluno vs Lead + Delay de Digitação (concluído 2026-05-01)
+
+| Item | Status |
+|---|---|
+| Tabela `students` (phone PK, name, notes, created_at) | ✅ |
+| Helpers no db.js: upsertStudent, getStudent, isStudent, getAllStudents, deleteStudent | ✅ |
+| Check no webhook ANTES da IA: se phone está em students, IA não roda | ✅ |
+| Resposta padrão pro aluno: "Oi {nome}! Aqui é o assistente da academia, mas pra coisas de aluno eu te passo direto pra equipe. Já avisei eles e logo te respondem 👋" | ✅ |
+| `notifyStudent` em whatsapp.js — manda WhatsApp pro dono com nome, telefone formatado e preview da mensagem do aluno | ✅ |
+| Delay de digitação antes da resposta de texto: `Math.min(3000, Math.max(1000, text.length * 25))` ms | ✅ |
+| Áudio sem delay extra (TTS já tem latência natural ~2-3s) | ✅ |
+| API REST: GET/PUT/DELETE /admin/api/students com validação de phone | ✅ |
+| Aba "🎓 Alunos" no painel: form (phone+nome+notes) + lista + botão remover | ✅ |
+| Validação de phone no servidor (mín 10 dígitos) e cliente (mín 12) | ✅ |
+
+**Como usar:** vai em /admin → aba "🎓 Alunos" → cadastra phones dos alunos atuais (formato `5551995304633`). Quando aluno mandar msg, IA responde padrão e te notifica.
+
+**Pré-requisito pendente:** STRONIX exportar lista de alunos atuais com telefone.
+
+---
+
 ## Sistema de Coleta de Feedback — Camada 1 (concluído 2026-05-01)
 
 | Item | Status |
@@ -95,6 +116,7 @@ O SDR está rodando 24/7 no Railway com Sonnet 4.5. Bugs críticos de compliance
 | Google Calendar | 🟡 Média | Criar evento automático no calendar da academia. Hoje a notificação WhatsApp resolve, mas Calendar agrega visibilidade pra equipe. |
 | Renovação do token WhatsApp | 🟡 Média | Lembrete: renovar em julho 2026 via Graph API Explorer |
 | Upgrade pra número real STRONIX | 🔴 Alta (quando pronto) | Sair do número de teste, verificar conta Business. Após isso, System User token funciona e o número real fica disponível para clientes. |
+| **Lista de alunos da STRONIX** | 🔴 PRÉ-REQUISITO antes de ligar número real | Sistema de roteamento aluno vs lead já está pronto (tabela students + check + resposta padrão + notifyOwner). Falta só STRONIX exportar a lista de telefones dos alunos atuais pra cadastrar via painel /admin → aba 🎓 Alunos. Sem isso cadastrado, IA vai tratar aluno como lead. |
 | Cockpit de métricas | 🟢 Baixa | Dashboard: leads, conversões, taxa de agendamento, no-show |
 | State machine por stage | 🟢 Baixa | Não necessário com Sonnet 4.5. Reavaliar só se aparecer demanda multi-cliente (SaaS) |
 

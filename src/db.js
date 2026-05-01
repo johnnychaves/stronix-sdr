@@ -74,6 +74,13 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_reviews_rating ON conversation_reviews(rating);
   CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON conversation_reviews(reviewed_at DESC);
+
+  CREATE TABLE IF NOT EXISTS students (
+    phone TEXT PRIMARY KEY,
+    name TEXT,
+    notes TEXT,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 // Migração: adiciona scheduled_hour em bancos que já existiam antes dessa coluna
@@ -184,6 +191,18 @@ const stmts = {
   getReview: db.prepare('SELECT * FROM conversation_reviews WHERE phone = ?'),
   getAllReviews: db.prepare('SELECT * FROM conversation_reviews ORDER BY reviewed_at DESC'),
   deleteReview: db.prepare('DELETE FROM conversation_reviews WHERE phone = ?'),
+
+  // Students
+  upsertStudent: db.prepare(`
+    INSERT INTO students (phone, name, notes, created_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(phone) DO UPDATE SET
+      name = excluded.name,
+      notes = excluded.notes
+  `),
+  getStudent: db.prepare('SELECT * FROM students WHERE phone = ?'),
+  getAllStudents: db.prepare('SELECT * FROM students ORDER BY created_at DESC'),
+  deleteStudent: db.prepare('DELETE FROM students WHERE phone = ?'),
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -329,6 +348,30 @@ function deleteReview(phone) {
   stmts.deleteReview.run(phone);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// STUDENTS (alunos atuais — desviam IA pra atendimento humano)
+// ─────────────────────────────────────────────────────────────────────
+
+function upsertStudent(phone, name, notes) {
+  stmts.upsertStudent.run(phone, name || null, notes || null, Date.now());
+}
+
+function getStudent(phone) {
+  return stmts.getStudent.get(phone) || null;
+}
+
+function isStudent(phone) {
+  return !!stmts.getStudent.get(phone);
+}
+
+function getAllStudents() {
+  return stmts.getAllStudents.all();
+}
+
+function deleteStudent(phone) {
+  stmts.deleteStudent.run(phone);
+}
+
 module.exports = {
   getContact,
   getOrCreateContact,
@@ -348,4 +391,9 @@ module.exports = {
   getReview,
   getAllReviews,
   deleteReview,
+  upsertStudent,
+  getStudent,
+  isStudent,
+  getAllStudents,
+  deleteStudent,
 };

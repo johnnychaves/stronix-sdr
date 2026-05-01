@@ -4,6 +4,39 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-01 — Roteamento aluno vs lead determinístico (não NLP)
+
+**Decisão:** Aluno é identificado por phone cadastrado em tabela `students`, NÃO por o SDR detectar via NLP. Se phone está cadastrado, IA não roda — resposta padrão + notifica dono.
+
+**Por quê:** Aluno raramente diz "sou aluno" — manda direto *"que horas começa a aula hoje?"* ou *"posso trocar de plano?"*. SDR sem sinal externo trataria como prospect e ofereceria aula experimental pra quem já paga R\$249/mês. Risco de cancelamento real.
+
+**Alternativas descartadas:**
+- Cenário "já é aluno" no prompt (existia) → frágil, depende de NLP
+- LLM-classifier antes de responder → custo + latência, ainda dependente de NLP
+- IA com prompt "modo aluno" separado → complexidade alta, ainda pode errar respostas operacionais
+- Menu URA "Você é aluno (1) ou lead (2)?" → UX de chatbot 2010
+
+**Princípio sócio:** Risco assimétrico. Aluno mal atendido = cancelamento = perda recorrente. Prospect mal atendido = só vai embora. Modelo determinístico tira a IA do caminho onde o erro é mais caro.
+
+**Quando reavaliar:** se aparecer demanda real ("aluno reclamou que demora resposta humana"), aí evolui pra IA modo-aluno (Opção B/C). Por enquanto Opção A é suficiente.
+
+---
+
+## 2026-05-01 — Delay de digitação proporcional ao tamanho da resposta
+
+**Decisão:** Antes de enviar resposta de texto, aguardar `Math.min(3000, Math.max(1000, text.length * 25))` ms ≈ 40 chars/s.
+
+**Por quê:** Resposta de IA chegando instantaneamente em ~3s soa robótica. Adicionar 1-3s simula humano digitando. Proporcional ao tamanho porque "Sim" não pode demorar igual a "tabela completa de planos…".
+
+**Alternativas descartadas:**
+- Delay fixo 3s → curto demais pra resposta longa, longo pra "sim"
+- Typing indicator da Meta Cloud API → mais bonito mas mais complexo, dois POSTs em vez de um
+- Delay no `sendMessage` global → vazaria para `notifyOwner`/`notifyStudent` (notificação tem que sair rápido)
+
+**Implementação:** delay no webhook.js antes do `sendMessage` de resposta. Áudio pulado (TTS já tem latência natural).
+
+---
+
 ## 2026-05-01 — Coleta de feedback em camadas (Camada 1 antes de Mixpanel/RAG)
 
 **Decisão:** Construir sistema de avaliação manual de conversas (👍/👎/🚩 + comentário) antes de qualquer ferramenta externa de analytics ou solução técnica pra "esquecimento" do SDR.

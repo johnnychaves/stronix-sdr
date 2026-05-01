@@ -94,4 +94,31 @@ async function notifyOwner(leadPhone, apptData) {
   }
 }
 
-module.exports = { sendMessage, sendAudio, notifyOwner };
+// Notifica dono quando aluno (não lead) manda mensagem
+async function notifyStudent(studentPhone, student, incomingText) {
+  const ownerPhone = process.env.OWNER_PHONE_NUMBER;
+  if (!ownerPhone) {
+    console.log('[whatsapp] OWNER_PHONE_NUMBER não configurado, pulando notificação de aluno');
+    return;
+  }
+
+  const display = formatBRPhoneDisplay(studentPhone);
+  const name    = student.name || 'Aluno (sem nome cadastrado)';
+  const preview = incomingText.length > 200 ? incomingText.slice(0, 200) + '...' : incomingText;
+
+  const message =
+    `🎓 *Mensagem de aluno*\n\n` +
+    `👤 ${name}\n` +
+    `📱 ${display}\n\n` +
+    `💬 _"${preview}"_\n\n` +
+    `IA respondeu padrão e parou. Responde tu direto pelo WhatsApp.`;
+
+  try {
+    await sendMessage(ownerPhone, message);
+    console.log(`[whatsapp] notificação de aluno enviada pra ${ownerPhone}`);
+  } catch (err) {
+    console.error('[whatsapp] erro ao notificar dono sobre aluno:', err.message);
+  }
+}
+
+module.exports = { sendMessage, sendAudio, notifyOwner, notifyStudent };

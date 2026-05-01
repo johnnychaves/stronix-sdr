@@ -63,6 +63,26 @@ router.delete('/api/reviews/:phone', (req, res) => {
   res.json({ ok: true });
 });
 
+// API — lista alunos cadastrados (desviam IA pra atendimento humano)
+router.get('/api/students', (req, res) => {
+  res.json(db.getAllStudents());
+});
+
+// API — cadastra/atualiza aluno
+router.put('/api/students/:phone', (req, res) => {
+  const { name, notes } = req.body;
+  const phone = (req.params.phone || '').replace(/\D/g, '');
+  if (!phone || phone.length < 10) return res.status(400).json({ error: 'Phone inválido' });
+  db.upsertStudent(phone, name, notes);
+  res.json({ ok: true });
+});
+
+// API — remove aluno
+router.delete('/api/students/:phone', (req, res) => {
+  db.deleteStudent(req.params.phone);
+  res.json({ ok: true });
+});
+
 // Painel HTML
 router.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -155,6 +175,22 @@ router.get('/', (req, res) => {
     .filter-btn { background: #1a1a1a; border: 1px solid #2a2a2a; color: #888; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all .15s; }
     .filter-btn:hover { color: #ccc; border-color: #444; }
     .filter-btn.active { background: #22c55e22; border-color: #22c55e44; color: #4ade80; }
+
+    /* Students */
+    .student-form { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 16px; margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .student-form input { background: #0f0f0f; color: #d4d4d4; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px; font-size: 13px; outline: none; font-family: inherit; }
+    .student-form input:focus { border-color: #444; }
+    .student-form input.phone { width: 180px; }
+    .student-form input.name { width: 220px; }
+    .student-form input.notes { flex: 1; min-width: 200px; }
+    .btn-add { background: #22c55e; color: #000; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn-add:hover { background: #16a34a; }
+    .student-help { font-size: 12px; color: #555; margin-bottom: 14px; line-height: 1.5; }
+    .student-row { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px 16px; display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+    .student-row .phone { font-family: 'SF Mono', monospace; font-size: 13px; color: #ccc; min-width: 150px; }
+    .student-row .name { font-size: 14px; color: #fff; min-width: 180px; }
+    .student-row .notes { font-size: 12px; color: #888; flex: 1; }
+    .student-row .btn-clear { font-size: 12px; }
     .msg { margin-bottom: 12px; }
     .msg-role { font-size: 11px; font-weight: 600; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
     .msg-role.user { color: #60a5fa; }
@@ -182,6 +218,7 @@ router.get('/', (req, res) => {
   <div class="tab active" onclick="switchTab('prompt')">Prompt do SDR</div>
   <div class="tab" onclick="switchTab('conversas')">Conversas ativas</div>
   <div class="tab" onclick="switchTab('agendamentos')">📅 Agendamentos</div>
+  <div class="tab" onclick="switchTab('alunos')">🎓 Alunos</div>
 </div>
 
 <div id="tab-prompt" class="panel active">
@@ -225,6 +262,26 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadAppointments()">↻ Atualizar</button>
   </div>
   <div id="appt-list">
+    <div class="empty">Carregando...</div>
+  </div>
+</div>
+
+<div id="tab-alunos" class="panel">
+  <div class="conv-header">
+    <h2>Alunos cadastrados — IA não atende, encaminha pra equipe</h2>
+    <button class="refresh-btn" onclick="loadStudents()">↻ Atualizar</button>
+  </div>
+  <div class="student-help">
+    Cadastra aqui o telefone dos alunos atuais da STRONIX. Quando algum deles mandar mensagem, a IA <strong>não responde</strong> — manda só uma resposta padrão dizendo que vai passar pra equipe e te notifica no WhatsApp.<br>
+    Formato do telefone: <code>5551995304633</code> (com DDI 55 + DDD + número, sem espaços nem traços).
+  </div>
+  <div class="student-form">
+    <input class="phone" id="st-phone" placeholder="55519XXXXXXXX" maxlength="13">
+    <input class="name" id="st-name" placeholder="Nome completo">
+    <input class="notes" id="st-notes" placeholder="Notas (plano, observações...) — opcional">
+    <button class="btn-add" onclick="addStudent()">Adicionar</button>
+  </div>
+  <div id="students-list">
     <div class="empty">Carregando...</div>
   </div>
 </div>
@@ -440,6 +497,57 @@ router.get('/', (req, res) => {
     document.getElementById('tab-' + tab).classList.add('active');
     if (tab === 'conversas') loadConversations();
     if (tab === 'agendamentos') loadAppointments();
+    if (tab === 'alunos') loadStudents();
+  }
+
+  function formatBRPhone(phone) {
+    const n = String(phone || '').replace(/\\D/g, '');
+    if (n.startsWith('55') && n.length === 13) {
+      return \`(\${n.slice(2, 4)}) \${n.slice(4, 9)}-\${n.slice(9)}\`;
+    }
+    return phone;
+  }
+
+  async function loadStudents() {
+    const res = await fetch('/admin/api/students');
+    const students = await res.json();
+    const list = document.getElementById('students-list');
+    if (!students.length) {
+      list.innerHTML = '<div class="empty">Nenhum aluno cadastrado ainda. Adiciona pelo formulário acima.</div>';
+      return;
+    }
+    list.innerHTML = students.map(s => \`
+      <div class="student-row">
+        <span class="phone">\${formatBRPhone(s.phone)}</span>
+        <span class="name">\${s.name || '<span style="color:#555">sem nome</span>'}</span>
+        <span class="notes">\${s.notes || ''}</span>
+        <button class="btn-clear" onclick="removeStudent('\${s.phone}')">Remover</button>
+      </div>
+    \`).join('');
+  }
+
+  async function addStudent() {
+    const phoneRaw = document.getElementById('st-phone').value.trim();
+    const phone = phoneRaw.replace(/\\D/g, '');
+    const name = document.getElementById('st-name').value.trim();
+    const notes = document.getElementById('st-notes').value.trim();
+    if (!phone || phone.length < 12) { alert('Telefone inválido. Use o formato 5551995304633 (DDI+DDD+número).'); return; }
+    const res = await fetch('/admin/api/students/' + phone, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, notes }),
+    });
+    if (!res.ok) { alert('Erro ao adicionar.'); return; }
+    document.getElementById('st-phone').value = '';
+    document.getElementById('st-name').value = '';
+    document.getElementById('st-notes').value = '';
+    loadStudents();
+  }
+
+  async function removeStudent(phone) {
+    if (!confirm('Remover ' + formatBRPhone(phone) + '? A IA voltará a tratar esse número como lead.')) return;
+    await fetch('/admin/api/students/' + phone, { method: 'DELETE' });
+    loadStudents();
   }
 
   const STATUS_LABEL = {

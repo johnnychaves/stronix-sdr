@@ -4,6 +4,31 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-01 — Roteamento aluno vs lead + delay de digitação
+
+**Contexto:** Pergunta do usuário sobre como o sistema vai lidar quando virar número oficial da STRONIX — alunos atuais e leads novos no mesmo canal. Decisão: Modelo A (mais simples e seguro).
+
+**Roteamento aluno vs lead (Modelo A):**
+- Tabela `students` (phone PK, name, notes, created_at) com upsert idempotente (ON CONFLICT)
+- Helpers: `isStudent`, `getStudent`, `upsertStudent`, `getAllStudents`, `deleteStudent`
+- Check ANTES de chamar IA no webhook.js: se phone está em students, **IA NÃO roda** (zero token, zero risco de oferecer aula experimental pra quem já paga)
+- Resposta padrão (com primeiro nome se disponível): *"Oi Mariana! Aqui é o assistente da academia, mas pra coisas de aluno eu te passo direto pra equipe. Já avisei eles e logo te respondem 👋"*
+- `notifyStudent()` em whatsapp.js: notifica dono (OWNER_PHONE_NUMBER) com nome do aluno, telefone formatado e preview da mensagem (até 200 chars)
+- Endpoints REST + aba "🎓 Alunos" no painel admin: form com phone+nome+notes, lista, botão remover, sanitização de phone (só dígitos)
+- Validação dupla: cliente exige ≥12 dígitos, servidor exige ≥10
+
+**Delay de digitação:**
+- Função `typingDelayMs(text) = Math.min(3000, Math.max(1000, text.length * 25))` ≈ 40 chars/seg
+- Aplicado antes do `sendMessage` de texto (resposta normal e fallback de aluno)
+- Áudio pulado: TTS ElevenLabs já tem latência natural de 2-3s
+- Curta ("oi"): 1000ms. Longa (200 chars): 3000ms.
+
+**Smoke test:** DB layer + endpoints HTTP testados. Upsert, isStudent, getAllStudents, DELETE, validação de phone inválido (400) — tudo verde.
+
+**Princípio sócio aplicado:** risco assimétrico. Aluno mal atendido cancela (perda de receita recorrente). Prospect mal atendido só vai embora. Modelo A elimina o risco trocando potencial atendimento de aluno por escalada determinística pra humano.
+
+---
+
 ## 2026-05-01 — Simplificação da Camada 1: 2 ratings em vez de 3
 
 **Contexto:** Camada 1 saiu com 3 botões (👍 Boa / 👎 Ruim / 🚩 Marcada). Usuário achou confuso. Sócio-mode: 🚩 era redundante — tu pode marcar 👎 sem certeza ainda e refinar depois. 3ª categoria pra "talvez" complica sem ganho real.
