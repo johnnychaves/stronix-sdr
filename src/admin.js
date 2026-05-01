@@ -1246,6 +1246,98 @@ router.get('/', (req, res) => {
       box-shadow: 0 1px 2px rgba(0,0,0,.2);
     }
 
+    /* System note (handoff events inline na thread) */
+    .system-note {
+      align-self: center;
+      background: rgba(251,191,36,.10); border: 1px solid rgba(251,191,36,.25);
+      color: #fbbf24; font: 500 11.5px var(--font-sans);
+      padding: 6px 14px; border-radius: 8px;
+      display: inline-flex; align-items: center; gap: 6px;
+      margin: var(--sp-3) 0;
+    }
+
+    /* Handoff banner — acima do composer quando você assumiu */
+    .handoff-banner {
+      background: rgba(0,168,132,.10); border-top: 1px solid rgba(0,168,132,.25);
+      color: var(--brand-light); font: 500 12px var(--font-sans);
+      padding: 8px 18px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      flex-shrink: 0;
+    }
+    .handoff-banner button {
+      background: none; border: none; color: var(--brand-light);
+      font: 600 11.5px var(--font-sans); cursor: pointer; text-decoration: underline;
+    }
+    .handoff-banner button:hover { color: var(--brand); }
+
+    /* ─── Right detail panel (ficha do lead) ─── */
+    .detail {
+      width: 320px; min-width: 280px; flex-shrink: 0;
+      background: var(--bg-1); border-left: 1px solid var(--border-subtle);
+      overflow-y: auto; padding: 18px; min-height: 0;
+    }
+    .detail h3 {
+      margin: 0 0 12px; font-size: 11px; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+    }
+    .detail-section { margin-bottom: 24px; }
+    .detail-empty {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: 100%; padding: 32px 16px; text-align: center; gap: 8px;
+    }
+    .detail-empty-icon { font-size: 36px; opacity: .35; margin-bottom: 4px; }
+    .detail-empty-title { font: 600 14px var(--font-sans); color: var(--text-secondary); }
+    .detail-empty-sub { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; max-width: 220px; }
+
+    .detail-profile {
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding-bottom: 18px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 18px;
+    }
+    .detail-profile .av {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: linear-gradient(135deg, #818cf8, #6366f1);
+      display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 22px;
+      box-shadow: var(--shadow-md);
+    }
+    .detail-profile .nm { font: 600 16px var(--font-sans); color: var(--text-primary); text-align: center; }
+    .detail-profile .ph { font-size: 12.5px; color: var(--text-muted); font-family: var(--font-mono); }
+
+    .kv { display: flex; flex-direction: column; gap: 9px; font-size: 13px; }
+    .kv .row { display: flex; flex-direction: column; gap: 2px; }
+    .kv .k { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+    .kv .v { color: var(--text-primary); }
+    .kv .v.brand { color: var(--brand-light); font-weight: 600; }
+
+    .detail-appt {
+      background: var(--bg-2); border: 1px solid var(--border-subtle); border-radius: 10px;
+      padding: 12px; display: flex; flex-direction: column; gap: 6px;
+    }
+    .detail-appt .when { font: 600 14px var(--font-sans); color: var(--text-primary); }
+    .detail-appt .when .pill {
+      display: inline-block; margin-left: 6px; font-size: 10px; padding: 2px 7px;
+      background: rgba(74,222,128,.15); color: #4ade80;
+      border-radius: 999px; font-weight: 600;
+    }
+    .detail-appt .what { font-size: 12.5px; color: var(--text-secondary); line-height: 1.4; }
+
+    .tagrow { display: flex; flex-wrap: wrap; gap: 5px; }
+    .detail-tag {
+      font: 500 11px var(--font-sans);
+      padding: 3px 9px; border-radius: 999px;
+      background: var(--bg-3); color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+    }
+    .detail-tag.brand { background: var(--brand-soft); color: var(--brand-light); border-color: rgba(0,168,132,.3); }
+
+    .detail-note {
+      font-size: 12.5px; color: var(--text-secondary); line-height: 1.5;
+      background: var(--bg-2); border-radius: 8px; padding: 10px;
+      border-left: 2px solid var(--brand);
+    }
+    .detail-note.empty {
+      border-left-color: var(--border-subtle); color: var(--text-faint); font-style: italic;
+    }
+
     /* Input */
     .chat-input-wrap { flex-shrink: 0; }
     .chat-input-bar {
@@ -1352,8 +1444,9 @@ router.get('/', (req, res) => {
     .review-comment:focus { border-color: var(--brand); }
 
     /* Responsivo */
-    @media (max-width: 1100px) {
+    @media (max-width: 1200px) {
       .inbox-col-right { display: none; }
+      .detail { display: none; }
     }
     @media (max-width: 800px) {
       .inbox-col-left { width: 100%; }
@@ -1621,18 +1714,14 @@ router.get('/', (req, res) => {
       </div>
     </div>
 
-    <!-- ─── Sidebar direita: atendimentos ativos ─── -->
-    <div class="inbox-col inbox-col-right">
-      <div class="inbox-col-header">
-        <h3>Em atendimento <span class="count-badge" id="actives-count">0</span></h3>
+    <!-- ─── Sidebar direita: ficha do lead ─── -->
+    <aside class="detail" id="lead-detail">
+      <div class="detail-empty">
+        <div class="detail-empty-icon">👤</div>
+        <div class="detail-empty-title">Ficha do lead</div>
+        <div class="detail-empty-sub">Selecione uma conversa pra ver as informações do contato, status do atendimento e próximos passos.</div>
       </div>
-      <div class="inbox-list" id="actives-list">
-        <div class="actives-empty">
-          <div class="actives-empty-icon">🟢</div>
-          Conversas que algum consultor<br>assumiu aparecem aqui.
-        </div>
-      </div>
-    </div>
+    </aside>
   </div>
 </div>
 
@@ -1897,7 +1986,7 @@ router.get('/', (req, res) => {
       detectNewMessages(fresh);
       allConversations = fresh;
       renderInboxList();
-      renderActives();
+      renderLeadDetail();
       // Render parcial: durante polling, NÃO reescreve o DOM do chat se já está
       // montado com a conversa correta. Só atualiza mensagens novas + header.
       // opts.force = true força rebuild completo (usado em selectConv, troca de aba).
@@ -2041,30 +2130,80 @@ router.get('/', (req, res) => {
     }).join('');
   }
 
-  function renderActives() {
-    const list = document.getElementById('actives-list');
-    const actives = allConversations.filter(c => c.assignedUserId).sort((a, b) => (b.humanAssumedAt || 0) - (a.humanAssumedAt || 0));
-    document.getElementById('actives-count').textContent = actives.length;
-    if (!actives.length) {
-      list.innerHTML = \`
-        <div class="actives-empty">
-          <div class="actives-empty-icon">🟢</div>
-          Conversas que algum consultor<br>assumiu aparecem aqui.
+  function renderLeadDetail() {
+    const panel = document.getElementById('lead-detail');
+    if (!panel) return;
+    if (!selectedPhone) {
+      panel.innerHTML = \`
+        <div class="detail-empty">
+          <div class="detail-empty-icon">👤</div>
+          <div class="detail-empty-title">Ficha do lead</div>
+          <div class="detail-empty-sub">Selecione uma conversa pra ver as informações do contato, status do atendimento e próximos passos.</div>
         </div>
       \`;
       return;
     }
-    list.innerHTML = actives.map(c => {
-      const isMine = me && c.assignedUserId === me.id;
-      const isSelected = selectedPhone === c.from;
-      return \`
-        <div class="active-item \${isSelected ? 'selected' : ''} \${isMine ? 'is-mine' : ''}" onclick="selectConv('\${c.from}')">
-          <div class="active-item-name">\${escapeHtml(c.name || fmtPhone(c.from))}</div>
-          <div class="active-item-meta">\${c.messageCount} msgs · há \${fmtRelativeTime(c.humanAssumedAt)}</div>
-          <div class="active-item-consult">👤 \${isMine ? 'Você' : escapeHtml(c.assignedUserName || '—')}</div>
+    const c = allConversations.find(x => x.from === selectedPhone);
+    if (!c) { panel.innerHTML = ''; return; }
+
+    const initials = getInitials(c);
+    const phone = fmtPhone(c.from);
+    const isHuman = !!c.assignedUserId;
+    const isMine = isHuman && me && c.assignedUserId === me.id;
+
+    const stage = isHuman
+      ? (isMine ? '👤 Atendido por você' : \`👤 \${escapeHtml(c.assignedUserName || '—')}\`)
+      : '🤖 IA atendendo';
+
+    const firstContact = c.firstContactAt ? fmtAbsoluteDate(c.firstContactAt) : '—';
+    const lastContact = c.lastContactAt ? fmtRelativeTime(c.lastContactAt) : '—';
+
+    const tags = [];
+    if (isMine) tags.push('<span class="detail-tag brand">⭐ Minha</span>');
+    else if (isHuman) tags.push('<span class="detail-tag">👤 Humano</span>');
+    else tags.push('<span class="detail-tag brand">🤖 IA</span>');
+    tags.push(\`<span class="detail-tag">\${c.messageCount} msgs</span>\`);
+    if (c.review) {
+      tags.push(\`<span class="detail-tag">\${c.review.rating === 'good' ? '👍 Aprovada' : '👎 Revisar'}</span>\`);
+    }
+
+    const noteHtml = (c.review && c.review.comment)
+      ? \`<div class="detail-note">\${escapeHtml(c.review.comment)}</div>\`
+      : '<div class="detail-note empty">Sem notas internas. Use a avaliação 👍/👎 + comentário pra registrar feedback.</div>';
+
+    panel.innerHTML = \`
+      <div class="detail-profile">
+        <div class="av">\${initials}</div>
+        <div class="nm">\${escapeHtml(c.name || 'Sem nome')}</div>
+        <div class="ph">\${phone}</div>
+      </div>
+
+      <section class="detail-section">
+        <h3>Status do lead</h3>
+        <div class="kv">
+          <div class="row"><span class="k">Origem</span><span class="v">WhatsApp</span></div>
+          <div class="row"><span class="k">Primeiro contato</span><span class="v">\${firstContact}</span></div>
+          <div class="row"><span class="k">Último contato</span><span class="v">há \${lastContact}</span></div>
+          <div class="row"><span class="k">Atendimento</span><span class="v \${isHuman ? '' : 'brand'}">\${stage}</span></div>
         </div>
-      \`;
-    }).join('');
+      </section>
+
+      <section class="detail-section">
+        <h3>Tags</h3>
+        <div class="tagrow">\${tags.join('')}</div>
+      </section>
+
+      <section class="detail-section">
+        <h3>Avaliação & notas</h3>
+        \${noteHtml}
+      </section>
+    \`;
+  }
+
+  function fmtAbsoluteDate(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
   function renderChat() {
@@ -2137,7 +2276,14 @@ router.get('/', (req, res) => {
     const isMine  = isHuman && me && c.assignedUserId === me.id;
     const canReply = isMine || (me && me.role === 'admin');
     if (canReply) {
+      const banner = isMine
+        ? \`<div class="handoff-banner">
+             <div>⚡ Você assumiu este atendimento. A IA não responde até você devolver.</div>
+             <button onclick="releaseConv(event, '\${c.from}')">Devolver pra IA</button>
+           </div>\`
+        : '';
       return \`
+        \${banner}
         <div class="chat-input-bar">
           <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}..." rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)"></textarea>
           <button class="chat-send" onclick="sendChatReply('\${c.from}')" title="Enviar (Enter)">
@@ -2176,7 +2322,7 @@ router.get('/', (req, res) => {
     selectedPhone = phone;
     chatScrollPinned = true;
     renderInboxList();
-    renderActives();
+    renderLeadDetail();
     renderChat();
     document.getElementById('inbox-layout').classList.add('has-selected');
     setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
