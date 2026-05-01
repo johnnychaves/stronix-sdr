@@ -1,9 +1,8 @@
 const Anthropic = require('@anthropic-ai/sdk');
 require('dotenv').config({ override: true });
+const db = require('./db');
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-const conversations = new Map();
 
 let SYSTEM_PROMPT = `Você é o assistente de vendas da STRONIX Academia, localizada na Av. Edgar Pires de Castro, 9392 — Bairro Lageado, Porto Alegre, RS. Você atende leads pelo WhatsApp com o objetivo de qualificá-los e agendar uma visita ou aula experimental. Seu objetivo é marcar esse agendamento.
 
@@ -589,17 +588,30 @@ function isNegative(text) {
   return /^(n[aã]o|n\b|deixa|tranquilo|pode deixar|sem [aá]udio|prefiro texto|n[aã]o precisa)/i.test(text.trim());
 }
 
-// Estado por contato: histórico + controle de permissão de áudio
+// Estado por contato — agora persistido no SQLite.
+// Retorna objeto normalizado em camelCase pros consumidores não saberem do banco.
 function getContact(from) {
-  if (!conversations.has(from)) {
-    conversations.set(from, {
-      history: [],
-      audioPermission: false,     // pode enviar áudio livremente
-      awaitingAudioConfirm: false, // pediu permissão, aguardando resposta
-      askedForAudio: false,        // já pediu uma vez (não pede de novo)
-    });
-  }
-  return conversations.get(from);
+  const c = db.getOrCreateContact(from);
+  return {
+    phone: c.phone,
+    name: c.name,
+    audioPermission: !!c.audio_permission,
+    awaitingAudioConfirm: !!c.awaiting_audio_confirm,
+    askedForAudio: !!c.asked_for_audio,
+    firstContactAt: c.first_contact_at,
+    lastContactAt: c.last_contact_at,
+  };
+}
+
+// Updater explícito pras flags de áudio (substitui mutação direta no objeto).
+// Aceita updates parciais — campos não passados mantêm valor atual.
+function setAudioFlags(from, updates) {
+  const current = getContact(from);
+  db.updateAudioFlags(from, {
+    audioPermission: updates.audioPermission ?? current.audioPermission,
+    awaitingAudioConfirm: updates.awaitingAudioConfirm ?? current.awaitingAudioConfirm,
+    askedForAudio: updates.askedForAudio ?? current.askedForAudio,
+  });
 }
 
 // Detecta se está em horário comercial fechado (madrugada, domingo, ou fora do expediente)
@@ -623,19 +635,32 @@ function isOutsideBusinessHours() {
 }
 
 async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
+  // Lê estado ANTES de adicionar a mensagem nova — assim isFirstMessage e
+  // daysSinceLast refletem a situação real antes desse turno.
   const contact = getContact(from);
-  const isFirstMessage = contact.history.length === 0;
+  const messageCountBefore = db.getMessageCount(from);
+  const isFirstMessage = messageCountBefore === 0;
+  const daysSinceLast = db.getDaysSinceLastContact(from);
+  const isReturning = !isFirstMessage && daysSinceLast !== null && daysSinceLast > 30;
 
   // Lead mandou áudio ou pediu explicitamente → permissão permanente
-  if (isAudio || forceAudio) contact.audioPermission = true;
+  let audioPermission = contact.audioPermission;
+  if (isAudio || forceAudio) {
+    audioPermission = true;
+    if (!contact.audioPermission) {
+      setAudioFlags(from, { audioPermission: true });
+    }
+  }
 
-  contact.history.push({ role: 'user', content: text });
+  // Salva a mensagem do user e atualiza last_contact_at
+  db.addMessage(from, 'user', text, isAudio);
+  db.updateLastContact(from);
 
   // Contexto de áudio injetado no system prompt
   let audioCtx = '';
   if (isAudio || forceAudio) {
     audioCtx = '\n\n[AUDIO_SERÁ_ENVIADO] — sua resposta será convertida em áudio de voz e enviada como mensagem de voz no WhatsApp. Escreva de forma completamente falada e natural: sem listas, sem bullets, sem formatação. Frases curtas como se estivesse gravando um áudio no celular. Não coloque tags, não mencione áudio — só fale naturalmente.';
-  } else if (contact.audioPermission) {
+  } else if (audioPermission) {
     audioCtx = '\n\n[AUDIO_LIBERADO] — o lead autorizou áudio nessa conversa. Você pode responder em áudio quando julgar que vai ajudar mais (objeção, fechamento, algo pessoal). Para escolher áudio, coloque [AUDIO] no início da resposta.';
   } else if (contact.askedForAudio) {
     audioCtx = '\n\n[AUDIO_JÁ_PEDIDO] — você já pediu permissão de áudio nessa conversa. Não peça de novo.';
@@ -647,16 +672,25 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
     timeCtx = '\n\n[FORA_DO_HORÁRIO_COMERCIAL] — esse lead mandou mensagem fora do horário de funcionamento da academia. Na sua primeira resposta, abra mencionando que é assistente virtual da STRONIX, conforme o cenário "LEAD MANDA MENSAGEM EM HORÁRIO COMERCIAL FECHADO" da Parte 5. Adapte ao tom do lead.';
   }
 
-  let systemMessage = SYSTEM_PROMPT + audioCtx + timeCtx;
+  // Lead retornando depois de muito tempo — reconhece a ausência sem cobrar
+  let returnCtx = '';
+  if (isReturning) {
+    returnCtx = `\n\n[LEAD_RETORNANDO_APÓS_${daysSinceLast}_DIAS] — esse lead já conversou contigo há ${daysSinceLast} dias atrás. Você TEM o histórico completo dele acima. Reconheça o retorno com naturalidade e zero julgamento (pessoas somem, voltam, é vida). NÃO comece do zero, NÃO se reapresente, NÃO peça nome de novo se já souber. Use o contexto anterior pra retomar de onde parou. Tom acolhedor: "Bah, sumido!", "Tava te esperando", "E aí, como anda?". Veja a Parte 3 (LIDANDO COM LEADS INATIVOS) pro tom certo.`;
+  }
+
+  let systemMessage = SYSTEM_PROMPT + audioCtx + timeCtx + returnCtx;
   if (isFirstMessage) {
     systemMessage += '\n\nATENÇÃO — PRIMEIRA MENSAGEM DESSE LEAD:\nSua resposta deve seguir EXATAMENTE essa estrutura, e nada além disso:\n1. "Oii! Sou o Johnny da STRONIX!" (ou variação curta)\n2. UMA pergunta de qualificação direta — uma só.\n\nPROIBIDO na primeira mensagem: listar modalidades, explicar a academia, descrever planos, falar sobre estrutura, falar de preço, dar contexto não pedido. A resposta deve ter no máximo 2 linhas. Saudação + pergunta. Mais que isso é exagero e parece robô.\n\nEXCEÇÃO: se houver tag [FORA_DO_HORÁRIO_COMERCIAL] acima, abra com a mensagem de assistente virtual antes da pergunta.';
   }
+
+  // Histórico completo do banco (já inclui a mensagem do user que acabamos de salvar)
+  const history = db.getHistory(from, 100);
 
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1024,
     system: systemMessage,
-    messages: contact.history,
+    messages: history,
   });
 
   let answer = response.content[0].text;
@@ -676,8 +710,7 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
   }
 
   if (askingForAudio) {
-    contact.awaitingAudioConfirm = true;
-    contact.askedForAudio = true;
+    setAudioFlags(from, { awaitingAudioConfirm: true, askedForAudio: true });
   }
 
   // Sanitiza em-dash (—) e en-dash (–) que o Claude insiste em usar
@@ -688,9 +721,11 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
     console.log(`[agent] sanitizou traço longo na resposta para ${from}`);
   }
 
-  contact.history.push({ role: 'assistant', content: cleanText });
+  // Salva a resposta do assistente
+  db.addMessage(from, 'assistant', cleanText, useAudio);
 
-  console.log(`[agent] ${from} → "${text.slice(0, 40)}" | ${useAudio ? '🔊' : '💬'} "${cleanText.slice(0, 60)}..."`);
+  const returnTag = isReturning ? ` (retorno após ${daysSinceLast}d)` : '';
+  console.log(`[agent] ${from}${returnTag} → "${text.slice(0, 40)}" | ${useAudio ? '🔊' : '💬'} "${cleanText.slice(0, 60)}..."`);
 
   return { text: cleanText, useAudio, askingForAudio };
 }
@@ -705,24 +740,11 @@ function updateSystemPrompt(newPrompt) {
 }
 
 function getConversations() {
-  const result = [];
-  for (const [from, contact] of conversations.entries()) {
-    result.push({
-      from,
-      fromDisplay: from.slice(0, 2) + '...' + from.slice(-4),
-      messageCount: contact.history.length,
-      audioPermission: contact.audioPermission,
-      lastMessage: contact.history.length > 0
-        ? contact.history[contact.history.length - 1]
-        : null,
-      history: contact.history,
-    });
-  }
-  return result.sort((a, b) => b.messageCount - a.messageCount);
+  return db.getAllConversations();
 }
 
 function clearConversation(from) {
-  conversations.delete(from);
+  db.clearConversation(from);
 }
 
-module.exports = { reply, isAffirmative, isNegative, getContact, getSystemPrompt, updateSystemPrompt, getConversations, clearConversation };
+module.exports = { reply, isAffirmative, isNegative, getContact, setAudioFlags, getSystemPrompt, updateSystemPrompt, getConversations, clearConversation };

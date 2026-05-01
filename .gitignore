@@ -31,3 +31,10 @@ Thumbs.db
 # Secrets
 *.pem
 *.key
+
+# Database (SQLite local — em produção fica no volume persistente do Railway)
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm

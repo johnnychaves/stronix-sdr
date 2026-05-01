@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const config    = require('./config');
-const { reply, isAffirmative, isNegative, getContact } = require('./agent');
+const { reply, isAffirmative, isNegative, getContact, setAudioFlags } = require('./agent');
 const { sendMessage, sendAudio } = require('./whatsapp');
 const { transcribeAudio } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
@@ -87,15 +87,14 @@ router.post('/', async (req, res) => {
     } else if (contact.awaitingAudioConfirm) {
       // Lead estava respondendo ao pedido de permissão de áudio
       if (isAffirmative(text)) {
-        contact.awaitingAudioConfirm = false;
-        contact.audioPermission = true;
+        setAudioFlags(from, { awaitingAudioConfirm: false, audioPermission: true });
         forceAudio = true;
         console.log(`[webhook] lead confirmou áudio`);
       } else if (isNegative(text)) {
-        contact.awaitingAudioConfirm = false;
+        setAudioFlags(from, { awaitingAudioConfirm: false });
         console.log(`[webhook] lead recusou áudio — continuando em texto`);
       } else {
-        contact.awaitingAudioConfirm = false;
+        setAudioFlags(from, { awaitingAudioConfirm: false });
       }
     }
 
