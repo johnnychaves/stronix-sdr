@@ -517,6 +517,128 @@ router.get('/', (req, res) => {
     .filter-btn:hover { color: #ccc; border-color: #444; }
     .filter-btn.active { background: #22c55e22; border-color: #22c55e44; color: #4ade80; }
 
+    /* ─────────────── INBOX ESTILO WHATSAPP WEB ─────────────── */
+    #tab-conversas { padding: 0; max-width: 100%; }
+    #tab-conversas.active { display: flex; }
+    .inbox-layout { display: flex; height: calc(100vh - 113px); width: 100%; background: #0b141a; }
+    .inbox-col { display: flex; flex-direction: column; overflow: hidden; }
+    .inbox-col-left  { width: 360px; min-width: 320px; border-right: 1px solid #222d34; background: #111b21; }
+    .inbox-col-mid   { flex: 1; min-width: 0; background: #0b141a; }
+    .inbox-col-right { width: 280px; min-width: 240px; border-left: 1px solid #222d34; background: #111b21; }
+
+    /* Header das colunas */
+    .inbox-col-header { padding: 12px 16px; background: #202c33; border-bottom: 1px solid #222d34; display: flex; align-items: center; gap: 10px; min-height: 54px; }
+    .inbox-col-header h3 { font-size: 14px; font-weight: 600; color: #e9edef; flex: 1; }
+    .inbox-col-header .refresh-mini { background: transparent; border: none; color: #aebac1; font-size: 16px; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
+    .inbox-col-header .refresh-mini:hover { background: #2a3942; color: #e9edef; }
+
+    /* Search da sidebar esquerda */
+    .inbox-search { padding: 8px 12px; background: #111b21; }
+    .inbox-search input { width: 100%; background: #202c33; color: #e9edef; border: none; border-radius: 8px; padding: 9px 14px 9px 38px; font-size: 13px; outline: none; font-family: inherit; }
+    .inbox-search input::placeholder { color: #8696a0; }
+    .inbox-search { position: relative; }
+    .inbox-search::before { content: "🔍"; position: absolute; left: 24px; top: 50%; transform: translateY(-50%); font-size: 12px; opacity: .6; }
+
+    /* Filtros como pills compactos */
+    .inbox-filters { display: flex; gap: 4px; padding: 4px 12px 8px; background: #111b21; overflow-x: auto; }
+    .inbox-filters .filter-btn { font-size: 11px; padding: 4px 10px; white-space: nowrap; flex-shrink: 0; }
+
+    /* Lista de conversas */
+    .inbox-list { flex: 1; overflow-y: auto; }
+    .inbox-list::-webkit-scrollbar { width: 6px; }
+    .inbox-list::-webkit-scrollbar-thumb { background: #2a3942; border-radius: 3px; }
+
+    .inbox-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #1f2a30; transition: background .15s; }
+    .inbox-item:hover { background: #202c33; }
+    .inbox-item.active { background: #2a3942; }
+    .inbox-avatar { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #00a884, #128c7e); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 600; color: #fff; flex-shrink: 0; position: relative; }
+    .inbox-avatar.human { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .inbox-avatar.mine  { background: linear-gradient(135deg, #22c55e, #16a34a); }
+    .inbox-avatar .ai-dot { position: absolute; bottom: -2px; right: -2px; width: 14px; height: 14px; border-radius: 50%; background: #818cf8; border: 2px solid #111b21; font-size: 8px; display: flex; align-items: center; justify-content: center; }
+    .inbox-item-body { flex: 1; min-width: 0; }
+    .inbox-item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .inbox-item-name { font-size: 14px; font-weight: 500; color: #e9edef; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .inbox-item-time { font-size: 11px; color: #8696a0; flex-shrink: 0; }
+    .inbox-item-bot  { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px; }
+    .inbox-item-preview { font-size: 13px; color: #8696a0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+    .inbox-item-tags { display: flex; gap: 4px; align-items: center; }
+    .inbox-mini-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+    .inbox-mini-badge.ai    { background: #1a2730; color: #8e9aaf; }
+    .inbox-mini-badge.human { background: #2a261a; color: #fbbf24; }
+    .inbox-mini-badge.mine  { background: #1e2a1e; color: #4ade80; }
+    .inbox-mini-badge.review.good { background: #1e2a1e; color: #4ade80; }
+    .inbox-mini-badge.review.bad  { background: #2a1e1e; color: #f87171; }
+
+    /* Área central — chat */
+    .chat-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #8696a0; font-size: 14px; flex-direction: column; gap: 8px; padding: 40px; text-align: center; }
+    .chat-empty-icon { font-size: 64px; opacity: .3; }
+    .chat-header { padding: 12px 20px; background: #202c33; border-bottom: 1px solid #222d34; display: flex; align-items: center; gap: 14px; min-height: 54px; }
+    .chat-header-avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #00a884, #128c7e); display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 600; color: #fff; flex-shrink: 0; }
+    .chat-header-info { flex: 1; min-width: 0; }
+    .chat-header-name { font-size: 15px; font-weight: 500; color: #e9edef; }
+    .chat-header-status { font-size: 12px; color: #8696a0; margin-top: 2px; }
+    .chat-header-actions { display: flex; gap: 8px; align-items: center; }
+    .chat-action-btn { background: transparent; color: #aebac1; border: 1px solid #2a3942; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 500; }
+    .chat-action-btn:hover { background: #2a3942; color: #fff; }
+    .chat-action-btn.primary { background: #00a884; border-color: #00a884; color: #000; font-weight: 600; }
+    .chat-action-btn.primary:hover { background: #06cf9c; }
+    .chat-action-btn.danger { color: #f87171; border-color: #3a1a1a; }
+    .chat-action-btn.danger:hover { background: #3a1a1a; }
+
+    /* Mensagens — bubbles estilo WhatsApp */
+    .chat-messages { flex: 1; overflow-y: auto; padding: 18px 8% 12px; background-color: #0b141a; background-image: linear-gradient(0deg, rgba(11,20,26,.92), rgba(11,20,26,.92)), repeating-linear-gradient(45deg, transparent 0 60px, rgba(255,255,255,.012) 60px 61px); display: flex; flex-direction: column; gap: 4px; }
+    .chat-messages::-webkit-scrollbar { width: 6px; }
+    .chat-messages::-webkit-scrollbar-thumb { background: #2a3942; border-radius: 3px; }
+    .bubble { max-width: 65%; padding: 6px 9px 8px; border-radius: 8px; font-size: 14.2px; line-height: 1.45; color: #e9edef; word-wrap: break-word; white-space: pre-wrap; position: relative; }
+    .bubble-row { display: flex; }
+    .bubble-row.in  { justify-content: flex-start; }
+    .bubble-row.out { justify-content: flex-end; }
+    .bubble.in  { background: #202c33; border-top-left-radius: 0; }
+    .bubble.out { background: #005c4b; border-top-right-radius: 0; }
+    .bubble.out.human { background: #00785e; }
+    .bubble-meta { font-size: 10.5px; color: #8696a0; margin-top: 4px; display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
+    .bubble.in .bubble-meta { color: #67797f; }
+    .bubble-sender { font-size: 11px; color: #00a884; font-weight: 600; margin-bottom: 2px; }
+    .bubble.in .bubble-sender { color: #f59e0b; }
+    .day-divider { display: flex; justify-content: center; margin: 12px 0; }
+    .day-divider span { background: #1d282f; color: #8696a0; padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 500; }
+
+    /* Input do chat */
+    .chat-input-bar { padding: 10px 16px; background: #202c33; border-top: 1px solid #222d34; display: flex; gap: 10px; align-items: flex-end; }
+    .chat-input { flex: 1; background: #2a3942; color: #e9edef; border: none; border-radius: 8px; padding: 10px 14px; font-size: 14px; resize: none; outline: none; font-family: inherit; min-height: 42px; max-height: 200px; }
+    .chat-input::placeholder { color: #8696a0; }
+    .chat-input:focus { background: #34434c; }
+    .chat-send { background: #00a884; color: #000; border: none; width: 42px; height: 42px; border-radius: 50%; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .chat-send:hover { background: #06cf9c; }
+    .chat-send:disabled { background: #1a4a40; color: #555; cursor: not-allowed; }
+    .chat-input-disabled { padding: 12px; text-align: center; color: #8696a0; font-size: 13px; background: #1d282f; border-top: 1px solid #222d34; }
+    .chat-input-disabled .btn-primary-small { background: #00a884; color: #000; border: none; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; margin-left: 8px; }
+    .chat-input-disabled .btn-primary-small:hover { background: #06cf9c; }
+
+    /* Sidebar direita — atendimentos ativos */
+    .actives-empty { padding: 30px 20px; text-align: center; color: #8696a0; font-size: 13px; line-height: 1.6; }
+    .active-item { padding: 12px 16px; cursor: pointer; border-bottom: 1px solid #1f2a30; transition: background .15s; }
+    .active-item:hover { background: #202c33; }
+    .active-item.selected { background: #2a3942; border-left: 3px solid #00a884; padding-left: 13px; }
+    .active-item-name { font-size: 14px; font-weight: 500; color: #e9edef; }
+    .active-item-meta { font-size: 11px; color: #8696a0; margin-top: 3px; }
+    .active-item-consult { font-size: 12px; color: #fbbf24; margin-top: 4px; }
+
+    /* Painel de avaliação compacto, dentro do chat header dropdown */
+    .review-popup { position: absolute; top: 60px; right: 16px; background: #233138; border: 1px solid #2a3942; border-radius: 8px; padding: 12px; width: 320px; box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 10; }
+    .review-popup.hidden { display: none; }
+
+    /* Esconde painel direita em telas estreitas */
+    @media (max-width: 1100px) {
+      .inbox-col-right { display: none; }
+    }
+    @media (max-width: 800px) {
+      .inbox-col-left { width: 100%; }
+      .inbox-col-mid { display: none; }
+      .inbox-layout.has-selected .inbox-col-left { display: none; }
+      .inbox-layout.has-selected .inbox-col-mid  { display: flex; }
+    }
+
     /* Students */
     .student-form { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 16px; margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .student-form input { background: #0f0f0f; color: #d4d4d4; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 10px; font-size: 13px; outline: none; font-family: inherit; }
@@ -586,23 +708,49 @@ router.get('/', (req, res) => {
 </div>
 
 <div id="tab-conversas" class="panel">
-  <div class="conv-header">
-    <h2>Conversas em memória</h2>
-    <button class="refresh-btn" onclick="loadConversations()">↻ Atualizar</button>
-  </div>
-  <div class="filter-bar" id="filter-bar">
-    <span class="review-label">Filtrar:</span>
-    <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">Todas</button>
-    <button class="filter-btn" data-filter="ai" onclick="setFilter('ai')">🤖 IA atendendo</button>
-    <button class="filter-btn" data-filter="human" onclick="setFilter('human')">👤 Humano atendendo</button>
-    <button class="filter-btn" data-filter="mine" onclick="setFilter('mine')">⭐ Minhas</button>
-    <button class="filter-btn" data-filter="unrated" onclick="setFilter('unrated')">Não avaliadas</button>
-    <button class="filter-btn" data-filter="bad" onclick="setFilter('bad')">👎 Não gostei</button>
-    <button class="filter-btn" data-filter="good" onclick="setFilter('good')">👍 Gostei</button>
-    <span class="review-meta" id="filter-count" style="margin-left:auto"></span>
-  </div>
-  <div class="conv-list" id="conv-list">
-    <div class="empty">Carregando...</div>
+  <div class="inbox-layout" id="inbox-layout">
+    <!-- ─── Sidebar esquerda: lista de conversas ─── -->
+    <div class="inbox-col inbox-col-left">
+      <div class="inbox-col-header">
+        <h3>Conversas</h3>
+        <span class="review-meta" id="filter-count" style="font-size:11px;color:#8696a0"></span>
+        <button class="refresh-mini" onclick="loadConversations()" title="Atualizar">↻</button>
+      </div>
+      <div class="inbox-search">
+        <input id="inbox-search-input" placeholder="Buscar por nome, telefone ou mensagem" oninput="onSearchChange()">
+      </div>
+      <div class="inbox-filters" id="filter-bar">
+        <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">Todas</button>
+        <button class="filter-btn" data-filter="ai" onclick="setFilter('ai')">🤖 IA</button>
+        <button class="filter-btn" data-filter="human" onclick="setFilter('human')">👤 Humano</button>
+        <button class="filter-btn" data-filter="mine" onclick="setFilter('mine')">⭐ Minhas</button>
+        <button class="filter-btn" data-filter="unrated" onclick="setFilter('unrated')">Não avaliadas</button>
+        <button class="filter-btn" data-filter="bad" onclick="setFilter('bad')">👎</button>
+        <button class="filter-btn" data-filter="good" onclick="setFilter('good')">👍</button>
+      </div>
+      <div class="inbox-list" id="inbox-list">
+        <div class="empty" style="padding:30px;color:#8696a0">Carregando...</div>
+      </div>
+    </div>
+
+    <!-- ─── Centro: chat da conversa selecionada ─── -->
+    <div class="inbox-col inbox-col-mid" id="chat-area">
+      <div class="chat-empty">
+        <div class="chat-empty-icon">💬</div>
+        <div>Selecione uma conversa pra ver as mensagens</div>
+      </div>
+    </div>
+
+    <!-- ─── Sidebar direita: atendimentos ativos ─── -->
+    <div class="inbox-col inbox-col-right">
+      <div class="inbox-col-header">
+        <h3>🟢 Em atendimento</h3>
+        <span class="review-meta" id="actives-count" style="font-size:11px;color:#8696a0"></span>
+      </div>
+      <div class="inbox-list" id="actives-list">
+        <div class="actives-empty">Conversas que algum consultor assumiu vão aparecer aqui.</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -746,7 +894,9 @@ router.get('/', (req, res) => {
 
   let allConversations = [];
   let currentFilter = 'all';
-  const openCards = new Set();
+  let searchQuery = '';
+  let selectedPhone = null;
+  let chatScrollPinned = true; // se usuário tá no fim do chat, mantém autoscroll
 
   // Polling + notificações: estado pra detectar mensagens novas
   let pollTimer = null;
@@ -807,6 +957,51 @@ router.get('/', (req, res) => {
 
   const RATE_LABEL = { good: '👍 Gostei', bad: '👎 Não gostei' };
 
+  // Helpers
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function getInitials(c) {
+    const name = c.name || c.assignedUserName;
+    if (name && name.trim()) {
+      const parts = name.split(/\\s+/);
+      return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '👤';
+    }
+    return c.fromDisplay.slice(-2).toUpperCase();
+  }
+  function fmtPhone(phone) {
+    const n = String(phone || '').replace(/\\D/g, '');
+    if (n.startsWith('55') && n.length === 13) return '(' + n.slice(2,4) + ') ' + n.slice(4,9) + '-' + n.slice(9);
+    return phone;
+  }
+  function fmtRelativeTime(ts) {
+    if (!ts) return '';
+    const diff = Date.now() - ts;
+    const min = Math.floor(diff / 60000);
+    const h = Math.floor(diff / 3600000);
+    const d = Math.floor(diff / 86400000);
+    if (min < 1) return 'agora';
+    if (min < 60) return min + ' min';
+    if (h < 24) return h + 'h';
+    if (d < 7) return d + 'd';
+    return new Date(ts).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  }
+  function fmtMessageTime(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+  }
+  function fmtDayDivider(ts) {
+    const d = new Date(ts);
+    const today = new Date();
+    const yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
+    const sameDay = (a, b) => a.toDateString() === b.toDateString();
+    if (sameDay(d, today)) return 'Hoje';
+    if (sameDay(d, yesterday)) return 'Ontem';
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+  }
+
   async function loadConversations() {
     try {
       const res = await fetch('/admin/api/conversations');
@@ -814,109 +1009,269 @@ router.get('/', (req, res) => {
       const fresh = await res.json();
       detectNewMessages(fresh);
       allConversations = fresh;
-      renderConversations();
+      renderInboxList();
+      renderActives();
+      renderChat();
     } catch (e) { /* polling silencioso */ }
   }
 
-  function renderConversations() {
-    const list = document.getElementById('conv-list');
-    const convs = allConversations.filter(c => {
-      if (currentFilter === 'all') return true;
-      if (currentFilter === 'ai') return !c.assignedUserId;
-      if (currentFilter === 'human') return !!c.assignedUserId;
-      if (currentFilter === 'mine') return me && c.assignedUserId === me.id;
-      if (currentFilter === 'unrated') return !c.review;
-      return c.review && c.review.rating === currentFilter;
+  function filterConversations() {
+    const q = searchQuery.toLowerCase().trim();
+    return allConversations.filter(c => {
+      // Filtro de seção
+      if (currentFilter === 'ai' && c.assignedUserId) return false;
+      if (currentFilter === 'human' && !c.assignedUserId) return false;
+      if (currentFilter === 'mine' && (!me || c.assignedUserId !== me.id)) return false;
+      if (currentFilter === 'unrated' && c.review) return false;
+      if ((currentFilter === 'good' || currentFilter === 'bad') && (!c.review || c.review.rating !== currentFilter)) return false;
+      // Search
+      if (q) {
+        const hay = [c.name, c.from, c.fromDisplay, c.lastMessage?.content].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
     });
+  }
+
+  function renderInboxList() {
+    const convs = filterConversations()
+      .slice()
+      .sort((a, b) => (b.lastContactAt || 0) - (a.lastContactAt || 0));
 
     document.getElementById('filter-count').textContent =
-      \`\${convs.length} de \${allConversations.length}\`;
+      \`\${convs.length}\${convs.length !== allConversations.length ? ' de ' + allConversations.length : ''}\`;
 
-    if (convs.length === 0) {
-      list.innerHTML = '<div class="empty">Nenhuma conversa nesse filtro</div>';
+    const list = document.getElementById('inbox-list');
+    if (!convs.length) {
+      list.innerHTML = '<div class="actives-empty">Nenhuma conversa nesse filtro</div>';
       return;
     }
 
-    list.innerHTML = convs.map((c, i) => {
-      const r = c.review;
-      const reviewBadge = r ? \`<span class="review-badge \${r.rating}">\${RATE_LABEL[r.rating]}</span>\` : '';
-      const commentVal = r && r.comment ? r.comment.replace(/"/g, '&quot;') : '';
-      const reviewedAt = r ? new Date(r.reviewedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '';
-
-      // Badge de quem está atendendo
+    list.innerHTML = convs.map(c => {
       const isHuman = !!c.assignedUserId;
       const isMine  = isHuman && me && c.assignedUserId === me.id;
-      const assignBadge = isHuman
-        ? \`<span class="assign-badge \${isMine ? 'mine' : 'other'}">👤 \${c.assignedUserName || '—'}\${isMine ? ' (você)' : ''}</span>\`
-        : '<span class="assign-badge ai">🤖 IA atendendo</span>';
-
-      // Botões de assumir/devolver
-      let actionBtns = '';
-      if (!isHuman) {
-        actionBtns = \`<button class="btn-assume" onclick="assumeConv(event, '\${c.from}')">Assumir</button>\`;
-      } else if (isMine || (me && me.role === 'admin')) {
-        actionBtns = \`<button class="btn-release" onclick="releaseConv(event, '\${c.from}')">Devolver pra IA</button>\`;
-      }
-
-      // Pode enviar mensagem nessa conversa? (assumida por mim, ou eu sou admin)
-      const canReply = isMine || (me && me.role === 'admin');
-
-      // Histórico com sender (IA vs humano)
-      const historyHtml = c.history.map(m => {
-        const senderLabel = m.role === 'user'
-          ? '👤 Lead'
-          : (m.sentByUserId ? '👨‍💼 ' + (getUserDisplay(m.sentByUserId) || 'Atendente') : '🤖 SDR');
-        const senderClass = m.role === 'user' ? 'user' : (m.sentByUserId ? 'human' : 'assistant');
-        return \`
-          <div class="msg">
-            <div class="msg-role \${senderClass}">\${senderLabel}</div>
-            <div class="msg-content">\${m.content}</div>
-          </div>
-        \`;
-      }).join('');
-
-      const replyBoxHtml = canReply ? \`
-        <div class="reply-bar">
-          <textarea class="reply-input" id="reply-\${i}" placeholder="Digite sua resposta como \${me.displayName}..." rows="2"></textarea>
-          <button class="btn-send" onclick="sendReply('\${c.from}', \${i})">Enviar</button>
-        </div>
-      \` : '';
+      const isSelected = selectedPhone === c.from;
+      const avatarClass = isMine ? 'mine' : (isHuman ? 'human' : '');
+      const initials = getInitials(c);
+      const aiDot = !isHuman ? '<div class="ai-dot">🤖</div>' : '';
+      const lastMsg = c.lastMessage;
+      const lastPrefix = lastMsg ? (lastMsg.role === 'user' ? '' : (lastMsg.sentByUserId ? '👨‍💼 ' : '🤖 ')) : '';
+      const lastText = lastMsg ? escapeHtml(lastMsg.content).slice(0, 80) : '<i>sem mensagens</i>';
+      const time = fmtRelativeTime(c.lastContactAt);
+      const tags = [];
+      if (isMine) tags.push('<span class="inbox-mini-badge mine">você</span>');
+      else if (isHuman) tags.push('<span class="inbox-mini-badge human">' + escapeHtml(c.assignedUserName) + '</span>');
+      if (c.review) tags.push('<span class="inbox-mini-badge review ' + c.review.rating + '">' + (c.review.rating === 'good' ? '👍' : '👎') + '</span>');
 
       return \`
-        <div class="conv-card">
-          <div class="conv-card-header" onclick="toggleMessages(\${i})">
-            <div class="conv-info">
-              <span class="conv-phone">\${c.fromDisplay}</span>
-              <div class="conv-stats">
-                <span class="stat">\${c.messageCount} msgs</span>
-                \${c.audioPermission ? '<span class="stat audio">🔊 áudio</span>' : ''}
-                \${assignBadge}
-                \${reviewBadge}
-              </div>
-              \${c.lastMessage ? \`<span class="conv-last">\${c.lastMessage.role === 'assistant' ? (c.lastMessage.sentByUserId ? '👨‍💼' : '🤖') : '👤'} \${c.lastMessage.content.slice(0, 60)}...\</span>\` : ''}
+        <div class="inbox-item \${isSelected ? 'active' : ''}" onclick="selectConv('\${c.from}')">
+          <div class="inbox-avatar \${avatarClass}">\${initials}\${aiDot}</div>
+          <div class="inbox-item-body">
+            <div class="inbox-item-top">
+              <div class="inbox-item-name">\${escapeHtml(c.name || fmtPhone(c.from))}</div>
+              <div class="inbox-item-time">\${time}</div>
             </div>
-            <div style="display:flex;gap:6px;align-items:center" onclick="event.stopPropagation()">
-              \${actionBtns}
-              <button class="btn-clear" onclick="clearConv(event, '\${c.from}')">Limpar</button>
+            <div class="inbox-item-bot">
+              <div class="inbox-item-preview">\${lastPrefix}\${lastText}</div>
+              <div class="inbox-item-tags">\${tags.join('')}</div>
             </div>
-          </div>
-          <div class="conv-messages \${openCards.has(c.from) ? 'open' : ''}" id="msgs-\${i}" data-phone="\${c.from}">
-            \${historyHtml}
-            \${replyBoxHtml}
-          </div>
-          <div class="review-bar">
-            <div class="review-row">
-              <span class="review-label">Avaliação:</span>
-              <button class="rate-btn good \${r && r.rating === 'good' ? 'active' : ''}" onclick="rateConv('\${c.from}', 'good')">👍 Gostei</button>
-              <button class="rate-btn bad \${r && r.rating === 'bad' ? 'active' : ''}" onclick="rateConv('\${c.from}', 'bad')">👎 Não gostei</button>
-              \${r ? \`<button class="rate-btn clear" onclick="clearReview('\${c.from}')">remover</button>\` : ''}
-              \${reviewedAt ? \`<span class="review-meta">avaliada em \${reviewedAt}</span>\` : ''}
-            </div>
-            <textarea class="review-comment" id="cmt-\${i}" placeholder="Comentário (o que foi bom/ruim, o que mudar no prompt...)" oninput="onCommentChange('\${c.from}', \${i})">\${commentVal}</textarea>
           </div>
         </div>
       \`;
     }).join('');
+  }
+
+  function renderActives() {
+    const list = document.getElementById('actives-list');
+    const actives = allConversations.filter(c => c.assignedUserId).sort((a, b) => (b.humanAssumedAt || 0) - (a.humanAssumedAt || 0));
+    document.getElementById('actives-count').textContent = actives.length;
+    if (!actives.length) {
+      list.innerHTML = '<div class="actives-empty">Conversas que algum consultor assumiu vão aparecer aqui.</div>';
+      return;
+    }
+    list.innerHTML = actives.map(c => {
+      const isMine = me && c.assignedUserId === me.id;
+      const isSelected = selectedPhone === c.from;
+      return \`
+        <div class="active-item \${isSelected ? 'selected' : ''}" onclick="selectConv('\${c.from}')">
+          <div class="active-item-name">\${escapeHtml(c.name || fmtPhone(c.from))}</div>
+          <div class="active-item-meta">\${c.messageCount} msgs · há \${fmtRelativeTime(c.humanAssumedAt)}</div>
+          <div class="active-item-consult">👤 \${isMine ? 'Você' : escapeHtml(c.assignedUserName || '—')}</div>
+        </div>
+      \`;
+    }).join('');
+  }
+
+  function renderChat() {
+    const area = document.getElementById('chat-area');
+    if (!selectedPhone) {
+      area.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div>Selecione uma conversa pra ver as mensagens</div></div>';
+      return;
+    }
+    const c = allConversations.find(x => x.from === selectedPhone);
+    if (!c) {
+      area.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">⚠️</div><div>Conversa não encontrada</div></div>';
+      return;
+    }
+    const isHuman = !!c.assignedUserId;
+    const isMine  = isHuman && me && c.assignedUserId === me.id;
+    const canReply = isMine || (me && me.role === 'admin');
+    const status = isHuman
+      ? (isMine ? '🟢 Em atendimento (você)' : '🟡 Em atendimento (' + escapeHtml(c.assignedUserName) + ')')
+      : '🤖 IA atendendo';
+
+    // Botões do header
+    let actionBtns = '';
+    if (!isHuman) {
+      actionBtns = '<button class="chat-action-btn primary" onclick="assumeConv(event, \\'' + c.from + '\\')">Assumir</button>';
+    } else if (isMine || (me && me.role === 'admin')) {
+      actionBtns = '<button class="chat-action-btn" onclick="releaseConv(event, \\'' + c.from + '\\')">Devolver pra IA</button>';
+    }
+    const reviewBtn = '<button class="chat-action-btn" onclick="toggleReviewPopup(event)" title="Avaliar conversa">📝</button>';
+    const clearBtn = '<button class="chat-action-btn danger" onclick="clearConv(event, \\'' + c.from + '\\')">Limpar</button>';
+
+    // Mensagens com day divider
+    let lastDay = '';
+    const msgsHtml = c.history.map(m => {
+      const day = fmtDayDivider(m.createdAt || c.firstContactAt);
+      let dayHtml = '';
+      if (day !== lastDay) {
+        dayHtml = '<div class="day-divider"><span>' + day + '</span></div>';
+        lastDay = day;
+      }
+      const isOut = m.role === 'assistant';
+      const fromHuman = m.sentByUserId;
+      const senderName = fromHuman ? (getUserDisplay(fromHuman) || 'Atendente') : (isOut ? 'STRONIX SDR' : '');
+      const senderHtml = (isOut && fromHuman) ? '<div class="bubble-sender">' + escapeHtml(senderName) + '</div>' : '';
+      const inOrOut = isOut ? 'out' : 'in';
+      const humanCls = fromHuman ? ' human' : '';
+      return dayHtml + \`
+        <div class="bubble-row \${inOrOut}">
+          <div class="bubble \${inOrOut}\${humanCls}">
+            \${senderHtml}\${escapeHtml(m.content)}
+            <div class="bubble-meta">\${fmtMessageTime(m.createdAt)}</div>
+          </div>
+        </div>
+      \`;
+    }).join('');
+
+    // Input ou aviso
+    const inputBar = canReply
+      ? \`<div class="chat-input-bar">
+          <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}..." rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)"></textarea>
+          <button class="chat-send" onclick="sendChatReply('\${c.from}')" title="Enviar">➤</button>
+        </div>\`
+      : isHuman
+        ? \`<div class="chat-input-disabled">Conversa em atendimento por <strong>\${escapeHtml(c.assignedUserName)}</strong>. Pra responder, devolva pra IA primeiro ou peça pra ela liberar.</div>\`
+        : \`<div class="chat-input-disabled">A IA está atendendo essa conversa. <button class="btn-primary-small" onclick="assumeConv(event, '\${c.from}')">Assumir agora</button></div>\`;
+
+    // Review popup (escondido por default)
+    const r = c.review;
+    const reviewPopup = \`
+      <div class="review-popup hidden" id="review-popup">
+        <div style="font-size:12px;color:#8696a0;margin-bottom:8px">Avaliar essa conversa</div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <button class="rate-btn good \${r && r.rating === 'good' ? 'active' : ''}" onclick="rateConv('\${c.from}', 'good')">👍 Gostei</button>
+          <button class="rate-btn bad \${r && r.rating === 'bad' ? 'active' : ''}" onclick="rateConv('\${c.from}', 'bad')">👎 Não gostei</button>
+          \${r ? \`<button class="rate-btn clear" onclick="clearReview('\${c.from}')">remover</button>\` : ''}
+        </div>
+        <textarea class="review-comment" id="review-cmt" placeholder="Comentário..." oninput="onCommentChange('\${c.from}')">\${escapeHtml(r?.comment || '')}</textarea>
+      </div>
+    \`;
+
+    area.innerHTML = \`
+      <div class="chat-header" style="position:relative">
+        <div class="chat-header-avatar">\${getInitials(c)}</div>
+        <div class="chat-header-info">
+          <div class="chat-header-name">\${escapeHtml(c.name || fmtPhone(c.from))}</div>
+          <div class="chat-header-status">\${status} · \${fmtPhone(c.from)}</div>
+        </div>
+        <div class="chat-header-actions">
+          \${actionBtns}
+          \${reviewBtn}
+          \${clearBtn}
+        </div>
+        \${reviewPopup}
+      </div>
+      <div class="chat-messages" id="chat-messages" onscroll="onChatScroll()">
+        \${msgsHtml || '<div class="chat-empty"><div>Sem mensagens ainda</div></div>'}
+      </div>
+      \${inputBar}
+    \`;
+
+    // Auto-scroll pro fim se estava pinned
+    if (chatScrollPinned) {
+      const cm = document.getElementById('chat-messages');
+      if (cm) cm.scrollTop = cm.scrollHeight;
+    }
+  }
+
+  function selectConv(phone) {
+    selectedPhone = phone;
+    chatScrollPinned = true;
+    renderInboxList();
+    renderActives();
+    renderChat();
+    document.getElementById('inbox-layout').classList.add('has-selected');
+    setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
+  }
+
+  function onSearchChange() {
+    searchQuery = document.getElementById('inbox-search-input').value;
+    renderInboxList();
+  }
+
+  function onChatScroll() {
+    const cm = document.getElementById('chat-messages');
+    if (!cm) return;
+    chatScrollPinned = cm.scrollTop + cm.clientHeight >= cm.scrollHeight - 60;
+  }
+
+  function autoGrowChat(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(200, el.scrollHeight) + 'px';
+  }
+
+  function handleChatKey(e, phone) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatReply(phone);
+    }
+  }
+
+  async function sendChatReply(phone) {
+    const ta = document.getElementById('chat-input');
+    if (!ta) return;
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.disabled = true;
+    try {
+      const r = await fetch('/admin/api/conversations/' + phone + '/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) {
+        const data = await r.json();
+        alert('Erro: ' + (data.error || 'falha ao enviar'));
+        ta.disabled = false;
+        return;
+      }
+      ta.value = '';
+      autoGrowChat(ta);
+      chatScrollPinned = true;
+      await loadConversations();
+      ta.disabled = false;
+      ta.focus();
+    } catch (e2) {
+      alert('Falha de conexão');
+      ta.disabled = false;
+    }
+  }
+
+  function toggleReviewPopup(e) {
+    e.stopPropagation();
+    document.getElementById('review-popup')?.classList.toggle('hidden');
   }
 
   function setFilter(f) {
@@ -924,7 +1279,7 @@ router.get('/', (req, res) => {
     document.querySelectorAll('#filter-bar .filter-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.filter === f);
     });
-    renderConversations();
+    renderInboxList();
   }
 
   async function rateConv(phone, rating) {
@@ -936,14 +1291,16 @@ router.get('/', (req, res) => {
       body: JSON.stringify({ rating, comment }),
     });
     if (conv) conv.review = { rating, comment, reviewedAt: Date.now() };
-    renderConversations();
+    renderInboxList();
+    renderChat();
   }
 
   async function clearReview(phone) {
     await fetch('/admin/api/reviews/' + phone, { method: 'DELETE' });
     const conv = allConversations.find(c => c.from === phone);
     if (conv) conv.review = null;
-    renderConversations();
+    renderInboxList();
+    renderChat();
   }
 
   // Cache simples de display_names dos users (id → display_name)
@@ -965,6 +1322,8 @@ router.get('/', (req, res) => {
     if (!r.ok) {
       const data = await r.json();
       alert('Não consegui assumir: ' + (data.by ? data.by + ' já assumiu' : data.error));
+    } else {
+      selectedPhone = phone; // já abre a conversa pro atendimento
     }
     loadConversations();
   }
@@ -976,36 +1335,12 @@ router.get('/', (req, res) => {
     loadConversations();
   }
 
-  async function sendReply(phone, idx) {
-    const ta = document.getElementById('reply-' + idx);
-    const text = ta.value.trim();
-    if (!text) return;
-    const btn = ta.parentElement.querySelector('.btn-send');
-    btn.disabled = true;
-    try {
-      const r = await fetch('/admin/api/conversations/' + phone + '/reply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      if (!r.ok) {
-        const data = await r.json();
-        alert('Erro: ' + (data.error || 'falha ao enviar'));
-        btn.disabled = false;
-        return;
-      }
-      ta.value = '';
-      loadConversations();
-    } catch (e2) {
-      alert('Falha de conexão');
-      btn.disabled = false;
-    }
-  }
-
-  // Salva comentário com debounce de 600ms
+  // Salva comentário com debounce de 600ms (popup do chat header)
   const commentTimers = {};
-  function onCommentChange(phone, idx) {
-    const text = document.getElementById('cmt-' + idx).value;
+  function onCommentChange(phone) {
+    const ta = document.getElementById('review-cmt');
+    if (!ta) return;
+    const text = ta.value;
     clearTimeout(commentTimers[phone]);
     commentTimers[phone] = setTimeout(async () => {
       const conv = allConversations.find(c => c.from === phone);
@@ -1016,21 +1351,15 @@ router.get('/', (req, res) => {
         body: JSON.stringify({ rating, comment: text }),
       });
       if (conv) conv.review = { rating, comment: text, reviewedAt: Date.now() };
+      renderInboxList();
     }, 600);
-  }
-
-  function toggleMessages(i) {
-    const el = document.getElementById('msgs-' + i);
-    el.classList.toggle('open');
-    const phone = el.dataset.phone;
-    if (el.classList.contains('open')) openCards.add(phone);
-    else openCards.delete(phone);
   }
 
   async function clearConv(e, from) {
     e.stopPropagation();
-    if (!confirm('Limpar conversa de ' + from + '?')) return;
+    if (!confirm('Limpar conversa de ' + fmtPhone(from) + '? Histórico e atribuição serão apagados.')) return;
     await fetch('/admin/api/conversations/' + from, { method: 'DELETE' });
+    if (selectedPhone === from) selectedPhone = null;
     loadConversations();
   }
 

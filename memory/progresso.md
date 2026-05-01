@@ -4,6 +4,52 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-01 — Redesign WhatsApp Web da aba Inbox
+
+**Contexto:** O Johnny pediu pra deixar o painel "mais sofisticado, intuitivo e profissional" e trazer a parte de mensagens "o mais próximo possível do layout do WhatsApp oficial", além de criar um menu lateral com alunos em atendimento ativo.
+
+**O que mudou:** layout da aba "Conversas ativas" reescrito do zero pra 3 colunas estilo WhatsApp Web:
+
+1. **Sidebar esquerda (360px) — Lista de conversas**
+   - Header com contador + botão refresh
+   - Search bar (filtra por nome, telefone ou conteúdo da última msg)
+   - Filtros pills compactos: Todas / 🤖 IA / 👤 Humano / ⭐ Minhas / Não avaliadas / 👍 / 👎
+   - Cards com avatar circular gradiente (verde STRONIX, laranja humano, verde claro "minhas"), nome/phone formatado, preview da última msg com prefix 🤖/👨‍💼/👤, timestamp relativo (29 min, 14h, etc), mini badges (você/nome consultora/review)
+
+2. **Centro — Área de chat**
+   - Header com avatar grande, nome do lead, status ("🟢 Em atendimento (você)" / "🤖 IA atendendo"), telefone formatado
+   - Botões: Assumir/Devolver pra IA, 📝 review (popup), Limpar
+   - Mensagens em bubbles estilo WhatsApp:
+     - Outgoing IA: verde escuro #005c4b à direita
+     - Outgoing humano: verde médio #00785e com nome do atendente em verde claro
+     - Incoming (lead): cinza escuro #202c33 à esquerda
+     - Day dividers ("Hoje", "Ontem", data) entre dias diferentes
+     - Hora pequena no canto inferior direito de cada bubble
+   - Input fixo no fundo: textarea com auto-grow, Enter envia (Shift+Enter quebra linha), botão redondo verde com ícone ➤
+   - Estado "vazio" (nenhuma conversa selecionada): emoji 💬 grande + texto
+
+3. **Sidebar direita (280px) — Em atendimento**
+   - Lista das conversas com `assignedUserId != null`
+   - Cada item: nome, contagem msgs, "há X min", consultora dona (ou "Você" se for sua)
+   - Item selecionado: borda esquerda verde
+   - Esconde em telas <1100px
+
+**JS reorganizado:**
+- Estado: `selectedPhone`, `searchQuery`, `chatScrollPinned`
+- 3 funções de render: `renderInboxList()`, `renderChat()`, `renderActives()`
+- Polling re-renderiza os 3 (ou só o que mudou via diff)
+- `chatScrollPinned`: detecta se usuário tá no fim do chat pra manter autoscroll quando chega msg nova
+- Helpers: `escapeHtml`, `getInitials`, `fmtPhone`, `fmtRelativeTime`, `fmtMessageTime`, `fmtDayDivider`
+- Responsivo: telas <800px viram single-column tipo mobile WhatsApp
+
+**Smoke test visual (Chrome MCP):**
+- Login → painel principal → click "Conversas ativas" → screenshot
+- Layout 3 colunas renderizou perfeitamente
+- Click em conversa → chat abre no centro com bubbles, header populado, input ativo (porque já assumida)
+- Sidebar direita lista a conversa em atendimento com destaque verde
+
+---
+
 ## 2026-05-01 — Inbox multi-agente integrado (10 dias de plano executados em 1)
 
 **Contexto:** Decisão estratégica de NÃO migrar pra ChatPro/Wati (R$ 200-500/mês recorrente + IA genérica) e construir o inbox no nosso próprio painel. Mantém custom IA (Sonnet 4.5 + 38k prompt + voz clonada) + adiciona multi-agente. Custo recorrente extra: R$ 0.
