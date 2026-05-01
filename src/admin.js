@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
-const { sendMessage, sendAudio, uploadMedia } = require('./whatsapp');
+const { sendMessage, sendAudio, uploadMedia, transcodeAudio } = require('./whatsapp');
 const db = require('./db');
 const auth = require('./auth');
 
@@ -639,13 +639,35 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
   }
 
   try {
-    const ext = baseMime === 'audio/ogg' ? 'ogg'
-              : baseMime === 'audio/mpeg' || baseMime === 'audio/mp3' ? 'mp3'
-              : baseMime === 'audio/webm' ? 'webm'
+    // WhatsApp Cloud API só aceita ogg/opus, mp3, mp4, aac, amr — webm/opus é
+    // rejeitado SILENCIOSAMENTE (upload retorna media_id ok, mas msg não chega).
+    // Por isso: tudo que chega aqui é remuxado pra ogg/opus via ffmpeg.
+    // Se já é ogg/mp3/mp4, idealmente puláva o transcode, mas pra robustez
+    // remuxamos webm/ogg pra garantir container ogg correto. mp3/mp4/aac
+    // passam direto.
+    let finalBuffer = buffer;
+    let finalMime = baseMime;
+    let finalExt = 'bin';
+
+    const needsRemux = baseMime === 'audio/webm' || baseMime === 'audio/ogg';
+    if (needsRemux) {
+      try {
+        finalBuffer = await transcodeAudio(buffer, baseMime);
+        finalMime = 'audio/ogg';
+        finalExt = 'ogg';
+        console.log(`[admin] transcode ${baseMime} → audio/ogg ok (${buffer.length} → ${finalBuffer.length} bytes)`);
+      } catch (e) {
+        console.error('[admin] transcode falhou:', e.message);
+        return res.status(500).json({ error: 'Falha ao processar áudio (ffmpeg). ' + e.message });
+      }
+    } else {
+      finalExt = baseMime === 'audio/mpeg' || baseMime === 'audio/mp3' ? 'mp3'
               : baseMime === 'audio/mp4' || baseMime === 'audio/m4a' ? 'm4a'
               : baseMime === 'audio/aac' ? 'aac'
               : 'bin';
-    const mediaId = await uploadMedia(buffer, baseMime, `voice.${ext}`);
+    }
+
+    const mediaId = await uploadMedia(finalBuffer, finalMime, `voice.${finalExt}`);
     await sendAudio(phone, mediaId);
 
     const seconds = durationMs ? Math.max(1, Math.round(durationMs / 1000)) : null;
@@ -654,7 +676,7 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
       : '🔊 Áudio enviado';
     db.addMessageWithSender(phone, 'assistant', label, true, req.user.id);
     db.updateLastContact(phone);
-    console.log(`[admin] ${req.user.username} enviou áudio para ${phone} (${buffer.length} bytes, ${baseMime})`);
+    console.log(`[admin] ${req.user.username} enviou áudio para ${phone} (${finalBuffer.length} bytes, ${finalMime})`);
     res.json({ ok: true });
   } catch (err) {
     const meta = err.response?.data || err.message;

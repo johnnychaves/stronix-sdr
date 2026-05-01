@@ -1,0 +1,5 @@
+# Railway/Nixpacks: instala ffmpeg pro transcoding de áudio webm→ogg
+# (Chrome grava só em webm/opus, mas WhatsApp Cloud API só aceita ogg/opus)
+
+[phases.setup]
+aptPkgs = ["ffmpeg"]

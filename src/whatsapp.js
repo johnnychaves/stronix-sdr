@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { spawn } = require('child_process');
 const config = require('./config');
 
 const BASE_URL = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}/messages`;
@@ -63,6 +64,50 @@ async function uploadMedia(buffer, mimeType, filename = 'upload.bin') {
     maxContentLength: 32 * 1024 * 1024,
   });
   return res.data.id;
+}
+
+// Remuxa container de áudio via ffmpeg, mantendo o codec quando possível
+// (webm/opus → ogg/opus é -c:a copy, instantâneo). Pra outros formatos faz
+// re-encode pra opus 64kbps.
+// Necessário porque Chrome grava só em webm e WhatsApp Cloud API não aceita
+// webm — exige ogg/opus, mp4, mp3, aac ou amr.
+function transcodeAudio(inputBuffer, inputMime) {
+  return new Promise((resolve, reject) => {
+    const isOpusContainer = inputMime === 'audio/webm' || inputMime === 'audio/ogg';
+    const args = ['-loglevel', 'error', '-i', 'pipe:0'];
+    if (isOpusContainer) {
+      // Mesmo codec opus, só troca container — sem re-encode
+      args.push('-c:a', 'copy');
+    } else {
+      // Re-encode pra opus 64kbps (qualidade voz)
+      args.push('-c:a', 'libopus', '-b:a', '64k');
+    }
+    args.push('-f', 'ogg', 'pipe:1');
+
+    let ff;
+    try {
+      ff = spawn('ffmpeg', args);
+    } catch (e) {
+      return reject(new Error('ffmpeg não instalado: ' + e.message));
+    }
+
+    const out = [];
+    const errLog = [];
+    ff.stdout.on('data', d => out.push(d));
+    ff.stderr.on('data', d => errLog.push(d));
+    ff.on('error', err => reject(new Error('ffmpeg spawn falhou: ' + err.message)));
+    ff.on('close', code => {
+      if (code === 0) {
+        resolve(Buffer.concat(out));
+      } else {
+        const log = Buffer.concat(errLog).toString('utf8').slice(0, 500);
+        reject(new Error(`ffmpeg exit ${code}: ${log}`));
+      }
+    });
+    ff.stdin.on('error', err => reject(new Error('ffmpeg stdin: ' + err.message)));
+    ff.stdin.write(inputBuffer);
+    ff.stdin.end();
+  });
 }
 
 // Formata número BR pra exibição: 5551995304633 → (51) 99530-4633
@@ -178,4 +223,4 @@ async function notifyAssignedConsultor({ leadPhone, assignedUser, fallbackUsers,
   }
 }
 
-module.exports = { sendMessage, sendAudio, uploadMedia, notifyOwner, notifyStudent, notifyAssignedConsultor };
+module.exports = { sendMessage, sendAudio, uploadMedia, transcodeAudio, notifyOwner, notifyStudent, notifyAssignedConsultor };
