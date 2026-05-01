@@ -652,10 +652,10 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
     //
     // Solução robusta: SEMPRE transcoda pra ogg/opus via ffmpeg. Cobre todo
     // input de browser sem depender de detecção fina de codec.
-    let finalBuffer, finalMime = 'audio/ogg', finalExt = 'ogg';
+    let finalBuffer, finalMime = 'audio/mpeg', finalExt = 'mp3';
     try {
       finalBuffer = await transcodeAudio(buffer, baseMime);
-      console.log(`[admin] transcode ${baseMime} → audio/ogg ok (${buffer.length} → ${finalBuffer.length} bytes)`);
+      console.log(`[admin] transcode ${baseMime} → audio/mpeg ok (${buffer.length} → ${finalBuffer.length} bytes)`);
     } catch (e) {
       console.error('[admin] transcode falhou:', e.message);
       return res.status(500).json({ error: 'Falha ao processar áudio (ffmpeg). ' + e.message });

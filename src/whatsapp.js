@@ -53,45 +53,47 @@ async function sendAudio(to, mediaId) {
   return res.data;
 }
 
-// Faz upload de mídia (áudio/imagem/etc) pra Meta Cloud API e retorna media_id.
-// Buffer = conteúdo binário; mimeType ex: 'audio/ogg', 'audio/mpeg', 'audio/mp4'.
+// Faz upload de mídia pra Meta Cloud API e retorna media_id.
+// IMPORTANTE: usa fetch + native FormData, mesma ordem de campos do TTS
+// (que funciona em produção há semanas). Tentativas anteriores com axios
+// + ordem diferente faziam upload OK mas mensagem não chegava no destinatário.
 async function uploadMedia(buffer, mimeType, filename = 'upload.bin') {
-  const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}/media`;
+  const blob = new Blob([buffer], { type: mimeType });
   const form = new FormData();
-  form.append('messaging_product', 'whatsapp');
+  form.append('file', blob, filename);
   form.append('type', mimeType);
-  form.append('file', new Blob([buffer], { type: mimeType }), filename);
-  const res = await axios.post(url, form, {
-    headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
-    maxBodyLength: 32 * 1024 * 1024,
-    maxContentLength: 32 * 1024 * 1024,
-  });
-  return res.data.id;
+  form.append('messaging_product', 'whatsapp');
+
+  const res = await fetch(
+    `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}/media`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.whatsapp.accessToken}` },
+      body: form,
+    }
+  );
+  const data = await res.json();
+  if (!data.id) throw new Error(`Upload de áudio falhou: ${JSON.stringify(data)}`);
+  return data.id;
 }
 
-// Re-encoda áudio pro formato exato que WhatsApp aceita como voice message:
-// ogg/opus mono, 16kHz, 32kbps, application=voip.
-// Esses parâmetros batem com o que o WhatsApp app produz internamente — sem
-// eles, a Meta aceita o upload mas não exibe (ou exibe como arquivo de áudio
-// silencioso) no client do destinatário.
+// Re-encoda áudio pra MP3 — mesmo formato que o TTS (ElevenLabs) usa e que
+// funciona em produção desde o início. Tentativas anteriores com ogg/opus
+// faziam upload OK mas Meta não entregava (motivo exato desconhecido, mas
+// MP3 evita o problema completamente).
 //
-// Necessário porque MediaRecorder do browser produz containers (webm, mp4)
-// com parâmetros genéricos (44.1/48kHz, estéreo) que não casam com o que o
-// WhatsApp client espera pra renderizar voice message.
+// MediaRecorder produz containers (webm, mp4) com codecs variáveis. Sempre
+// re-encoda pra MP3 mono 64kbps — formato amplamente aceito pelo WhatsApp.
 function transcodeAudio(inputBuffer, inputMime) {
   return new Promise((resolve, reject) => {
-    // Sempre re-encoda pra garantir parâmetros corretos. Custo: ~100-300ms
-    // por áudio. Ganho: entrega 100% confiável.
     const args = [
       '-loglevel', 'error',
       '-i', 'pipe:0',
-      '-c:a', 'libopus',
-      '-b:a', '32k',           // bitrate baixo, suficiente pra voz
-      '-ar', '16000',          // sample rate típico de voice message
-      '-ac', '1',              // mono (voice message é sempre mono)
-      '-application', 'voip',  // dica pro encoder otimizar pra voz
-      '-vbr', 'on',
-      '-f', 'ogg',
+      '-c:a', 'libmp3lame',
+      '-b:a', '64k',
+      '-ar', '44100',
+      '-ac', '1',          // mono
+      '-f', 'mp3',
       'pipe:1',
     ];
 
