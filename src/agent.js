@@ -176,6 +176,7 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
       modality:      apptData.modalidade || null,
       scheduledDay:  apptData.dia        || null,
       scheduledTurn: apptData.turno      || null,
+      scheduledHour: apptData.hora       || null,
     });
 
     // Notifica o dono de forma assíncrona (não bloqueia a resposta)

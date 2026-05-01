@@ -327,11 +327,15 @@ router.get('/', (req, res) => {
     list.innerHTML = appts.map(a => {
       const date = new Date(a.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
       const phone = a.phone.replace(/^55(\\d{2})(\\d{5})(\\d{4})$/, '($1) $2-$3');
+      // Mostra "terça às 9h" se tem hora, senão "terça — manhã"
+      const when = a.scheduled_hour
+        ? \`\${a.scheduled_day || '—'} às \${a.scheduled_hour}\`
+        : \`\${a.scheduled_day || '—'} — \${a.scheduled_turn || '—'}\`;
       return \`
         <div class="conv-card" style="margin-bottom:12px">
           <div class="conv-card-header" style="cursor:default">
             <div class="conv-info" style="flex-wrap:wrap;gap:8px">
-              <span class="conv-phone">📅 \${a.scheduled_day || '—'} — \${a.scheduled_turn || '—'}</span>
+              <span class="conv-phone">📅 \${when}</span>
               <div class="conv-stats">
                 <span class="stat">\${a.name || 'Sem nome'}</span>
                 <span class="stat">\${phone}</span>

@@ -54,6 +54,7 @@ db.exec(`
     modality TEXT,
     scheduled_day TEXT,
     scheduled_turn TEXT,
+    scheduled_hour TEXT,
     status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'confirmed', 'cancelled', 'no_show')),
     created_at INTEGER NOT NULL,
     notes TEXT,
@@ -63,6 +64,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_appointments_phone ON appointments(phone);
   CREATE INDEX IF NOT EXISTS idx_appointments_created_at ON appointments(created_at DESC);
 `);
+
+// Migração: adiciona scheduled_hour em bancos que já existiam antes dessa coluna
+const apptCols = db.prepare('PRAGMA table_info(appointments)').all();
+if (!apptCols.find(c => c.name === 'scheduled_hour')) {
+  db.exec('ALTER TABLE appointments ADD COLUMN scheduled_hour TEXT');
+  console.log('[db] migração: coluna scheduled_hour adicionada em appointments');
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // PREPARED STATEMENTS (otimizadas, reusadas)
@@ -128,8 +136,8 @@ const stmts = {
 
   // Appointments
   createAppointment: db.prepare(`
-    INSERT INTO appointments (phone, name, modality, scheduled_day, scheduled_turn, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO appointments (phone, name, modality, scheduled_day, scheduled_turn, scheduled_hour, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
   getAppointments: db.prepare(`
     SELECT a.*, c.name as contact_name
@@ -237,13 +245,14 @@ function clearConversation(phone) {
 // APPOINTMENTS
 // ─────────────────────────────────────────────────────────────────────
 
-function createAppointment(phone, { name, modality, scheduledDay, scheduledTurn }) {
+function createAppointment(phone, { name, modality, scheduledDay, scheduledTurn, scheduledHour }) {
   const result = stmts.createAppointment.run(
     phone,
     name || null,
     modality || null,
     scheduledDay || null,
     scheduledTurn || null,
+    scheduledHour || null,
     Date.now()
   );
   console.log(`[db] agendamento criado id=${result.lastInsertRowid} para ${phone}`);

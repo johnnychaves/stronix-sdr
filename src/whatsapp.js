@@ -68,16 +68,22 @@ async function notifyOwner(leadPhone, apptData) {
 
   const name       = apptData.nome       || 'Não informado';
   const day        = apptData.dia        || '—';
-  const turn       = apptData.turno      || '—';
+  const hour       = apptData.hora       || apptData.turno || '—';
   const modality   = apptData.modalidade || '—';
   const display    = formatBRPhoneDisplay(leadPhone);
+
+  // "terça às 9h" ou fallback "terça — manhã" se só tiver turno
+  const when = apptData.hora
+    ? `${day} às ${hour}`
+    : `${day} — ${hour}`;
 
   const message =
     `🎯 *Novo agendamento STRONIX*\n\n` +
     `👤 Nome: ${name}\n` +
     `📱 Telefone: ${display}\n` +
-    `📅 Quando: ${day} — ${turn}\n` +
+    `📅 Quando: ${when}\n` +
     `🏋️ Modalidade: ${modality}\n\n` +
+    `Confirme com o lead e marque na agenda.\n\n` +
     `Ver conversa: https://stronix-sdr-production.up.railway.app/admin`;
 
   try {
