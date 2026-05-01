@@ -804,27 +804,161 @@ router.get('/', (req, res) => {
     }
     .btn-logout:hover { background: var(--bg-3); color: var(--text-primary); border-color: var(--border-strong); }
 
-    /* ─── TABS ─── */
-    .tabs {
-      display: flex; gap: 0;
-      background: var(--bg-1);
-      border-bottom: 1px solid var(--border);
-      padding: 0 var(--sp-6);
-      height: var(--tabs-h);
-    }
-    .tab {
-      padding: 0 var(--sp-5);
-      font-size: 13.5px; font-weight: 500;
-      color: var(--text-muted); cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: color var(--t-fast), border-color var(--t-fast);
-      display: flex; align-items: center;
-    }
-    .tab.active { color: var(--text-primary); border-bottom-color: var(--brand); }
-    .tab:hover:not(.active) { color: var(--text-secondary); }
+    /* ─── TABS (legacy — escondidas, substituídas pelo rail) ─── */
+    .tabs { display: none; }
+    .tab { display: none; }
 
-    .panel { display: none; padding: var(--sp-6); height: calc(100vh - var(--header-h) - var(--tabs-h)); overflow-y: auto; }
+    /* ════════════════════════════════════════════
+       APP SHELL — rail esquerdo + content
+       ════════════════════════════════════════════ */
+    body { overflow: hidden; }
+    .app { position: relative; height: 100vh; padding-left: 64px; }
+    .app.pinned { padding-left: 240px; transition: padding-left var(--t-base); }
+
+    /* ─── Rail esquerdo (icon-only, expande no hover) ─── */
+    .rail {
+      position: absolute; top: 0; left: 0; bottom: 0; z-index: 30;
+      width: 64px; background: var(--bg-1); border-right: 1px solid var(--border-subtle);
+      display: flex; flex-direction: column; align-items: stretch;
+      transition: width var(--t-base), box-shadow var(--t-base);
+      overflow: visible;
+    }
+    .rail:hover { width: 240px; box-shadow: var(--shadow-lg); }
+    .rail.pinned { width: 240px; }
+
+    .rail-brand {
+      height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 14px;
+      border-bottom: 1px solid var(--border-subtle); overflow: hidden;
+    }
+    .rail-brand .mark {
+      width: 36px; height: 36px; border-radius: 9px;
+      background: linear-gradient(135deg, #00a884, #008f72);
+      display: grid; place-items: center; color: #001f17; font-weight: 800; font-size: 19px;
+      box-shadow: 0 4px 10px rgba(0,168,132,.25); flex-shrink: 0; letter-spacing: -1px;
+    }
+    .rail-brand .word {
+      font-weight: 700; font-size: 15px; letter-spacing: -.2px; white-space: nowrap;
+      opacity: 0; transform: translateX(-6px); transition: all var(--t-base);
+    }
+    .rail:hover .rail-brand .word, .rail.pinned .rail-brand .word { opacity: 1; transform: none; }
+    .rail-brand .word .accent { color: var(--brand); }
+
+    .rail nav { flex: 1; display: flex; flex-direction: column; padding: 10px 8px; gap: 2px; overflow-y: auto; overflow-x: hidden; }
+    .rail nav::-webkit-scrollbar { display: none; }
+
+    .nav-item {
+      position: relative; display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 12px;
+      height: 42px; padding: 0 8px; border-radius: 9px; cursor: pointer;
+      color: var(--text-secondary); transition: all var(--t-fast); overflow: hidden;
+    }
+    .nav-item:hover { background: var(--bg-2); color: var(--text-primary); }
+    .nav-item.active { background: var(--bg-3); color: var(--text-primary); }
+    .nav-item.active::before {
+      content: ""; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 3px;
+      background: var(--brand); border-radius: 0 3px 3px 0;
+    }
+    .nav-item .ic { width: 32px; height: 32px; display: grid; place-items: center; flex-shrink: 0; }
+    .nav-item .ic svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .nav-item.active .ic { color: var(--brand); }
+    .nav-item .lbl {
+      font: 500 13.5px var(--font-sans); white-space: nowrap;
+      opacity: 0; transform: translateX(-4px); transition: all var(--t-base);
+    }
+    .rail:hover .nav-item .lbl, .rail.pinned .nav-item .lbl { opacity: 1; transform: none; }
+    .nav-item .nav-badge {
+      background: var(--bg-3); color: var(--text-secondary); font: 600 11px var(--font-sans);
+      padding: 1px 7px; border-radius: 999px; flex-shrink: 0;
+      opacity: 0; transition: opacity var(--t-base);
+    }
+    .rail:hover .nav-item .nav-badge, .rail.pinned .nav-item .nav-badge { opacity: 1; }
+    .nav-item.active .nav-badge { background: var(--brand-soft); color: var(--brand-light); }
+
+    .nav-group { display: flex; flex-direction: column; }
+    .nav-group .submenu {
+      display: flex; flex-direction: column; gap: 1px; padding-left: 8px; margin: 2px 0 4px;
+      max-height: 0; overflow: hidden; transition: max-height var(--t-base);
+      opacity: 0;
+    }
+    .rail:hover .nav-group.open .submenu, .rail.pinned .nav-group.open .submenu { max-height: 300px; opacity: 1; }
+    .sub-item {
+      display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: center;
+      height: 34px; padding: 0 8px 0 16px; border-radius: 7px; cursor: pointer;
+      color: var(--text-muted); font: 500 12.5px var(--font-sans);
+      border-left: 1px solid var(--border-subtle); margin-left: 14px;
+    }
+    .sub-item:hover { color: var(--text-primary); background: var(--bg-2); }
+    .sub-item.active { color: var(--brand); background: var(--brand-soft); }
+    .sub-item .si { display: grid; place-items: center; }
+    .sub-item .si svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .nav-group .nav-item .chev {
+      width: 14px; height: 14px; color: var(--text-muted); transition: transform var(--t-fast); flex-shrink: 0;
+      opacity: 0; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .rail:hover .nav-group .nav-item .chev, .rail.pinned .nav-group .nav-item .chev { opacity: 1; }
+    .nav-group.open > .nav-item .chev { transform: rotate(90deg); }
+
+    .rail-foot { padding: 8px; border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 4px; }
+    .user-pill {
+      display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 10px;
+      padding: 6px 8px; border-radius: 9px; cursor: pointer; color: var(--text-secondary);
+    }
+    .user-pill:hover { background: var(--bg-2); }
+    .user-pill .av {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: linear-gradient(135deg, #f472b6, #db2777);
+      display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 12px; flex-shrink: 0;
+    }
+    .user-pill .who { display: flex; flex-direction: column; min-width: 0; opacity: 0; transition: opacity var(--t-base); white-space: nowrap; }
+    .rail:hover .user-pill .who, .rail.pinned .user-pill .who { opacity: 1; }
+    .user-pill .who .nm { font: 600 12.5px var(--font-sans); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; }
+    .user-pill .who .role { font-size: 10.5px; color: var(--text-muted); }
+    .user-pill .pill-act { opacity: 0; transition: opacity var(--t-base); background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; }
+    .user-pill .pill-act:hover { color: var(--danger); }
+    .rail:hover .user-pill .pill-act, .rail.pinned .user-pill .pill-act { opacity: 1; }
+    .user-pill .pill-act svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ─── Content (à direita do rail) ─── */
+    .content { display: grid; grid-template-rows: 56px 1fr; height: 100vh; overflow: hidden; min-width: 0; }
+
+    /* Topbar contextual */
+    .topbar {
+      background: var(--bg-1); border-bottom: 1px solid var(--border-subtle);
+      padding: 0 22px; display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    }
+    .crumb { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    .crumb .root { color: var(--text-muted); }
+    .crumb .sep { color: var(--text-faint); }
+    .crumb .now { color: var(--text-primary); font-weight: 600; font-size: 14px; }
+    .crumb .now .crumb-tag { font-size: 11px; font-weight: 500; color: var(--text-muted); background: var(--bg-3); padding: 2px 7px; border-radius: 5px; margin-left: 8px; font-family: var(--font-mono); }
+    .topbar .topbar-acts { display: flex; align-items: center; gap: 8px; }
+    .status-pill { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); padding: 5px 11px; background: var(--bg-2); border: 1px solid var(--border-subtle); border-radius: 999px; }
+    .status-pill .st-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 0 3px rgba(74,222,128,.15); }
+
+    .panel { display: none; height: calc(100vh - 56px); overflow-y: auto; padding: var(--sp-6); }
     .panel.active { display: block; }
+
+    /* Hint do rail (primeira vez) */
+    .rail-hint {
+      position: fixed; left: 80px; bottom: 24px; background: var(--bg-3); border: 1px solid var(--border);
+      padding: 8px 12px; border-radius: 8px; font-size: 11.5px; color: var(--text-secondary);
+      display: flex; align-items: center; gap: 6px; box-shadow: var(--shadow-md); z-index: 100;
+      pointer-events: none; opacity: 0; transition: opacity .3s;
+    }
+    .rail-hint.show { opacity: 1; }
+    .rail-hint kbd { background: var(--bg-1); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font: 600 10px var(--font-mono); color: var(--text-primary); }
+
+    /* Rola sob o rail em mobile (rail vira topbar fixa) */
+    @media (max-width: 720px) {
+      .app { padding-left: 0; padding-top: 56px; }
+      .rail { left: 0; right: 0; bottom: auto; width: 100%; height: 56px; flex-direction: row; }
+      .rail:hover, .rail.pinned { width: 100%; box-shadow: none; }
+      .rail nav { flex-direction: row; padding: 6px 8px; }
+      .rail-brand { display: none; }
+      .nav-item .lbl { display: none; }
+      .nav-item .nav-badge { display: none; }
+      .rail-foot { display: none; }
+      .topbar { padding: 0 14px; }
+    }
 
     /* ─── PROMPT EDITOR ─── */
     .prompt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-4); }
@@ -1341,28 +1475,97 @@ router.get('/', (req, res) => {
 </head>
 <body>
 
-<header>
-  <h1>
-    <span class="logo-icon">S</span>
-    <span class="brand-name">STRONIX</span>
-    <span class="brand-suffix">SDR</span>
-  </h1>
-  <span class="subtitle">Painel de atendimento</span>
-  <div class="badge">Online</div>
-  <div class="user-area">
-    <span id="user-info"></span>
-    <button class="btn-logout" onclick="logout()">Sair</button>
-  </div>
-</header>
+<div class="app" id="app">
 
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('prompt')">Prompt do SDR</div>
-  <div class="tab" onclick="switchTab('conversas')">Conversas ativas</div>
-  <div class="tab" onclick="switchTab('agendamentos')">📅 Agendamentos</div>
-  <div class="tab" onclick="switchTab('alunos')">🎓 Alunos</div>
-  <div class="tab admin-only" onclick="switchTab('users')" style="display:none">👥 Usuários</div>
-  <div class="tab admin-only" onclick="switchTab('metrics')" style="display:none">📊 Métricas</div>
-</div>
+  <!-- ════════ Rail esquerdo ════════ -->
+  <aside class="rail" id="rail">
+    <div class="rail-brand">
+      <div class="mark">S</div>
+      <div class="word">STRONIX <span class="accent">SDR</span></div>
+    </div>
+
+    <nav>
+      <div class="nav-item" data-nav="conversas" onclick="switchTab('conversas', this)" title="Conversas">
+        <span class="ic"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="lbl">Conversas</span>
+        <span class="nav-badge" id="nav-badge-conv">0</span>
+      </div>
+
+      <div class="nav-item" data-nav="agendamentos" onclick="switchTab('agendamentos', this)" title="Agendamentos">
+        <span class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>
+        <span class="lbl">Agendamentos</span>
+        <span class="nav-badge" id="nav-badge-appt">0</span>
+      </div>
+
+      <div class="nav-item" data-nav="alunos" onclick="switchTab('alunos', this)" title="Alunos">
+        <span class="ic"><svg viewBox="0 0 24 24"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></span>
+        <span class="lbl">Alunos</span>
+        <span class="nav-badge" id="nav-badge-students">0</span>
+      </div>
+
+      <div class="nav-item admin-only" data-nav="metrics" onclick="switchTab('metrics', this)" title="Métricas" style="display:none">
+        <span class="ic"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg></span>
+        <span class="lbl">Métricas</span>
+      </div>
+
+      <div style="height:14px"></div>
+
+      <div class="nav-group" id="cfg-group">
+        <div class="nav-item" onclick="document.getElementById('cfg-group').classList.toggle('open')" title="Configurações">
+          <span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+          <span class="lbl">Configurações</span>
+          <svg class="chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+        </div>
+        <div class="submenu">
+          <div class="sub-item" data-nav="prompt" onclick="event.stopPropagation();switchTab('prompt', this)">
+            <span class="si"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></svg></span>
+            <span>Prompt do agente</span>
+          </div>
+          <div class="sub-item admin-only" data-nav="users" onclick="event.stopPropagation();switchTab('users', this)" style="display:none">
+            <span class="si"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+            <span>Usuários &amp; permissões</span>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="rail-foot">
+      <div class="user-pill" title="Sua conta">
+        <div class="av" id="rail-avatar">··</div>
+        <div class="who">
+          <div class="nm" id="rail-username">—</div>
+          <div class="role" id="rail-userrole">—</div>
+        </div>
+        <button class="pill-act" onclick="logout()" title="Sair">
+          <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ════════ Conteúdo ════════ -->
+  <div class="content">
+
+    <div class="topbar">
+      <div class="crumb">
+        <span class="root">STRONIX SDR</span>
+        <span class="sep">›</span>
+        <span class="now" id="crumb-now">Conversas <span class="crumb-tag" id="crumb-tag"></span></span>
+      </div>
+      <div class="topbar-acts">
+        <div class="status-pill"><div class="st-dot"></div>Agente online · WhatsApp conectado</div>
+      </div>
+    </div>
+
+    <!-- Tabs legacy (escondidas, só mantidas pra compat com JS antigo) -->
+    <div class="tabs" aria-hidden="true">
+      <div class="tab active" onclick="switchTab('prompt')">Prompt</div>
+      <div class="tab" onclick="switchTab('conversas')">Conversas</div>
+      <div class="tab" onclick="switchTab('agendamentos')">Agendamentos</div>
+      <div class="tab" onclick="switchTab('alunos')">Alunos</div>
+      <div class="tab admin-only" onclick="switchTab('users')">Usuários</div>
+      <div class="tab admin-only" onclick="switchTab('metrics')">Métricas</div>
+    </div>
 
 <div id="tab-prompt" class="panel active">
   <div class="prompt-header">
@@ -1495,6 +1698,11 @@ router.get('/', (req, res) => {
     <div class="empty">Carregando...</div>
   </div>
 </div>
+
+  </div><!-- /.content -->
+</div><!-- /.app -->
+
+<div class="rail-hint" id="rail-hint">Passe o mouse no rail para expandir · <kbd>⌘</kbd> <kbd>B</kbd> para fixar</div>
 
 <script>
   let originalPrompt = '';
@@ -1790,6 +1998,8 @@ router.get('/', (req, res) => {
 
     document.getElementById('filter-count').textContent =
       \`\${convs.length}\${convs.length !== allConversations.length ? ' de ' + allConversations.length : ''}\`;
+    const navBadge = document.getElementById('nav-badge-conv');
+    if (navBadge) navBadge.textContent = String(allConversations.length);
 
     const list = document.getElementById('inbox-list');
     if (!convs.length) {
@@ -2122,11 +2332,49 @@ router.get('/', (req, res) => {
     loadConversations();
   }
 
-  function switchTab(tab) {
+  const CRUMB_LABELS = {
+    prompt:        { label: 'Prompt do agente', tag: '' },
+    conversas:     { label: 'Conversas',         tag: '' },
+    agendamentos:  { label: 'Agendamentos',      tag: '' },
+    alunos:        { label: 'Alunos',            tag: '' },
+    users:         { label: 'Usuários & permissões', tag: '' },
+    metrics:       { label: 'Métricas',          tag: 'últimos 30d' },
+  };
+
+  function updateCrumb(tab) {
+    const meta = CRUMB_LABELS[tab];
+    if (!meta) return;
+    const now = document.getElementById('crumb-now');
+    const tagEl = document.getElementById('crumb-tag');
+    if (now) {
+      now.firstChild.nodeValue = meta.label + ' ';
+    }
+    if (tagEl) {
+      tagEl.textContent = meta.tag;
+      tagEl.style.display = meta.tag ? '' : 'none';
+    }
+  }
+
+  function setActiveNav(tab) {
+    document.querySelectorAll('.nav-item[data-nav], .sub-item[data-nav]').forEach(el => {
+      el.classList.toggle('active', el.dataset.nav === tab);
+    });
+    if (tab === 'prompt' || tab === 'users') {
+      const cfg = document.getElementById('cfg-group');
+      if (cfg) cfg.classList.add('open');
+    }
+  }
+
+  function switchTab(tab, navEl) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    event.target.classList.add('active');
+    const legacyTab = document.querySelector('.tabs .tab[onclick*="\\'' + tab + '\\'"]');
+    if (legacyTab) legacyTab.classList.add('active');
     document.getElementById('tab-' + tab).classList.add('active');
+
+    setActiveNav(tab);
+    updateCrumb(tab);
+
     // Polling só na aba Inbox — outras paradas
     if (tab === 'conversas') {
       loadConversations();
@@ -2134,6 +2382,7 @@ router.get('/', (req, res) => {
     } else {
       stopPolling();
     }
+    if (tab === 'prompt') loadPrompt();
     if (tab === 'agendamentos') loadAppointments();
     if (tab === 'alunos') loadStudents();
     if (tab === 'users') loadUsers();
@@ -2285,6 +2534,8 @@ router.get('/', (req, res) => {
   async function loadStudents() {
     const res = await fetch('/admin/api/students');
     const students = await res.json();
+    const navBadge = document.getElementById('nav-badge-students');
+    if (navBadge) navBadge.textContent = String(students.length);
     const list = document.getElementById('students-list');
     if (!students.length) {
       list.innerHTML = '<div class="empty">Nenhum aluno cadastrado ainda. Adiciona pelo formulário acima.</div>';
@@ -2334,6 +2585,8 @@ router.get('/', (req, res) => {
   async function loadAppointments() {
     const res = await fetch('/admin/api/appointments');
     const appts = await res.json();
+    const navBadge = document.getElementById('nav-badge-appt');
+    if (navBadge) navBadge.textContent = String(appts.filter(a => a.status === 'pending' || a.status === 'confirmed').length);
     const list = document.getElementById('appt-list');
 
     if (!appts.length) {
@@ -2384,7 +2637,14 @@ router.get('/', (req, res) => {
       if (!r.ok) { location.href = '/admin/login'; return; }
       const data = await r.json();
       me = data.user;
-      document.getElementById('user-info').textContent = \`\${me.displayName} · \${me.role === 'admin' ? '👑 admin' : '🎯 consultora'}\`;
+      // User pill no rail
+      const initials = (me.displayName || me.username || '··').trim().split(/\\s+/).map(w => w[0]).slice(0,2).join('').toUpperCase() || '··';
+      const avEl = document.getElementById('rail-avatar');
+      const nmEl = document.getElementById('rail-username');
+      const roleEl = document.getElementById('rail-userrole');
+      if (avEl) avEl.textContent = initials;
+      if (nmEl) nmEl.textContent = me.displayName || me.username;
+      if (roleEl) roleEl.textContent = me.role === 'admin' ? 'Admin' : 'Consultora';
       // Mostra abas só de admin
       if (me.role === 'admin') {
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
@@ -2399,10 +2659,42 @@ router.get('/', (req, res) => {
     location.href = '/admin/login';
   }
 
+  // ─── Pin do rail (Cmd+B / Ctrl+B) ───
+  function setupRailPin() {
+    const rail = document.getElementById('rail');
+    const app = document.getElementById('app');
+    const hint = document.getElementById('rail-hint');
+    if (!rail || !app) return;
+    document.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        rail.classList.toggle('pinned');
+        app.classList.toggle('pinned');
+        try { localStorage.setItem('railPinned', rail.classList.contains('pinned') ? '1' : '0'); } catch {}
+      }
+    });
+    // Restaura preferência
+    try {
+      if (localStorage.getItem('railPinned') === '1') {
+        rail.classList.add('pinned');
+        app.classList.add('pinned');
+      }
+    } catch {}
+    // Hint na primeira visita
+    try {
+      if (!localStorage.getItem('railHintSeen') && hint) {
+        setTimeout(() => hint.classList.add('show'), 1200);
+        setTimeout(() => { hint.classList.remove('show'); localStorage.setItem('railHintSeen','1'); }, 6500);
+      }
+    } catch {}
+  }
+
   (async () => {
+    setupRailPin();
     await loadMe();
     await refreshUserCache();
-    loadPrompt();
+    // Default: aba Conversas (em vez de Prompt)
+    switchTab('conversas');
 
     // Permissão de notificação (silencioso se já concedida ou negada)
     if ('Notification' in window && Notification.permission === 'default') {
