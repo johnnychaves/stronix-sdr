@@ -2,12 +2,15 @@
 // AGENT V2 — Johnny modular (núcleo + módulos sob demanda)
 // ═══════════════════════════════════════════════════════════════
 //
-// Implementação das Fases 0, 1 e 2 do plano de refatoração v2:
+// Implementação das Fases 0, 1, 2 e 3 do plano de refatoração v2:
 // - Parser de [ESTADO:...] e [MODULO_REQUERIDO:nome|nenhum]
 // - Detector regex de pedido de valor (auto-incremento backend)
-// - Montador de prompt em camadas (núcleo cacheado + KB cacheada + estado + módulo + dyn ctx)
+// - Montador de prompt em camadas (núcleo cacheado + KB cacheada + estado + módulo + resumo + dyn ctx)
 // - Roteador de módulos determinístico (router-v2.js) — decide quais módulos
 //   carregar dinamicamente baseado em estado + keywords no texto do lead
+// - Resumo dinâmico (resumo-dinamico.js) — comprime histórico longo via Haiku
+//   4.5 em background; conversas com 20+ msgs usam (resumo + msgs novas) em
+//   vez de 50 msgs cheias. Fire-and-forget após responder.
 // - replyV2() paralelo ao reply() v1; ativa via AGENT_VERSION=v2
 
 const Anthropic = require('@anthropic-ai/sdk');
@@ -15,6 +18,10 @@ const config = require('./config');
 const db = require('./db');
 const NUCLEO_V2 = require('./prompt-nucleo-v2');
 const { routeModules } = require('./router-v2');
+const {
+  buildResumoBlock,
+  updateResumoDinamicoBackground,
+} = require('./resumo-dinamico');
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -166,8 +173,8 @@ function buildModulesBlock(moduleNames) {
 }
 
 // Monta sistema da chamada Claude em camadas com cache control.
-// Ordem (importante pra cache hit): núcleo → kb → estado → módulos → dynamic ctx
-function buildSystemBlocks({ state, moduleNames, dynamicCtx }) {
+// Ordem (importante pra cache hit): núcleo → kb → estado → módulos → resumo → dynamic ctx
+function buildSystemBlocks({ state, moduleNames, dynamicCtx, resumoBlock }) {
   const blocks = [
     // Camada 1: Núcleo estático (~12.5k chars). CACHEADO.
     { type: 'text', text: NUCLEO_V2, cache_control: { type: 'ephemeral' } },
@@ -186,6 +193,10 @@ function buildSystemBlocks({ state, moduleNames, dynamicCtx }) {
   // Camada 4: Módulos carregados. SEM CACHE (varia por turno).
   const modBlock = buildModulesBlock(moduleNames);
   if (modBlock) blocks.push({ type: 'text', text: modBlock });
+
+  // Camada 4.5: Resumo dinâmico das mensagens antigas (Fase 3). SEM CACHE.
+  // Só presente se conversa atingiu TRIGGER_THRESHOLD e Haiku já gerou um resumo.
+  if (resumoBlock && resumoBlock.trim()) blocks.push({ type: 'text', text: resumoBlock });
 
   // Camada 5: Sinais dinâmicos (primeiro turno, fora horário, retornando, áudio). SEM CACHE.
   if (dynamicCtx && dynamicCtx.trim()) blocks.push({ type: 'text', text: dynamicCtx });
@@ -312,14 +323,23 @@ async function replyV2(from, text, { isAudio = false } = {}) {
     db.updateLeadState(from, { tags_sistema_ativas: tagsAtivas });
   }
 
-  // 8. Histórico (últimas 50 — Fase 3 troca por resumo+10)
-  const history = db.getHistory(from, 50);
+  // 8. Histórico — Fase 3 (Anexo 5/Seção 4): se já tem resumo, prompt usa
+  // resumo_dinamico + ÚLTIMAS 10 mensagens (fixas). Senão, carrega 50 últimas.
+  let history;
+  let resumoBlock = '';
+  if (stateNow.resumo_dinamico && (stateNow.resumo_dinamico_n_msgs || 0) > 0) {
+    history = db.getHistory(from, 10);
+    resumoBlock = buildResumoBlock(stateNow);
+  } else {
+    history = db.getHistory(from, 50);
+  }
 
-  // 9. Monta system blocks em camadas
+  // 9. Monta system blocks em camadas (resumoBlock só vai se preenchido)
   const systemBlocks = buildSystemBlocks({
     state: stateNow,
     moduleNames,
     dynamicCtx,
+    resumoBlock,
   });
 
   // 10. Chama Claude
@@ -368,6 +388,13 @@ async function replyV2(from, text, { isAudio = false } = {}) {
 
   console.log(`[agent-v2] ${from} estagio=${stateNow.estagio_atual} insist=${stateNow.insistencias_valor} mod=${moduleNames.join(',') || 'nenhum'} → "${cleanText.slice(0, 60)}..."`);
 
+  // 15. Resumo dinâmico (Fase 3) — fire-and-forget. Não bloqueia a resposta.
+  // Se conversa atingiu threshold, gera/atualiza o resumo via Haiku em background.
+  // Próximo turno usará o resumo no lugar do histórico longo.
+  updateResumoDinamicoBackground(from).catch(err => {
+    console.error('[agent-v2] erro no resumo background:', err.message);
+  });
+
   return {
     text: cleanText,
     useAudio,
@@ -407,7 +434,10 @@ async function simulateReplyV2(history, userMessage, simulatedState = null) {
     text: userMessage,
     modulo_pendente: state.modulo_pendente,
   });
-  const systemBlocks = buildSystemBlocks({ state, moduleNames, dynamicCtx });
+  // Fase 3: se state simulado tem resumo_dinamico, injeta no prompt (paridade com replyV2).
+  // Playground não persiste; o cliente pode passar resumo simulado pra testar fluxo.
+  const resumoBlock = state.resumo_dinamico ? buildResumoBlock(state) : '';
+  const systemBlocks = buildSystemBlocks({ state, moduleNames, dynamicCtx, resumoBlock });
 
   const cleanHistory = (history || [])
     .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')

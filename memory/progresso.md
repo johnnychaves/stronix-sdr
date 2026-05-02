@@ -4,6 +4,59 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 — Fase 3: Resumo dinâmico em background (PR #36)
+
+**Contexto:** Conversas longas (20+ msgs) carregavam 50 msgs cheias no prompt cada turno → token bloat + cache miss em conversas que crescem. Fase 3 substitui por (resumo estruturado + msgs novas desde último resumo).
+
+**Decisões arquiteturais:**
+
+1. **Modelo: Haiku 4.5 (não Sonnet 4.5)** — sumarização estruturada com formato fixo é caso ideal pra modelo menor. Custo: ~$0,001 por update vs ~$0,01/turn do Sonnet (10x menos).
+
+2. **Background fire-and-forget** — `updateResumoDinamicoBackground(phone)` chamado SEM await no fim do replyV2. Latência adicional na resposta principal: zero. Próximo turno usa resumo atualizado.
+
+3. **Trigger: 20 msgs total** (10 turnos). Update incremental a cada 10 msgs novas. Trade-off: número alto = resumo desatualiza, número baixo = custo sobe. 10/10 fica balanceado.
+
+4. **Formato estruturado** — não JSON (Haiku pode quebrar). Markdown texto com 6 seções fixas (LEAD, OBJETIVO, PONTOS CHAVE, OBJEÇÕES TRATADAS, PENDENTE, TOM). ~300-500 chars típico.
+
+5. **Camada própria no system block** (4.5 — entre módulos e dynamic ctx). Sem cache (varia por turno). Núcleo + KB ainda cacheados nas camadas 1+2.
+
+**Implementação:**
+
+- [src/resumo-dinamico.js](src/resumo-dinamico.js) novo (~140 linhas):
+  - `shouldUpdateResumo(state, totalMsgs)` — pure, decide trigger
+  - `gerarResumo(messages, contactName)` — chama Haiku 4.5
+  - `updateResumoDinamicoBackground(phone)` — wrapper async com try/catch
+  - `buildResumoBlock(state)` — formata bloco pro system
+  - `stripTags(content)` + `formatTranscript(messages)` — helpers
+- [src/db.js](src/db.js): migração idempotente coluna `resumo_dinamico_n_msgs INTEGER`, helper `getAllMessages(phone)`, exports `getContact` + `getAllMessages`
+- [src/agent-v2.js](src/agent-v2.js):
+  - `replyV2`: se `state.resumo_dinamico` existe, history = só msgs novas + resumoBlock no system. Após responder, dispara `updateResumoDinamicoBackground` fire-and-forget.
+  - `simulateReplyV2`: paridade. Aceita resumo simulado via `state.resumo_dinamico` (playground não persiste).
+  - `buildSystemBlocks`: novo parâmetro `resumoBlock` opcional, vira camada 4.5
+
+**Testes:**
+- [scripts/test-resumo-dinamico.js](scripts/test-resumo-dinamico.js): 16/16 passou. Cobre `shouldUpdateResumo` (6 casos), `stripTags` (5), `formatTranscript` (2), `buildResumoBlock` (3). Roda offline.
+- Suite offline total: **90/90 passou** (21 regex-valor + 39 router + 14 state-update + 16 resumo-dinamico).
+
+**Bateria F (cenário novo F.1):**
+- F.1 — Resumo injetado (continuação coerente): ✅ PASS
+- State injetado: Maria, Pilates, manhã, resumo de 20 msgs anteriores
+- Turno 1 ("qual o valor mesmo?"): bot identificou Maria, apresentou tabela de Pilates (modalidade do resumo, sem inventar), carregou módulo planos_e_precos via Roteador, propôs visita de manhã (disponibilidade do resumo). Não repetiu nenhuma pergunta de qualificação.
+- Turno 2 ("beleza, terça às 9h então"): bot emitiu `[AGENDAMENTO:nome=Maria|dia=terca|hora=9h|modalidade=pilates]` correto, avançou pra `agendamento_confirmado`.
+- Resumo dinâmico está funcionando como projetado: bot retoma conversa de meio sem perder contexto.
+
+**Bateria E re-rodada com Fase 3 ativa:**
+- 22/22 sem crash. Custo: $0,32 (~R$1,78)
+- Bateria E: **4/6 passou** (E.1 + E.2_EXT + E.4 + F.1 ✅; E.2 e E.3 mantém status conhecido)
+- E.2: cenário curto (4 turnos) não exercita 3 tentativas — coberto em test-state-update.js
+- E.3: variabilidade do LLM esquecendo tag em respostas longas (known issue do PR33, esperando rollout)
+
+**Política de flag:** `AGENT_VERSION=v1` continua default. Smoke manual no playground v2 + Trilha B (admin tooling — PR37) ainda pré-requisitos antes de v2 em 5%.
+
+**Importante (sinalizado no PR):** Anexo 5 do doc mestre não está no repo. Implementação foi feita com base em interpretação do contexto + comentários antigos do código (`agent-v2.js:279` original mencionava "Fase 3 troca por resumo+10"). Se o doc mestre tiver decisões diferentes (modelo, threshold, formato), Johnny pode redirecionar em review.
+
+---
+
 ## 2026-05-02 — Fase 2: Roteador determinístico de módulos (PR #34)
 
 **Contexto:** Após PR33 mergear (3 fixes pré-Fase 2), construído o Roteador da Fase 2. Antes, replyV2 só carregava `modulo_pendente` do turno anterior — IA caia em fallback "deixa eu confirmar com a equipe" em conversas com objeção/contexto fora do roteiro principal. Agora o Roteador decide dinamicamente quais módulos carregar.

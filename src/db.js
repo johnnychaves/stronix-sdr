@@ -254,6 +254,14 @@ if (!msgCols.find(c => c.name === 'delivery_status')) {
   console.log('[db] migração: colunas delivery_status/delivered_at/read_at adicionadas em messages');
 }
 
+// Migração Fase 3 (PR #36): número de msgs já cobertas pelo resumo dinâmico.
+// Permite identificar quais msgs ainda NÃO foram resumidas (e devem ir cruas no contexto).
+const lsCols = db.prepare('PRAGMA table_info(lead_state)').all();
+if (!lsCols.find(c => c.name === 'resumo_dinamico_n_msgs')) {
+  db.exec('ALTER TABLE lead_state ADD COLUMN resumo_dinamico_n_msgs INTEGER NOT NULL DEFAULT 0');
+  console.log('[db] migração: coluna resumo_dinamico_n_msgs adicionada em lead_state');
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // PREPARED STATEMENTS (otimizadas, reusadas)
 // ─────────────────────────────────────────────────────────────────────
@@ -509,6 +517,12 @@ function getHistory(phone, limit = 100) {
   const rows = stmts.getRecentMessages.all(phone, limit);
   // Vem em ordem DESC (mais recente primeiro), inverte pra ordem cronológica
   return rows.reverse();
+}
+
+// Retorna TODAS as mensagens da conversa em ordem cronológica.
+// Usado pelo resumo dinâmico (Fase 3) pra alimentar Haiku 4.5.
+function getAllMessages(phone) {
+  return stmts.getMessagesForContact.all(phone);
 }
 
 function getMessageCount(phone) {
@@ -944,7 +958,7 @@ const LEAD_STATE_FIELDS = [
   'tentativas_objecao_atual', 'aula_experimental_agendada', 'data_agendamento',
   'hora_agendamento', 'modalidade_agendada', 'primeira_mensagem_em',
   'ultima_mensagem_em', 'total_mensagens_lead', 'total_mensagens_johnny',
-  'resumo_dinamico', 'tags_sistema_ativas', 'is_aluno_existente',
+  'resumo_dinamico', 'resumo_dinamico_n_msgs', 'tags_sistema_ativas', 'is_aluno_existente',
   'encerrada_em', 'motivo_encerramento', 'modulo_pendente',
 ];
 
@@ -1184,6 +1198,8 @@ module.exports = {
   updateAudioFlags,
   addMessage,
   getHistory,
+  getAllMessages,
+  getContact,
   getMessageCount,
   getDaysSinceLastContact,
   getAllConversations,
