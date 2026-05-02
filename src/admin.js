@@ -1567,61 +1567,100 @@ router.get('/', (req, res) => {
       border-left-color: var(--border-subtle); color: var(--text-faint); font-style: italic;
     }
 
-    /* Input */
+    /* ════════════════════════════════════════════════
+       COMPOSER — padrão WhatsApp Web
+       [+] [───── pill com textarea + emoji ─────] [mic|send]
+       ════════════════════════════════════════════════ */
     .chat-input-wrap { flex-shrink: 0; }
     .chat-input-bar {
-      padding: var(--sp-3) var(--sp-4);
+      padding: 8px 14px;
       background: var(--bg-3); border-top: 1px solid var(--border);
-      display: flex; gap: var(--sp-3); align-items: flex-end;
+      display: flex; gap: 8px; align-items: flex-end;
+    }
+
+    /* Botão circular base (compartilhado por +, mic, send) */
+    .composer-btn {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all var(--t-fast);
+      background: transparent; color: var(--text-secondary);
+    }
+    .composer-btn:hover { background: var(--bg-4); color: var(--text-primary); }
+    .composer-btn:active { transform: scale(.94); }
+    .composer-btn svg {
+      width: 22px; height: 22px;
+      stroke: currentColor; fill: none;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+
+    /* + de anexo (esquerda) — abre menu de imagens/arquivos no futuro */
+    .chat-attach { font-size: 26px; line-height: 1; font-weight: 300; }
+
+    /* Pill que envolve textarea + emoji (centro, expansível) */
+    .chat-input-pill {
+      flex: 1; min-width: 0;
+      background: var(--bg-2);
+      border: 1px solid transparent;
+      border-radius: 22px;
+      padding: 0 4px 0 16px;
+      display: flex; align-items: flex-end;
+      transition: background var(--t-fast), border-color var(--t-fast);
+      min-height: 44px;
+    }
+    .chat-input-pill:focus-within {
+      background: var(--bg-1);
+      border-color: rgba(0,168,132,.35);
     }
     .chat-input {
-      flex: 1; background: var(--bg-2); color: var(--text-primary);
-      border: 1px solid transparent;
-      border-radius: var(--r-md);
-      padding: 11px 14px;
-      font-size: 14px; resize: none; outline: none;
-      font-family: inherit; line-height: 1.45;
-      min-height: 44px; max-height: 200px;
-      transition: background var(--t-fast), border-color var(--t-fast);
+      flex: 1; min-width: 0;
+      background: transparent; color: var(--text-primary);
+      border: none; outline: none; resize: none;
+      padding: 11px 0 11px 0;
+      font-size: 14.5px; font-family: inherit;
+      line-height: 1.4;
+      min-height: 22px; max-height: 160px;
     }
     .chat-input::placeholder { color: var(--text-muted); }
-    .chat-input:focus { background: var(--bg-1); border-color: var(--brand); }
 
-    .chat-send {
-      background: var(--brand); color: #001f17;
-      border: none; width: 44px; height: 44px;
-      border-radius: 50%; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; transition: all var(--t-fast);
-      box-shadow: 0 4px 10px rgba(0,168,132,.25);
-    }
-    .chat-send:hover { background: var(--brand-light); transform: scale(1.05); box-shadow: 0 6px 14px rgba(0,168,132,.4); }
-    .chat-send:active { transform: scale(.96); }
-    .chat-send:disabled { background: var(--bg-4); color: var(--text-muted); cursor: not-allowed; transform: none; box-shadow: none; }
-
-    /* Botão de microfone (composer) */
-    .chat-mic {
-      background: var(--bg-4); color: var(--text-secondary);
-      border: none; width: 44px; height: 44px;
-      border-radius: 50%; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; transition: all var(--t-fast);
-    }
-    .chat-mic:hover { background: var(--bg-5); color: var(--text-primary); }
-    .chat-mic:active { transform: scale(.96); }
-    .chat-mic svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-
-    /* Botão emoji (composer) */
+    /* Emoji DENTRO da pill (ao lado direito do textarea) */
     .chat-emoji {
+      width: 36px; height: 36px;
+      border-radius: 50%; border: none;
       background: transparent; color: var(--text-secondary);
-      border: none; width: 40px; height: 40px;
-      border-radius: 50%; cursor: pointer;
+      cursor: pointer; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; transition: all var(--t-fast);
       font-size: 22px; line-height: 1;
+      margin-bottom: 4px;
+      transition: background var(--t-fast), color var(--t-fast);
     }
     .chat-emoji:hover { background: var(--bg-4); }
     .chat-emoji.active { background: var(--brand-soft); color: var(--brand); }
+
+    /* Mic / Send — só um aparece por vez (toggle por has-text) */
+    .chat-mic, .chat-send {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all var(--t-fast);
+    }
+    .chat-mic { background: transparent; color: var(--text-secondary); }
+    .chat-mic:hover { background: var(--bg-4); color: var(--text-primary); }
+    .chat-mic:active { transform: scale(.94); }
+    .chat-mic svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    .chat-send {
+      background: var(--brand); color: #001f17;
+      box-shadow: 0 4px 10px rgba(0,168,132,.25);
+    }
+    .chat-send:hover { background: var(--brand-light); transform: scale(1.06); box-shadow: 0 6px 14px rgba(0,168,132,.4); }
+    .chat-send:active { transform: scale(.96); }
+    .chat-send:disabled { background: var(--bg-4); color: var(--text-muted); cursor: not-allowed; transform: none; box-shadow: none; }
+    .chat-send svg { width: 22px; height: 22px; }
+
+    /* Toggle: tem texto → mostra send, esconde mic | sem texto → ao contrário */
+    .chat-input-bar.has-text .chat-mic { display: none; }
+    .chat-input-bar:not(.has-text) .chat-send { display: none; }
 
     /* Painel de emojis (popup acima do composer) */
     .chat-input-wrap { position: relative; }
@@ -2700,14 +2739,17 @@ router.get('/', (req, res) => {
       return \`
         \${banner}
         <div class="emoji-panel hidden" id="emoji-panel"></div>
-        <div class="chat-input-bar">
-          <button class="chat-emoji" id="chat-emoji-btn" onclick="toggleEmojiPanel(event)" title="Inserir emoji" type="button">😊</button>
-          <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}..." rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)"></textarea>
-          <button class="chat-mic" onclick="startRecording('\${c.from}')" title="Gravar áudio">
+        <div class="chat-input-bar" id="chat-input-bar">
+          <button class="composer-btn chat-attach" onclick="onAttachClick(event)" title="Anexar arquivo, imagem ou documento" type="button">+</button>
+          <div class="chat-input-pill">
+            <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}..." rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)"></textarea>
+            <button class="chat-emoji" id="chat-emoji-btn" onclick="toggleEmojiPanel(event)" title="Inserir emoji" type="button">😊</button>
+          </div>
+          <button class="chat-mic" onclick="startRecording('\${c.from}')" title="Gravar áudio" type="button">
             <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
           </button>
-          <button class="chat-send" onclick="sendChatReply('\${c.from}')" title="Enviar (Enter)">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21l20.99-9L2.01 3 2 10l15 2-15 2z"/></svg>
+          <button class="chat-send" onclick="sendChatReply('\${c.from}')" title="Enviar (Enter)" type="button">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21l20.99-9L2.01 3 2 10l15 2-15 2z"/></svg>
           </button>
         </div>
       \`;
@@ -2761,10 +2803,21 @@ router.get('/', (req, res) => {
 
   function autoGrowChat(el) {
     if (!el) return;
-    const min = 44, max = 200;
-    el.style.height = min + 'px';
+    const min = 22, max = 160;
+    el.style.height = 'auto';
     const sh = el.scrollHeight;
-    if (sh > min) el.style.height = Math.min(max, sh) + 'px';
+    el.style.height = Math.min(max, Math.max(min, sh)) + 'px';
+    // Alterna mic/send conforme tem texto ou não
+    const bar = document.getElementById('chat-input-bar');
+    if (bar) {
+      bar.classList.toggle('has-text', el.value.trim().length > 0);
+    }
+  }
+
+  // + (anexo) — placeholder até implementar upload de imagem/arquivo
+  function onAttachClick(e) {
+    if (e) e.stopPropagation();
+    alert('Em breve: enviar imagens, documentos e arquivos. Por enquanto use texto e áudio.');
   }
 
   function handleChatKey(e, phone) {
