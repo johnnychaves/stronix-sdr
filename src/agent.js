@@ -114,6 +114,16 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
     dynamicCtx += '\n\n[PRIMEIRO_TURNO] — esta é a primeira mensagem dessa conversa. APLIQUE A REGRA 1 DO TOPO BLINDADO À RISCA: máximo 2 linhas, saudação curta + 1 pergunta binária, e nada mais. PROIBIDO listar valor, horário, endereço, plano, modalidade ou estrutura, mesmo que o lead tenha pedido várias coisas de uma vez. Reflita por 1 segundo se a resposta cabe nas 2 linhas. Se passou disso, está errada.';
   }
 
+  // Knowledge base — infos atuais da STRONIX (planos, horários, promo, etc).
+  // Editáveis pelo painel sem mexer no prompt cacheado. Vai no dinâmico pra
+  // mudanças refletirem instantaneamente.
+  try {
+    const kb = db.buildAcademiaInfoBlock();
+    if (kb) dynamicCtx += kb;
+  } catch (e) {
+    console.error('[agent] erro ao buildar academia_info:', e.message);
+  }
+
   // Histórico completo do banco (já inclui a mensagem do user que acabamos de salvar)
   const history = db.getHistory(from, 100);
 
@@ -206,6 +216,50 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
   return { text: cleanText, useAudio, askingForAudio };
 }
 
+// Simulação de conversa (playground) — NÃO toca DB, NÃO envia WhatsApp.
+// Usa system prompt + knowledge base atuais. Aceita histórico ad-hoc do
+// frontend, manda pro Claude e retorna text + tokens + cache info.
+async function simulateReply(history, userMessage) {
+  // Monta dynamic context simplificado (não tem fluxo de áudio, retorno, etc)
+  let dynamicCtx = '\n\n[PLAYGROUND] — esta é uma simulação para teste. O destinatário é a equipe testando o agente, não um lead real.';
+  try {
+    const kb = db.buildAcademiaInfoBlock();
+    if (kb) dynamicCtx += kb;
+  } catch {}
+
+  const systemBlocks = [
+    { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: dynamicCtx },
+  ];
+
+  // history vem em formato { role, content }; valida e limita
+  const cleanHistory = (history || [])
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-50)
+    .map(m => ({ role: m.role, content: m.content }));
+  cleanHistory.push({ role: 'user', content: userMessage });
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-5-20250929',
+    max_tokens: 1024,
+    system: systemBlocks,
+    messages: cleanHistory,
+  });
+
+  let answer = response.content?.[0]?.text || '';
+  // Limpa tags de áudio (não relevantes em playground)
+  answer = answer.replace(/\[AUDIO\]\s*/i, '').replace(/\[PEDIR_AUDIO\]\s*/gi, '').trim();
+  answer = answer.replace(/\s*[—–]\s*/g, ', ');
+
+  return {
+    text: answer,
+    tokensInput: response.usage?.input_tokens || 0,
+    tokensOutput: response.usage?.output_tokens || 0,
+    cacheReadTokens: response.usage?.cache_read_input_tokens || 0,
+    cacheCreationTokens: response.usage?.cache_creation_input_tokens || 0,
+  };
+}
+
 function getSystemPrompt() {
   return SYSTEM_PROMPT;
 }
@@ -223,4 +277,4 @@ function clearConversation(from) {
   db.clearConversation(from);
 }
 
-module.exports = { reply, isAffirmative, isNegative, getContact, setAudioFlags, getSystemPrompt, updateSystemPrompt, getConversations, clearConversation };
+module.exports = { reply, simulateReply, isAffirmative, isNegative, getContact, setAudioFlags, getSystemPrompt, updateSystemPrompt, getConversations, clearConversation };
