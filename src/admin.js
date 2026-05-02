@@ -655,8 +655,22 @@ router.post('/api/conversations/:phone/reply', async (req, res) => {
     db.updateLastContact(phone);
     res.json({ ok: true });
   } catch (err) {
-    console.error('[admin] erro ao enviar reply humano:', err.message);
-    res.status(500).json({ error: 'Falha ao enviar mensagem' });
+    const meta = err.response?.data?.error;
+    console.error('[admin] erro ao enviar reply humano:', meta || err.message);
+    // Erros típicos da Meta — traduzir pra mensagem amigável
+    if (meta && (meta.code === 131047 || /re-engagement|24-hour/i.test(meta.message || ''))) {
+      return res.status(400).json({
+        error: 'Esse contato não respondeu nas últimas 24h. Pra reativar, peça pra ele te mandar uma mensagem primeiro (ou use template aprovada — em breve).',
+        code: 'window_24h_closed',
+      });
+    }
+    if (meta && meta.code === 131026) {
+      return res.status(400).json({
+        error: 'Número inválido ou não tem WhatsApp. Confere o telefone.',
+        code: 'invalid_recipient',
+      });
+    }
+    res.status(500).json({ error: meta?.message || 'Falha ao enviar mensagem' });
   }
 });
 
@@ -761,9 +775,21 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
     console.log(`[admin] ${req.user.username} enviou áudio para ${phone} (${finalBuffer.length} bytes, ${finalMime}, wamid=${wamid})`);
     res.json({ ok: true });
   } catch (err) {
-    const meta = err.response?.data || err.message;
-    console.error('[admin] erro ao enviar audio:', meta);
-    res.status(500).json({ error: 'Falha ao enviar áudio. Verifique se o número aceita áudio e tente novamente.' });
+    const meta = err.response?.data?.error;
+    console.error('[admin] erro ao enviar audio:', meta || err.message);
+    if (meta && (meta.code === 131047 || /re-engagement|24-hour/i.test(meta.message || ''))) {
+      return res.status(400).json({
+        error: 'Esse contato não respondeu nas últimas 24h. Pra mandar áudio, peça pra ele te mandar uma mensagem primeiro.',
+        code: 'window_24h_closed',
+      });
+    }
+    if (meta && meta.code === 131026) {
+      return res.status(400).json({
+        error: 'Número inválido ou não tem WhatsApp.',
+        code: 'invalid_recipient',
+      });
+    }
+    res.status(500).json({ error: meta?.message || 'Falha ao enviar áudio. Verifique se o número aceita áudio e tente novamente.' });
   }
 });
 
@@ -2068,6 +2094,14 @@ router.get('/', (req, res) => {
     .student-row .name { font-size: 14px; color: var(--text-primary); min-width: 180px; font-weight: 500; }
     .student-row .notes { font-size: 12px; color: var(--text-muted); flex: 1; }
     .student-row .btn-clear { font-size: 12px; }
+    .student-row .btn-msg-student {
+      background: var(--brand-soft); color: var(--brand-light);
+      border: 1px solid rgba(0,168,132,.3);
+      padding: 6px 11px; border-radius: var(--r-md);
+      font: 600 12px var(--font-sans); cursor: pointer;
+      transition: all var(--t-fast);
+    }
+    .student-row .btn-msg-student:hover { background: var(--brand); color: var(--brand-on); border-color: var(--brand); }
 
     .btn-clear {
       background: transparent; border: 1px solid var(--border-strong);
@@ -3002,7 +3036,7 @@ router.get('/', (req, res) => {
   // ─────────────────────────────────────────────────────────────────
   // Modal Nova Conversa
   // ─────────────────────────────────────────────────────────────────
-  function openNewChat(e) {
+  async function openNewChat(e) {
     if (e) e.stopPropagation();
     // Garante que estamos na aba conversas (faz sentido abrir só aqui)
     if (document.getElementById('tab-conversas') && !document.getElementById('tab-conversas').classList.contains('active')) {
@@ -3017,6 +3051,14 @@ router.get('/', (req, res) => {
     if (nameInp) nameInp.value = '';
     document.getElementById('new-chat-name-wrap').classList.add('hidden');
     renderNewChatResults('');
+    // Carrega alunos em background pra busca incluir aluno mesmo se a aba
+    // Alunos nunca foi aberta nesta sessão
+    if (!allStudents.length) {
+      try {
+        const r = await fetch('/admin/api/students');
+        if (r.ok) allStudents = await r.json();
+      } catch {}
+    }
   }
 
   function closeNewChat() {
@@ -3074,16 +3116,26 @@ router.get('/', (req, res) => {
 
     // Match em contatos existentes
     const qLower = q.toLowerCase();
-    const matches = allConversations.filter(c => {
+    const qDigits = q.replace(/\\D/g, '');
+    const conversationPhones = new Set(allConversations.map(c => c.from));
+    const convMatches = allConversations.filter(c => {
       const nm = (c.name || '').toLowerCase();
       const ph = c.from || '';
-      return nm.includes(qLower) || ph.includes(q.replace(/\\D/g, ''));
-    }).slice(0, 20);
+      return nm.includes(qLower) || (qDigits && ph.includes(qDigits));
+    }).slice(0, 15);
+
+    // Match em alunos cadastrados (que ainda não têm conversa aberta — senão duplica)
+    const studentMatches = (allStudents || []).filter(s => {
+      if (conversationPhones.has(s.phone)) return false;
+      const nm = (s.name || '').toLowerCase();
+      const ph = s.phone || '';
+      return nm.includes(qLower) || (qDigits && ph.includes(qDigits));
+    }).slice(0, 10);
 
     let html = '';
-    if (matches.length) {
+    if (convMatches.length) {
       html += '<div class="new-chat-section">Contatos cadastrados</div>';
-      html += matches.map(c => \`
+      html += convMatches.map(c => \`
         <div class="new-chat-item" onclick="pickExistingContact('\${c.from}')">
           <div class="av">\${getInitials(c)}</div>
           <div class="info">
@@ -3093,6 +3145,24 @@ router.get('/', (req, res) => {
           <span class="arrow">→</span>
         </div>
       \`).join('');
+    }
+
+    if (studentMatches.length) {
+      html += '<div class="new-chat-section">🎓 Alunos cadastrados</div>';
+      html += studentMatches.map(s => {
+        const initials = (s.name || '').trim().split(/\\s+/).map(w => w[0]).slice(0,2).join('').toUpperCase() || '🎓';
+        const safeName = JSON.stringify(s.name || '').replace(/"/g, '&quot;');
+        return \`
+          <div class="new-chat-item" onclick="messageStudent('\${s.phone}', \${safeName})">
+            <div class="av" style="background:linear-gradient(135deg,#fbbf24,#d97706)">\${initials}</div>
+            <div class="info">
+              <span class="nm">\${escapeHtml(s.name || 'Aluno sem nome')}</span>
+              <span class="ph">\${fmtPhone(s.phone)} · aluno cadastrado</span>
+            </div>
+            <span class="arrow">→</span>
+          </div>
+        \`;
+      }).join('');
     }
 
     // Opção de criar nova conversa se input é número válido E não existe ainda
@@ -3833,9 +3903,12 @@ router.get('/', (req, res) => {
     return phone;
   }
 
+  let allStudents = []; // cache pra usar no modal de nova conversa
+
   async function loadStudents() {
     const res = await fetch('/admin/api/students');
     const students = await res.json();
+    allStudents = students;
     const navBadge = document.getElementById('nav-badge-students');
     if (navBadge) navBadge.textContent = String(students.length);
     const list = document.getElementById('students-list');
@@ -3848,9 +3921,32 @@ router.get('/', (req, res) => {
         <span class="phone">\${formatBRPhone(s.phone)}</span>
         <span class="name">\${s.name || '<span style="color:#555">sem nome</span>'}</span>
         <span class="notes">\${s.notes || ''}</span>
+        <button class="btn-msg-student" onclick="messageStudent('\${s.phone}', \${JSON.stringify(s.name || '').replace(/"/g, '&quot;')})" title="Abrir conversa com esse aluno">💬 Mandar msg</button>
         <button class="btn-clear" onclick="removeStudent('\${s.phone}')">Remover</button>
       </div>
     \`).join('');
+  }
+
+  // Abre conversa com um aluno (cria contato se não existe), pula pra aba Inbox
+  async function messageStudent(phone, name) {
+    try {
+      const r = await fetch('/admin/api/contacts/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, name: name || null }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert('Erro: ' + (data.error || 'falha ao abrir conversa'));
+        return;
+      }
+      // Pula pra aba conversas e seleciona
+      switchTab('conversas');
+      await loadConversations({ force: true });
+      selectConv(data.phone);
+    } catch (err) {
+      alert('Falha de conexão: ' + err.message);
+    }
   }
 
   async function addStudent() {
