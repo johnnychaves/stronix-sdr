@@ -396,14 +396,13 @@ function updateAudioFlags(phone, { audioPermission, awaitingAudioConfirm, askedF
 function addMessage(phone, role, content, wasAudio = false, mediaPath = null) {
   // Canonicaliza phone pra unificar com contato existente (variação ±9 BR)
   phone = canonicalizeContactPhone(phone);
-  // Mantém schema antigo (5 colunas) por compat — wamid sempre NULL aqui
-  // (mensagens entrantes do lead não têm wamid próprio relevante)
   if (mediaPath) {
     db.prepare('INSERT INTO messages (phone, role, content, was_audio, media_path, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(phone, role, content, wasAudio ? 1 : 0, mediaPath, Date.now());
   } else {
     stmts.insertMessage.run(phone, role, content, wasAudio ? 1 : 0, Date.now());
   }
+  try { require('./events').emitConversationChanged(phone); } catch {}
 }
 
 // Retorna histórico no formato esperado pelo Claude: [{role, content}, ...]
@@ -693,14 +692,19 @@ function cleanExpiredSessions() {
 // Tenta assumir; retorna true se conseguiu, false se outro user já assumiu
 // (pool aberto: primeiro a clicar pega).
 function assumeConversation(phone, userId) {
-  // Garante contato existe
+  phone = canonicalizeContactPhone(phone);
   getOrCreateContact(phone);
   const result = stmts.assumeConversationStmt.run(userId, Date.now(), phone);
+  if (result.changes > 0) {
+    try { require('./events').emitConversationChanged(phone); } catch {}
+  }
   return result.changes > 0;
 }
 
 function releaseConversation(phone) {
+  phone = canonicalizeContactPhone(phone);
   stmts.releaseConversationStmt.run(phone);
+  try { require('./events').emitConversationChanged(phone); } catch {}
 }
 
 function getContactAssignment(phone) {
@@ -721,6 +725,7 @@ function addMessageWithSender(phone, role, content, wasAudio, sentByUserId, medi
     sentByUserId || null, Date.now(),
     mediaPath || null, wamid || null
   );
+  try { require('./events').emitConversationChanged(phone); } catch {}
   return r.lastInsertRowid;
 }
 
@@ -737,6 +742,7 @@ function setLastAssistantMessageMediaPath(phone, mediaPath) {
       ORDER BY id DESC LIMIT 1
     )
   `).run(mediaPath, phone);
+  try { require('./events').emitConversationChanged(phone); } catch {}
 }
 
 // Atualiza status de entrega via webhook (delivered/read)
@@ -746,6 +752,11 @@ function updateMessageDeliveryStatus(wamid, status, timestamp) {
   const deliveredAt = (status === 'delivered' || status === 'read') ? ts : null;
   const readAt      = (status === 'read') ? ts : null;
   stmts.updateMessageStatus.run(status, deliveredAt, readAt, wamid);
+  // Emite evento — frontend atualiza checkmarks ✓✓ na hora
+  try {
+    const row = stmts.getMessageByWamid.get(wamid);
+    if (row?.phone) require('./events').emitConversationChanged(row.phone);
+  } catch {}
 }
 
 // ─────────────────────────────────────────────────────────────────────
