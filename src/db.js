@@ -118,6 +118,54 @@ db.exec(`
     updated_by INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_academia_info_category ON academia_info(category, display_order);
+
+  -- ─────────────────────────────────────────────────────────────────────
+  -- AGENT V2 — Máquina de estado por lead (refatoração modular do Johnny)
+  -- ─────────────────────────────────────────────────────────────────────
+
+  -- Ficha do lead com estado da conversa estruturado.
+  -- FK pra contacts.phone (mantém contacts como cadastro, lead_state como dinâmica).
+  CREATE TABLE IF NOT EXISTS lead_state (
+    phone TEXT PRIMARY KEY,
+    estagio_atual TEXT NOT NULL DEFAULT 'qualificacao_inicial',
+    proxima_acao TEXT,
+    insistencias_valor INTEGER NOT NULL DEFAULT 0,
+    objetivo TEXT,
+    modalidade_recomendada TEXT,
+    disponibilidade TEXT,
+    objecao_ativa TEXT,
+    objecoes_levantadas TEXT,                  -- JSON array
+    tentativas_objecao_atual INTEGER NOT NULL DEFAULT 0,
+    aula_experimental_agendada INTEGER NOT NULL DEFAULT 0,
+    data_agendamento TEXT,
+    hora_agendamento TEXT,
+    modalidade_agendada TEXT,
+    primeira_mensagem_em INTEGER,
+    ultima_mensagem_em INTEGER,
+    total_mensagens_lead INTEGER NOT NULL DEFAULT 0,
+    total_mensagens_johnny INTEGER NOT NULL DEFAULT 0,
+    resumo_dinamico TEXT,
+    tags_sistema_ativas TEXT,                  -- JSON array
+    is_aluno_existente INTEGER NOT NULL DEFAULT 0,
+    encerrada_em INTEGER,
+    motivo_encerramento TEXT,
+    modulo_pendente TEXT,                      -- fallback: módulo pedido por Johnny
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (phone) REFERENCES contacts(phone) ON DELETE CASCADE
+  );
+
+  -- Repositório dos 28 módulos do prompt (carregados sob demanda).
+  -- Editáveis via aba 'Módulos' no admin sem redeploy.
+  CREATE TABLE IF NOT EXISTS prompt_modules (
+    name TEXT PRIMARY KEY,
+    title TEXT,
+    content TEXT NOT NULL,
+    category TEXT,                             -- 'conhecimento'|'objecoes'|'situacionais'|'sistema'
+    active INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL,
+    updated_by INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_prompt_modules_category ON prompt_modules(category, name);
 `);
 
 // Seed inicial do academia_info — só insere se ainda não existir.
@@ -887,6 +935,182 @@ function bulkUpsertStudents(items) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// AGENT V2 — lead_state (máquina de estado por lead)
+// ─────────────────────────────────────────────────────────────────────
+
+const LEAD_STATE_FIELDS = [
+  'estagio_atual', 'proxima_acao', 'insistencias_valor', 'objetivo',
+  'modalidade_recomendada', 'disponibilidade', 'objecao_ativa', 'objecoes_levantadas',
+  'tentativas_objecao_atual', 'aula_experimental_agendada', 'data_agendamento',
+  'hora_agendamento', 'modalidade_agendada', 'primeira_mensagem_em',
+  'ultima_mensagem_em', 'total_mensagens_lead', 'total_mensagens_johnny',
+  'resumo_dinamico', 'tags_sistema_ativas', 'is_aluno_existente',
+  'encerrada_em', 'motivo_encerramento', 'modulo_pendente',
+];
+
+const VALID_ESTAGIOS = new Set([
+  'qualificacao_inicial', 'qualificacao_objetivo', 'captura_nome',
+  'recomendacao_modalidade', 'proposta_visita', 'drill_horario',
+  'agendamento_confirmado', 'objecao_ativa', 'apresentacao_planos',
+  'handoff_humano',
+]);
+
+const VALID_OBJETIVO = new Set(['', 'resultado_fisico', 'qualidade_vida', 'massa', 'emagrecer']);
+const VALID_MODALIDADE = new Set(['', 'musculacao', 'pilates', 'personalizado']);
+const VALID_DISPONIBILIDADE = new Set(['', 'manha', 'tarde']);
+const VALID_OBJECAO = new Set(['', 'preco', 'tempo', 'pensar', 'adiar', 'mensal', 'pagamento', 'conjuge', 'distancia', 'convenio']);
+
+function getLeadState(phone) {
+  phone = canonicalizeContactPhone(phone);
+  const row = db.prepare('SELECT * FROM lead_state WHERE phone = ?').get(phone);
+  if (!row) return null;
+  // Parse JSON arrays
+  try { row.objecoes_levantadas = row.objecoes_levantadas ? JSON.parse(row.objecoes_levantadas) : []; } catch { row.objecoes_levantadas = []; }
+  try { row.tags_sistema_ativas = row.tags_sistema_ativas ? JSON.parse(row.tags_sistema_ativas) : []; } catch { row.tags_sistema_ativas = []; }
+  return row;
+}
+
+function getOrCreateLeadState(phone) {
+  phone = canonicalizeContactPhone(phone);
+  // Garante que contacts existe (FK)
+  getOrCreateContact(phone);
+  let s = getLeadState(phone);
+  if (s) return s;
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO lead_state (phone, estagio_atual, primeira_mensagem_em, ultima_mensagem_em, updated_at)
+    VALUES (?, 'qualificacao_inicial', ?, ?, ?)
+  `).run(phone, now, now, now);
+  return getLeadState(phone);
+}
+
+// Update parcial — recebe { campo: valor, ... } e atualiza só os campos válidos.
+// Faz validação de enum quando aplicável (campos inválidos são ignorados + logados).
+function updateLeadState(phone, fields) {
+  phone = canonicalizeContactPhone(phone);
+  if (!fields || typeof fields !== 'object') return;
+  const updates = [];
+  const values = [];
+  for (const [key, rawVal] of Object.entries(fields)) {
+    if (!LEAD_STATE_FIELDS.includes(key)) continue;
+    let val = rawVal;
+    // Validação de enums (silenciosamente ignora valor inválido)
+    if (key === 'estagio_atual' && val && !VALID_ESTAGIOS.has(val)) {
+      console.warn(`[db] estagio_atual inválido ignorado: ${val}`);
+      continue;
+    }
+    if (key === 'objetivo' && val && !VALID_OBJETIVO.has(val)) continue;
+    if (key === 'modalidade_recomendada' && val && !VALID_MODALIDADE.has(val)) continue;
+    if (key === 'disponibilidade' && val && !VALID_DISPONIBILIDADE.has(val)) continue;
+    if (key === 'objecao_ativa' && val && !VALID_OBJECAO.has(val)) continue;
+    // Campos JSON: serializa
+    if (key === 'objecoes_levantadas' || key === 'tags_sistema_ativas') {
+      val = JSON.stringify(Array.isArray(val) ? val : []);
+    }
+    // Booleans: 0/1
+    if (key === 'aula_experimental_agendada' || key === 'is_aluno_existente') {
+      val = val ? 1 : 0;
+    }
+    updates.push(`${key} = ?`);
+    values.push(val);
+  }
+  if (!updates.length) return;
+  updates.push('updated_at = ?');
+  values.push(Date.now());
+  values.push(phone);
+  db.prepare(`UPDATE lead_state SET ${updates.join(', ')} WHERE phone = ?`).run(...values);
+}
+
+function incrementLeadStateCounter(phone, field, delta = 1, max = null) {
+  phone = canonicalizeContactPhone(phone);
+  if (!['insistencias_valor', 'tentativas_objecao_atual', 'total_mensagens_lead', 'total_mensagens_johnny'].includes(field)) return;
+  const cur = db.prepare(`SELECT ${field} as v FROM lead_state WHERE phone = ?`).get(phone);
+  if (!cur) return;
+  let next = (cur.v || 0) + delta;
+  if (max !== null && next > max) next = max;
+  db.prepare(`UPDATE lead_state SET ${field} = ?, updated_at = ? WHERE phone = ?`).run(next, Date.now(), phone);
+  return next;
+}
+
+function appendObjecaoLevantada(phone, objecao) {
+  if (!objecao) return;
+  const s = getLeadState(phone);
+  if (!s) return;
+  const arr = Array.isArray(s.objecoes_levantadas) ? s.objecoes_levantadas : [];
+  if (!arr.includes(objecao)) arr.push(objecao);
+  updateLeadState(phone, { objecoes_levantadas: arr });
+}
+
+function resetLeadState(phone) {
+  phone = canonicalizeContactPhone(phone);
+  db.prepare('DELETE FROM lead_state WHERE phone = ?').run(phone);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// AGENT V2 — prompt_modules (CRUD dos 28 módulos)
+// ─────────────────────────────────────────────────────────────────────
+
+function getAllPromptModules() {
+  return db.prepare(`
+    SELECT name, title, content, category, active, updated_at, updated_by
+    FROM prompt_modules
+    ORDER BY category, name
+  `).all();
+}
+
+function getPromptModule(name) {
+  return db.prepare('SELECT * FROM prompt_modules WHERE name = ? AND active = 1').get(name) || null;
+}
+
+function getPromptModuleContents(names) {
+  if (!Array.isArray(names) || !names.length) return [];
+  const placeholders = names.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT name, title, content FROM prompt_modules
+    WHERE name IN (${placeholders}) AND active = 1
+  `).all(...names);
+}
+
+function upsertPromptModule({ name, title, content, category }, userId = null) {
+  if (!name || !content) throw new Error('name e content obrigatórios');
+  db.prepare(`
+    INSERT INTO prompt_modules (name, title, content, category, active, updated_at, updated_by)
+    VALUES (?, ?, ?, ?, 1, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      title = excluded.title,
+      content = excluded.content,
+      category = COALESCE(excluded.category, prompt_modules.category),
+      updated_at = excluded.updated_at,
+      updated_by = excluded.updated_by
+  `).run(name, title || name, content, category || null, Date.now(), userId);
+}
+
+function setPromptModuleActive(name, active, userId = null) {
+  db.prepare('UPDATE prompt_modules SET active = ?, updated_at = ?, updated_by = ? WHERE name = ?')
+    .run(active ? 1 : 0, Date.now(), userId, name);
+}
+
+// Seed inicial dos módulos — popula só se a tabela estiver vazia.
+// Conteúdo dos 28 módulos vem de src/prompt-modules-seed.js
+function seedPromptModulesIfEmpty() {
+  const count = db.prepare('SELECT COUNT(*) as c FROM prompt_modules').get().c;
+  if (count > 0) return 0;
+  const seed = require('./prompt-modules-seed');
+  const stmt = db.prepare(`
+    INSERT INTO prompt_modules (name, title, content, category, active, updated_at)
+    VALUES (?, ?, ?, ?, 1, ?)
+  `);
+  const tx = db.transaction((items) => {
+    for (const m of items) {
+      stmt.run(m.name, m.title || m.name, m.content, m.category || null, Date.now());
+    }
+  });
+  tx(seed);
+  console.log(`[db] seed inicial de prompt_modules: ${seed.length} módulos inseridos`);
+  return seed.length;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // KNOWLEDGE BASE — academia_info (planos, horários, modalidades, promo)
 // ─────────────────────────────────────────────────────────────────────
 
@@ -942,6 +1166,13 @@ function buildAcademiaInfoBlock() {
     }
   }
   return out;
+}
+
+// ─── Boot: seed inicial de prompt_modules (se vazio) ───
+try {
+  seedPromptModulesIfEmpty();
+} catch (e) {
+  console.error('[db] erro ao seedar prompt_modules:', e.message);
 }
 
 module.exports = {
@@ -1003,6 +1234,20 @@ module.exports = {
   getAcademiaInfoMap,
   setAcademiaInfo,
   buildAcademiaInfoBlock,
+  // Agent v2 — lead_state
+  getLeadState,
+  getOrCreateLeadState,
+  updateLeadState,
+  incrementLeadStateCounter,
+  appendObjecaoLevantada,
+  resetLeadState,
+  // Agent v2 — prompt_modules
+  getAllPromptModules,
+  getPromptModule,
+  getPromptModuleContents,
+  upsertPromptModule,
+  setPromptModuleActive,
+  seedPromptModulesIfEmpty,
   // metrics
   getMetrics,
 };
