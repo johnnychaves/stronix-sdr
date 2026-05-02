@@ -4,6 +4,42 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-02 — Resumo dinâmico via Haiku 4.5 em background (Fase 3, PR #36)
+
+**Decisão:** Conversas longas (≥20 msgs) usam (resumo estruturado + msgs novas) em vez de 50 msgs cheias no prompt. Resumo gerado por **Haiku 4.5** em **fire-and-forget após responder** ao lead. Threshold de 20 msgs pra primeiro resumo + update incremental a cada 10 msgs novas.
+
+**Por quê Haiku (não Sonnet):**
+- Tarefa é sumarização estruturada com formato fixo (6 seções markdown). Não exige criatividade nem instruction-following complexo. Caso ideal pra modelo menor.
+- Custo: ~$0,001/update (Haiku) vs ~$0,01/turn (Sonnet) = 10x menos.
+- Latência: ~500ms (Haiku) — irrelevante porque roda em background.
+- Conversa de 50 msgs = ~3 updates (1 inicial + 2 incrementais) ≈ $0,003 total. Comparado a $0,15 pelo prompt bloat sem resumo, paga sozinho.
+
+**Por quê background fire-and-forget (não inline):**
+- Inline antes de responder = +500ms na latência percebida pelo lead. Inaceitável.
+- Inline depois de responder mas antes de retornar = mesma latência (cliente espera).
+- Fire-and-forget = zero impacto na resposta atual. Próximo turno usa resumo atualizado.
+- Trade-off: race condition possível se 2 mensagens chegam em <500ms (raro em WhatsApp humano). Mitigação: já temos buffer de debounce de 15s no webhook (de 2026-05-01) que naturalmente serializa.
+
+**Por quê threshold 20 msgs / update a cada 10:**
+- 20 msgs = 10 turnos. Antes disso, histórico cabe sem custo significativo.
+- Update a cada 10 = balanço entre desatualização do resumo (alto N = pior) e custo (baixo N = pior). 10 dá ~3-5 updates em conversa de 50 msgs.
+
+**Por quê markdown texto (não JSON):**
+- JSON exige tool use ou prompt mais rígido — Haiku às vezes quebra formatação.
+- Texto markdown com 6 seções fixas (LEAD/OBJETIVO/PONTOS CHAVE/OBJEÇÕES TRATADAS/PENDENTE/TOM) é mais resiliente. Bot lê como contexto narrativo.
+- Sanity check: cap em MAX_RESUMO_CHARS=2000 (~500 chars típico).
+
+**Trade-offs aceitos:**
+- ⚠️ Resumo pode estar levemente desatualizado (até 10 msgs atrás). Bot lê últimas N msgs cruas em paralelo — cobre o gap.
+- ⚠️ Se Haiku retornar lixo/inventar, próxima resposta pode ser pior. Mitigação: prompt do Haiku diz "NÃO INVENTE" + cap de chars + sanity check de transcript >50 chars.
+- ⚠️ Se processo node morre antes do background terminar (raro em Railway), resumo se perde mas dados originais ficam em messages. Próxima request reativa o trigger.
+
+**Implementação:** PR #36. Lógica em `src/resumo-dinamico.js` (~140 linhas). Camada 4.5 no `buildSystemBlocks` (entre módulos e dynamic ctx, sem cache).
+
+**Plano de evolução condicional:** se resumo gerado piorar conversas (medível via review humano dos primeiros 50 leads em rollout 5%), revisar prompt do Haiku ou trocar pra Sonnet 4.5 (custo subiria pra ~$0,01/update — ainda barato).
+
+---
+
 ## 2026-05-02 — Baileys (WhatsApp Web protocol) em vez de Meta Cloud API
 
 **Decisão:** Migrar WhatsApp transport de Meta Cloud API pra Baileys, com toggle `WHATSAPP_PROVIDER=meta|baileys` mantendo Meta como fallback funcional.
