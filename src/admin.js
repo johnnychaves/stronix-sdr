@@ -3429,12 +3429,12 @@ router.get('/', (req, res) => {
     if (!cats.find(c => c.id === emojiActiveCat)) emojiActiveCat = 'smileys';
     const tabsHtml = cats.map(c =>
       '<button class="emoji-tab' + (c.id === emojiActiveCat ? ' active' : '') +
-        '" data-cat="' + c.id + '" onclick="selectEmojiCat(\\'' + c.id + '\\')">' + c.icon + '</button>'
+        '" data-cat="' + c.id + '" type="button" onclick="event.stopPropagation();selectEmojiCat(\\'' + c.id + '\\')">' + c.icon + '</button>'
     ).join('');
     const activeCat = cats.find(c => c.id === emojiActiveCat);
     const emojis = activeCat.id === 'recent' ? emojiRecent : activeCat.emojis;
     const gridHtml = emojis.map(e =>
-      '<button class="emoji-cell" type="button" onclick="insertEmoji(\\'' + e.replace(/'/g, "\\\\'") + '\\')">' + e + '</button>'
+      '<button class="emoji-cell" type="button" onclick="event.stopPropagation();insertEmoji(\\'' + e.replace(/'/g, "\\\\'") + '\\')">' + e + '</button>'
     ).join('');
     panel.innerHTML =
       '<div class="emoji-tabs">' + tabsHtml + '</div>' +

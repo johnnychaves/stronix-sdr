@@ -724,6 +724,21 @@ function addMessageWithSender(phone, role, content, wasAudio, sentByUserId, medi
   return r.lastInsertRowid;
 }
 
+// Atualiza media_path da mensagem assistant mais recente desse phone.
+// Usado depois de gerar áudio via TTS — agent.reply já salvou o texto, mas
+// não tinha o buffer ainda. Esta função adiciona o ponteiro pro arquivo.
+function setLastAssistantMessageMediaPath(phone, mediaPath) {
+  phone = canonicalizeContactPhone(phone);
+  db.prepare(`
+    UPDATE messages SET media_path = ?
+    WHERE id = (
+      SELECT id FROM messages
+      WHERE phone = ? AND role = 'assistant'
+      ORDER BY id DESC LIMIT 1
+    )
+  `).run(mediaPath, phone);
+}
+
 // Atualiza status de entrega via webhook (delivered/read)
 function updateMessageDeliveryStatus(wamid, status, timestamp) {
   if (!wamid) return;
@@ -862,6 +877,7 @@ module.exports = {
   releaseConversation,
   getContactAssignment,
   addMessageWithSender,
+  setLastAssistantMessageMediaPath,
   updateMessageDeliveryStatus,
   // metrics
   getMetrics,
