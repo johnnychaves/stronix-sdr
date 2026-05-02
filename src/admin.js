@@ -2213,6 +2213,72 @@ router.get('/', (req, res) => {
     .student-row .name { font-size: 14px; color: var(--text-primary); min-width: 180px; font-weight: 500; }
     .student-row .notes { font-size: 12px; color: var(--text-muted); flex: 1; }
     .student-row .btn-clear { font-size: 12px; }
+
+    /* ════════════════════════════════════════════════
+       CONEXÕES (cards de WhatsApp conectado)
+       ════════════════════════════════════════════════ */
+    .connection-card {
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 18px;
+      margin-bottom: 14px;
+      transition: border-color var(--t-fast);
+    }
+    .connection-card:hover { border-color: var(--border-strong); }
+    .connection-card.disabled { opacity: .5; cursor: not-allowed; }
+    .conn-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 12px; margin-bottom: 14px;
+    }
+    .conn-title-wrap { display: flex; gap: 14px; align-items: center; flex: 1; min-width: 0; }
+    .conn-icon { font-size: 28px; line-height: 1; }
+    .conn-provider { font: 600 15px var(--font-sans); color: var(--text-primary); margin-bottom: 2px; }
+    .conn-status-text { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+    .conn-status {
+      padding: 4px 10px; border-radius: 999px;
+      font: 600 11px var(--font-sans); white-space: nowrap; flex-shrink: 0;
+    }
+    .conn-status.open  { background: rgba(0,168,132,.15); color: var(--brand-light); }
+    .conn-status.qr    { background: rgba(251,191,36,.15); color: var(--warn); }
+    .conn-status.close { background: rgba(248,113,113,.15); color: var(--danger); }
+    .conn-body {
+      display: flex; flex-direction: column; gap: 8px;
+      padding: 12px 0; border-top: 1px solid var(--border-subtle);
+    }
+    .conn-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 13px;
+    }
+    .conn-row .k { color: var(--text-muted); }
+    .conn-row .v { color: var(--text-primary); font-weight: 500; }
+    .conn-phone { font-family: var(--font-mono); }
+    .conn-qr-wrap {
+      display: flex; gap: 18px; align-items: center;
+      padding: 16px 0; border-top: 1px solid var(--border-subtle);
+    }
+    .conn-qr {
+      width: 200px; height: 200px;
+      background: #fff; padding: 10px; border-radius: 10px;
+      flex-shrink: 0;
+    }
+    .conn-instructions {
+      flex: 1; padding-left: 18px; margin: 0;
+      font-size: 13px; color: var(--text-secondary); line-height: 1.7;
+    }
+    .conn-actions { padding-top: 14px; border-top: 1px solid var(--border-subtle); }
+    .btn-disconnect-conn {
+      background: transparent; border: 1px solid var(--danger);
+      color: var(--danger); padding: 8px 14px;
+      border-radius: var(--r-md); font: 600 12.5px var(--font-sans);
+      cursor: pointer; transition: all var(--t-fast);
+    }
+    .btn-disconnect-conn:hover { background: rgba(248,113,113,.1); }
+    .conn-meta-note {
+      font-size: 12.5px; color: var(--text-muted); line-height: 1.5;
+    }
+    .conn-meta-note code {
+      background: var(--bg-3); padding: 2px 6px; border-radius: 4px;
+      font-family: var(--font-mono); font-size: 12px; color: var(--brand-light);
+    }
     .student-row .btn-msg-student {
       background: var(--brand-soft); color: var(--brand-light);
       border: 1px solid rgba(0,168,132,.3);
@@ -2336,6 +2402,10 @@ router.get('/', (req, res) => {
           <div class="sub-item admin-only" data-nav="users" onclick="event.stopPropagation();switchTab('users', this)" style="display:none">
             <span class="si"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
             <span>Usuários &amp; permissões</span>
+          </div>
+          <div class="sub-item admin-only" data-nav="conexoes" onclick="event.stopPropagation();switchTab('conexoes', this)" style="display:none">
+            <span class="si"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/></svg></span>
+            <span>Conexões WhatsApp</span>
           </div>
         </div>
       </div>
@@ -2491,6 +2561,19 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadMetrics()">↻ Atualizar</button>
   </div>
   <div id="metrics-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px"></div>
+</div>
+
+<div id="tab-conexoes" class="panel">
+  <div class="conv-header">
+    <h2>Conexões WhatsApp</h2>
+    <button class="refresh-btn" onclick="loadConnections()">↻ Atualizar</button>
+  </div>
+  <div class="student-help">
+    Aqui você gerencia o número de WhatsApp que a plataforma usa pra enviar e receber mensagens. Por enquanto a plataforma suporta <strong>1 número conectado por vez</strong>.
+  </div>
+  <div id="connections-list">
+    <div class="empty">Carregando...</div>
+  </div>
 </div>
 
 <div id="tab-alunos" class="panel">
@@ -3830,6 +3913,7 @@ router.get('/', (req, res) => {
     alunos:        { label: 'Alunos',            tag: '' },
     users:         { label: 'Usuários & permissões', tag: '' },
     metrics:       { label: 'Métricas',          tag: 'últimos 30d' },
+    conexoes:      { label: 'Conexões WhatsApp', tag: '' },
   };
 
   function updateCrumb(tab) {
@@ -3850,7 +3934,7 @@ router.get('/', (req, res) => {
     document.querySelectorAll('.nav-item[data-nav], .sub-item[data-nav]').forEach(el => {
       el.classList.toggle('active', el.dataset.nav === tab);
     });
-    if (tab === 'prompt' || tab === 'users') {
+    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes') {
       const cfg = document.getElementById('cfg-group');
       if (cfg) cfg.classList.add('open');
     }
@@ -3878,6 +3962,136 @@ router.get('/', (req, res) => {
     if (tab === 'alunos') loadStudents();
     if (tab === 'users') loadUsers();
     if (tab === 'metrics') loadMetrics();
+    if (tab === 'conexoes') {
+      loadConnections();
+      startConexoesPolling();
+    } else {
+      stopConexoesPolling();
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Aba Conexões (gerencia status do número WhatsApp conectado)
+  // ─────────────────────────────────────────────────────────────────
+  let conexoesPollTimer = null;
+  function startConexoesPolling() {
+    stopConexoesPolling();
+    conexoesPollTimer = setInterval(loadConnections, 3000);
+  }
+  function stopConexoesPolling() {
+    if (conexoesPollTimer) { clearInterval(conexoesPollTimer); conexoesPollTimer = null; }
+  }
+
+  async function loadConnections() {
+    const list = document.getElementById('connections-list');
+    if (!list) return;
+    try {
+      const r = await fetch('/admin/api/whatsapp/status');
+      const s = await r.json();
+      list.innerHTML = renderConnectionCard(s);
+    } catch (e) {
+      list.innerHTML = '<div class="empty">Erro ao carregar status: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function renderConnectionCard(s) {
+    const isMeta = s.provider === 'meta';
+    const isBaileys = s.provider === 'baileys';
+    const status = s.status;
+
+    let statusBadge, statusText, providerLabel;
+    if (isMeta) {
+      providerLabel = 'Meta Cloud API (oficial)';
+      statusBadge = '<span class="conn-status open">✓ Ativo</span>';
+      statusText = 'Conectado via API oficial da Meta. Sujeito à janela de 24h e templates pra reativação.';
+    } else if (isBaileys) {
+      providerLabel = 'Baileys (WhatsApp Web)';
+      if (status === 'open') {
+        statusBadge = '<span class="conn-status open">✓ Conectado</span>';
+        statusText = 'Sessão Web ativa. Sem janela 24h, liberdade total de envio.';
+      } else if (status === 'qr') {
+        statusBadge = '<span class="conn-status qr">⏳ Aguardando escanear</span>';
+        statusText = 'Escaneie o QR code abaixo com o WhatsApp do número.';
+      } else if (status === 'connecting') {
+        statusBadge = '<span class="conn-status qr">🔄 Conectando…</span>';
+        statusText = 'Estabelecendo conexão com o servidor WhatsApp.';
+      } else {
+        statusBadge = '<span class="conn-status close">⚠ ' + status + '</span>';
+        statusText = 'Conexão caiu. Tentando reconectar automaticamente.';
+      }
+    } else {
+      providerLabel = s.provider || 'Desconhecido';
+      statusBadge = '<span class="conn-status close">⚠ ' + (status || 'indisponível') + '</span>';
+      statusText = '';
+    }
+
+    const phoneLine = s.me ? '<div class="conn-row"><span class="k">Número conectado</span><span class="v conn-phone">' + escapeHtml(fmtPhone(s.me)) + '</span></div>' : '';
+    const sinceLine = s.connectedSince ? '<div class="conn-row"><span class="k">Conectado há</span><span class="v">' + fmtRelativeTime(s.connectedSince) + '</span></div>' : '';
+
+    let qrSection = '';
+    if (isBaileys && status === 'qr' && s.qr) {
+      qrSection = '<div class="conn-qr-wrap">' +
+        '<img class="conn-qr" src="' + s.qr + '" alt="QR Code">' +
+        '<ol class="conn-instructions">' +
+        '<li>Abra o <strong>WhatsApp</strong> no celular do número</li>' +
+        '<li>Configurações → <strong>Aparelhos conectados</strong></li>' +
+        '<li>Toque em <strong>Conectar um aparelho</strong></li>' +
+        '<li>Aponte a câmera para o QR ao lado</li>' +
+        '</ol></div>';
+    }
+
+    let actions = '';
+    if (isBaileys && status === 'open') {
+      actions = '<button class="btn-disconnect-conn" onclick="disconnectConnection()">Desconectar e trocar número</button>';
+    }
+    if (isMeta) {
+      actions = '<p class="conn-meta-note">Pra trocar pra Baileys, defina <code>WHATSAPP_PROVIDER=baileys</code> no Railway e redeploye.</p>';
+    }
+
+    return '<div class="connection-card">' +
+      '<div class="conn-head">' +
+        '<div class="conn-title-wrap">' +
+          '<div class="conn-icon">📱</div>' +
+          '<div>' +
+            '<div class="conn-provider">' + escapeHtml(providerLabel) + '</div>' +
+            '<div class="conn-status-text">' + escapeHtml(statusText) + '</div>' +
+          '</div>' +
+        '</div>' +
+        statusBadge +
+      '</div>' +
+      '<div class="conn-body">' +
+        phoneLine + sinceLine +
+      '</div>' +
+      qrSection +
+      (actions ? '<div class="conn-actions">' + actions + '</div>' : '') +
+    '</div>' +
+    '<div class="connection-card disabled">' +
+      '<div class="conn-head">' +
+        '<div class="conn-title-wrap">' +
+          '<div class="conn-icon" style="opacity:.4">➕</div>' +
+          '<div>' +
+            '<div class="conn-provider">Adicionar segundo número</div>' +
+            '<div class="conn-status-text">Em breve — multi-número permitirá rodar academia + marketing em números separados.</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  async function disconnectConnection() {
+    if (!confirm('Desconectar o WhatsApp atual? Você precisará escanear novo QR pra reconectar (com este ou outro número).')) return;
+    try {
+      const r = await fetch('/admin/api/baileys/disconnect', { method: 'POST' });
+      const data = await r.json();
+      if (!r.ok) {
+        alert('Erro: ' + (data.error || 'falhou'));
+        return;
+      }
+      // Recarrega status — depois de ~2s aparece QR novo
+      setTimeout(loadConnections, 1500);
+    } catch (e) {
+      alert('Falha de conexão: ' + e.message);
+    }
   }
 
   // ─── USERS ───
