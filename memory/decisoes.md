@@ -4,6 +4,112 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-02 — Baileys (WhatsApp Web protocol) em vez de Meta Cloud API
+
+**Decisão:** Migrar WhatsApp transport de Meta Cloud API pra Baileys, com toggle `WHATSAPP_PROVIDER=meta|baileys` mantendo Meta como fallback funcional.
+
+**Por quê:**
+- Meta Cloud API tem **janela de 24h**: só pode mandar msg freeform pra contato que respondeu nas últimas 24h. Fora disso, exige template message aprovada (R$ 0,07-0,20 por envio + setup burocrático no Meta Business Manager).
+- Pra academia que faz prospecção ativa (reativar aluno antigo, follow-up de lead frio), templates seriam o caminho oficial — mas exigem aprovação prévia, não podem ser dinâmicos.
+- Baileys é a lib que serviços brasileiros (JetSales, WaLeads, Z-API, ChatPro) usam por baixo. Funciona como WhatsApp Web — engenharia reversa do protocolo. **Sem janela 24h, sem template, sem cobrança por mensagem.**
+- Johnny já operava o WhatsApp pessoal com Baileys há anos sem ban. Conhece o risk profile.
+
+**Trade-offs aceitos:**
+- ⚠️ **Risco de banimento** se uso for spam-like. Mitigado: 1 número de academia, comportamento humano (delays 1-3min, msgs únicas), sem disparo em massa.
+- ⚠️ **Sem suporte oficial Meta** — quebra ocasional quando WhatsApp atualiza protocolo (Baileys community fix em ~1-3 dias).
+- ⚠️ **Sem selo verde de business verificado.**
+
+**Implementação (PR #20):**
+- Facade pattern em `src/whatsapp.js` — código que envia/recebe não sabe do provider
+- `src/whatsapp-baileys.js` (novo): WebSocket persistente + auth state em `/data/baileys-auth/` + QR endpoint
+- `src/whatsapp-meta.js` (renomeado do whatsapp.js antigo): mantido funcional pra fallback
+- `src/webhook.js`: extraída `handleIncomingMessage()` chamável por HTTP webhook OU event listener Baileys
+- `src/transcriber.js`: `transcribeAudioBuffer()` provider-agnostic
+- `src/tts.js`: retorna `{ buffer, mimeType }` em vez de mediaId
+
+**Quando voltar pra Meta:** se acontecer ban repetido OU regulamentação mudar OR um cliente exigir API oficial. Trade-off é aceito enquanto risco for baixo no uso atual.
+
+**Decisão sobre Evolution API vs Baileys puro:** Evolution API é Baileys empacotado em REST + dashboard. Pra nosso caso (1 número, 1 app Node já rodando), Evolution adicionaria complexidade desnecessária (container extra + Postgres + Redis) sem ganho. **Escolhido: Baileys direto, embedded no app.**
+
+---
+
+## 2026-05-02 — Knowledge base separado do prompt cacheado
+
+**Decisão:** Criar tabela `academia_info` (key/value) editável pelo painel, injetada no `dynamicCtx` da IA — separado do `SYSTEM_PROMPT` estático que fica no cache.
+
+**Por quê:**
+- Prompt da IA é 38k chars com cache_control ephemeral. Editar prompt invalida o cache (custo pula 10x na próxima conversa).
+- Dados que mudam frequentemente (preço de promo, horário, modalidades) NÃO devem estar misturados com regras fixas.
+- Editor antigo era textarea de 38k chars — fácil quebrar regra distante quando ia atualizar valor de plano.
+
+**Implementação (PR #30):**
+- Tabela `academia_info(key, value, label, description, category, display_order, updated_at)`
+- Seed automático com 16 chaves padrão (planos, horários, modalidades, etc)
+- `db.buildAcademiaInfoBlock()` monta string formatada das infos preenchidas (vazias não vão pro prompt — controle explícito de "o que a IA sabe")
+- `agent.reply()` injeta o bloco no `dynamicCtx` (não cacheado) com instrução "estes valores valem em conflito"
+- UI: aba "Conhecimento" agrupa por categoria, save automático no blur
+
+**Resultado:** atualizar valor de plano = editar 1 célula. Próxima resposta da IA já usa o valor novo. Zero risco de quebrar prompt.
+
+---
+
+## 2026-05-02 — SSE em vez de WebSocket pra real-time
+
+**Decisão:** Server-Sent Events (uni-direcional servidor→cliente) em vez de WebSocket bidirecional pra atualizar painel em tempo real.
+
+**Por quê:**
+- Casos de uso são todos servidor→cliente (msg nova, status change, conexão caiu). Cliente→servidor já vai por HTTP REST normal.
+- SSE é mais simples: HTTP-based, atravessa qualquer proxy, sem lib extra (`EventSource` é nativo do browser), sem heartbeat custom (já tem ping built-in).
+- Polling antigo (5s) consumia ~6 GB egress/usuário/mês. SSE consome ~50 MB. Mas a real motivação não foi custo (era irrelevante na escala atual) — foi UX (latência ~100ms vs 3-5s).
+- WebSocket adicionaria Socket.io ou similar, lógica de reconexão custom, complexidade pra ganho zero.
+
+**Implementação (PR #27):**
+- `src/events.js`: EventEmitter singleton com coalesce de 250ms por phone
+- DB hooks emitem em writes (`addMessage`, `updateMessageDeliveryStatus`, etc)
+- `/admin/api/events` (SSE): heartbeat 25s, cleanup automático em `req.close`
+- Frontend: `EventSource` reconecta sozinho, polling vira fallback de 30s
+
+---
+
+## 2026-05-02 — Pipeline do TTS pra envio de áudio (em vez de opus/ogg "canônico")
+
+**Decisão:** Áudio enviado pelo painel passa pelo MESMO pipeline que o TTS usa há semanas (MP3 + libmp3lame 64k + fetch + ordem de campos `file/type/messaging_product`).
+
+**Por quê:**
+Saga de 6 PRs (#5-#11) tentando enviar áudio do painel falhando silenciosamente — Meta API aceitava upload e `/messages` retornava 200 OK mas o lead não recebia.
+
+Tentei nesta ordem:
+1. webm direto → silent fail
+2. transcode webm→ogg via ffmpeg copy → silent fail
+3. opus 64k stereo via libopus → silent fail
+4. opus mono 16kHz 32k -application voip ("params canônicos de voice message") → silent fail
+
+User percebeu o óbvio: **a IA já mandava áudio com sucesso há semanas via TTS**. Comparando os caminhos:
+| | TTS (funciona) | Manual (falhava) |
+|---|---|---|
+| Format | audio/mpeg (MP3) | audio/ogg (Opus) |
+| HTTP client | fetch + native FormData | axios + FormData |
+| Field order | file → type → messaging_product | inverso |
+
+Replicando o pipeline inteiro do TTS, o caminho manual passou a funcionar imediatamente.
+
+**Lição:** quando algo já funciona em produção, **replique o caminho inteiro** em vez de variar pra "o que deveria funcionar segundo docs". A doc da Meta dizia que aceitava ogg/opus, mas na prática o caminho MP3 + fetch + ordem específica é o que entrega.
+
+---
+
+## 2026-05-02 — Dockerfile em vez de Nixpacks
+
+**Decisão:** Usar `Dockerfile` (node:20-slim) em vez do Nixpacks default do Railway pra build.
+
+**Por quê:**
+Nixpacks ignorou config de `aptPkgs` e `nixPkgs` no `nixpacks.toml` (PRs #5 e #6 tentaram). Resultado: ffmpeg não instalava, `[server] ⚠️ ffmpeg NÃO encontrado no PATH` no boot.
+
+Switch pra Dockerfile (PR #7) com `apt-get install ffmpeg build-essential python3 ca-certificates` deu controle total e determinístico. Build leva ~3min na primeira vez (apt + native compile do better-sqlite3), mas cache faz builds subsequentes serem rápidos.
+
+**Bonus** (PR #8): mudei `CMD ["npm", "start"]` pra `CMD ["node", "src/index.js"]` direto — npm engole stack traces em alguns casos, dificulta debug.
+
+---
+
 ## 2026-05-01 — Inbox multi-agente próprio em vez de ChatPro/Wati
 
 **Decisão:** Construir inbox + handoff IA-humano dentro do painel /admin existente, em vez de migrar pra plataforma SaaS de WhatsApp Business (ChatPro, Wati, Kommo, Z-API).

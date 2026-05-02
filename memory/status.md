@@ -1,10 +1,48 @@
 # Status Atual do Projeto
 
-> Última atualização: 2026-05-01
+> Última atualização: 2026-05-02
 
-## Estado: SDR em produção, pausado pra teste em campo ✅
+## Estado: Plataforma feature-complete em Baileys, aguardando troca pro número da academia ✅
 
-O SDR está rodando 24/7 no Railway com Sonnet 4.5. Bugs críticos de compliance resolvidos. Pausado pra observar resultado real antes do próximo ciclo de melhoria.
+Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda: design WhatsApp Web completo, multi-agente, áudio bidirecional com player no painel, real-time via SSE, knowledge base editável, playground de testes, sistema de notificação. **Trocou de Meta Cloud API pra Baileys** pra remover restrição de janela 24h. Hoje rodando via número pessoal pra teste — próximo passo é desconectar e escanear QR com o número da academia (que tá no JetSales hoje).
+
+---
+
+## Estado das features (todas em produção)
+
+### 🎨 Design (PRs #1, #2, #3, #13, #14, #17, #28)
+- Tela login redesenhada (2 colunas com painel da marca)
+- App shell com left rail icon-only + Cmd+B pra fixar
+- Inbox 3 colunas estilo WhatsApp Web (lista | chat | ficha do lead)
+- Bubbles com tail, agrupamento de grupos consecutivos, gradient depth
+- Composer redesenhado: [+] [pill com textarea + emoji] [mic|send swap]
+- Topbar removida — botão "nova conversa" movido pro header da lista
+
+### 💬 Conversas e atendimento (PRs #18, #19, #25, #26)
+- Modal "nova conversa" — busca contato existente OU cria com número novo
+- Botão "Mandar msg" em cada aluno cadastrado
+- Picker de emoji com 8 categorias + recentes em localStorage
+- Player de áudio inline na bubble (MP3 salvo em /data/media)
+- Checkmarks ✓ ✓✓ ✓✓ azul (sent/delivered/read via Baileys events)
+
+### 🔌 Conexão WhatsApp (PRs #20, #21, #22, #23, #24)
+- **Provider toggle** via `WHATSAPP_PROVIDER=meta|baileys`
+- Baileys: WebSocket persistente, auth state em `/data/baileys-auth/`
+- QR code em `/admin/baileys/qr` ou aba Conexões integrada
+- JID resolution via `onWhatsApp` (resolve bug do 9-dígito BR)
+- LID resolution (privacy mode WhatsApp Multi-Device)
+- `canonicalizeContactPhone` no DB unifica conversas com formatos diferentes
+
+### ⚡ Real-time + notificações (PRs #27, #29)
+- SSE em `/admin/api/events` substitui polling 5s (latência ~100ms)
+- Banner persistente quando WhatsApp tá fora
+- Toast system pra alerts (msg failed, janela 24h, etc)
+- Browser notification quando aba em background
+
+### 🧠 Editar e treinar agente (PR #30)
+- Knowledge base editável (academia_info — 16 chaves agrupadas em 6 categorias)
+- Playground pra simular conversas com IA sem afetar produção
+- Custo estimado em R$ por chamada visível no playground
 
 ---
 
@@ -150,22 +188,29 @@ O SDR está rodando 24/7 no Railway com Sonnet 4.5. Bugs críticos de compliance
 
 | Item | Prioridade | Detalhe |
 |---|---|---|
-| Google Calendar | 🟡 Média | Criar evento automático no calendar da academia. Hoje a notificação WhatsApp resolve, mas Calendar agrega visibilidade pra equipe. |
-| Renovação do token WhatsApp | 🟡 Média | Lembrete: renovar em julho 2026 via Graph API Explorer |
-| Upgrade pra número real STRONIX | 🔴 Alta (quando pronto) | Sair do número de teste, verificar conta Business. Após isso, System User token funciona e o número real fica disponível para clientes. |
-| ~~Lista de alunos da STRONIX~~ | ✅ Concluído 2026-05-01 | 594 alunos ativos (de 602 contratos, agrupando 8 famílias com phone compartilhado) carregados em produção via bulk endpoint. |
-| Cockpit de métricas | 🟢 Baixa | Dashboard: leads, conversões, taxa de agendamento, no-show |
-| State machine por stage | 🟢 Baixa | Não necessário com Sonnet 4.5. Reavaliar só se aparecer demanda multi-cliente (SaaS) |
+| **Trocar pro número real da academia** | 🔴 Alta (próximo passo) | Hoje rodando no celular pessoal do Johnny pra teste. Quando estável: para o JetSales, abre Conexões → Desconectar → escaneia QR com número da academia. Tudo pronto. |
+| Templates Meta (fallback opcional) | 🟢 Baixa | Se precisar mandar pra contato fora da janela 24h em modo Meta. Não necessário em Baileys. |
+| Fase 3 — Version history do prompt | 🟡 Média | Snapshot a cada save + diff + revert. Ainda não implementado. |
+| Fase 4 — Coaching loop | 🟡 Média | Quando 👎 conversa, abrir form "como deveria ter respondido?" → vira few-shot example. |
+| Fase 5 — Tone settings (sliders) | 🟢 Baixa | Formal/casual, curto/extenso. Adiciona modificadores no prompt. |
+| Multi-número | 🟢 Baixa | Hoje 1 número por instalação. Refactor pra rodar academia + marketing em números separados — só se tiver demanda. |
+| Google Calendar | 🟡 Média | Criar evento automático no calendar da academia. Hoje a notificação WhatsApp resolve. |
+| Renovação do token Meta | 🟡 Média (só relevante se voltar pra Meta) | Token de 60 dias. Em Baileys não é usado. |
+| ~~Lista de alunos da STRONIX~~ | ✅ Concluído 2026-05-01 | 594 alunos ativos importados em produção. |
+| State machine por stage | 🟢 Baixa | Não necessário com Sonnet 4.5. |
 
 ---
 
 ## Stack
 
-- **Runtime:** Node.js v24
-- **Hosting:** Railway (production) + ngrok local (dev)
+- **Runtime:** Node.js v20 (Dockerfile node:20-slim) — `Dockerfile` substituiu Nixpacks pra garantir ffmpeg
+- **Hosting:** Railway (production)
 - **AI:** Claude Sonnet 4.5 (respostas) + Whisper (transcrição) + ElevenLabs (TTS)
-- **DB:** SQLite via better-sqlite3, volume persistente Railway
-- **WhatsApp:** Meta Cloud API (oficial)
+- **DB:** SQLite via better-sqlite3, volume `/data/` (database + media + baileys-auth)
+- **WhatsApp (atual):** **Baileys** via `@whiskeysockets/baileys` (toggle em `WHATSAPP_PROVIDER`)
+- **WhatsApp (fallback):** Meta Cloud API ainda funcional, pode trocar setando `WHATSAPP_PROVIDER=meta`
+- **Real-time:** SSE (Server-Sent Events) com EventEmitter singleton
+- **Audio transcoding:** ffmpeg (instalado no Dockerfile)
 - **Repo:** github.com/johnnychaves/stronix-sdr (privado)
 
 ---

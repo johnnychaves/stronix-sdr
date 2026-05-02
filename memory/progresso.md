@@ -4,6 +4,74 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 — Maratona: design completo + Baileys + features de produção (PRs #1 a #30)
+
+Sessão longa que evoluiu o sistema de "MVP funcional" pra "plataforma feature-complete pronta pra produção". 30 PRs mergeados.
+
+### Visão geral por área
+
+#### 🎨 Design system completo (PRs #1, #2, #3, #13, #14, #17, #28)
+Fonte: handoff bundle do Claude Design (claude.ai/design) — design system "STRONIX SDR".
+
+- **Login** (#1): tela de 2 colunas com painel da marca à esquerda (gradient + logo + headline + bubble preview), formulário à direita com glow verde no foco. Mantém modo bootstrap dinâmico.
+- **App shell** (#2): substituiu top tabs por **left rail icon-only** (64px, expande pra 240px no hover; Cmd+B fixa, salvo em localStorage). Topbar com breadcrumb (#28 removeu depois). User pill no rodapé com avatar gerado das iniciais.
+- **Inbox 3 colunas** (#3): lista | chat | ficha do lead (320px) — substituiu coluna "Em atendimento" antiga.
+- **Bubbles redesenhadas** (#13): tail triangular, agrupamento de msgs consecutivas, links auto, hover lift, distinção de cor IA vs humano.
+- **Padding fix** (#14): `chat-messages` `padding: 8% → 14px` — bubbles encostam nas bordas em vez de flutuar central.
+- **Composer WhatsApp Web** (#17): `[+] [pill com textarea + emoji embutido] [mic|send swap]`. Mic vira send quando tem texto.
+- **Topbar removida** (#28): breadcrumb e status pill saíram, ✏️ "nova conversa" foi pro header da lista.
+
+#### 💬 Features de conversa (PRs #15, #18, #19)
+- **Emoji picker** (#15): 8 categorias, 350+ emojis, recentes em localStorage, insert no cursor (não no fim), Esc/click fora fecha.
+- **Modal "Nova conversa"** (#18): busca contato existente OU número novo. Detecta texto vs número, normaliza BR (`(51) 99530-4633` → `5551995304633`), oferece criar.
+- **Busca aluno + msg direto** (#19): botão "Mandar msg" em cada aluno cadastrado. Modal de nova conversa também busca em `allStudents`. Erros Meta amigáveis (131047 = janela 24h, 131026 = num inválido).
+
+#### 🔊 Áudio bidirecional (PRs #4, #5, #6, #7, #8, #9, #10, #11, #25)
+**A saga do áudio** — 8 PRs até resolver. Lições aprendidas em [o-que-funciona.md](o-que-funciona.md).
+- (#4) UI de gravação no composer: mic → modo recording → preview → send via base64
+- (#5) ffmpeg via nixpacks (não funcionou)
+- (#6) ffmpeg via nixpacks com aptPkgs+nixPkgs (também não funcionou)
+- (#7) **Switch pra Dockerfile** (`node:20-slim` + `apt install ffmpeg`)
+- (#8) `CMD node` direto em vez de `npm start` pra stack traces aparecerem
+- (#9) Transcode sempre pra ogg/opus
+- (#10) Params canônicos de voice message (mono 16kHz 32k voip)
+- (#11) **FIX FINAL**: copiar pipeline do TTS (MP3 + libmp3lame 64k + fetch + ordem `file/type/messaging_product`). User percebeu que TTS já mandava áudio com sucesso há semanas.
+- (#12) Player inline no painel (MP3 salvo em `/data/media/<uuid>.mp3` + endpoint `/api/media/:filename`)
+- (#25) IA também salva áudio em disco (antes só mostrava texto descritivo)
+- Checkmarks ✓ ✓✓ ✓✓ azul (#12)
+
+#### 🔌 Migração pra Baileys (PRs #20-#24, #26)
+**Decisão:** trocar Meta Cloud API por Baileys pra remover restrição de janela 24h. Detalhes em [decisoes.md](decisoes.md).
+
+- (#20) Integração Baileys via toggle `WHATSAPP_PROVIDER=meta|baileys`. Facade pattern em `src/whatsapp.js` delega pro provider ativo. Auth state em `/data/baileys-auth/`.
+- (#21) Botão "Desconectar e trocar número" + página `/admin/baileys/qr` redesenhada com auto-refresh.
+- (#22) **JID resolution via `onWhatsApp`** — bug do 9-dígito BR (mensagem ia pro vazio porque destinatário tinha 12 dig e gerávamos 13).
+- (#23) **LID resolution** — WhatsApp privacy mode envia `<lid>@lid` em vez do phone real, criando contato duplicado.
+- (#24) **Canonicalização de phone no DB** — friend respondia com 12-dig, DB tinha 13-dig, criava contato novo. Fix: lookup das 2 variações antes de gravar/buscar.
+- (#26) **Aba "Conexões"** em Configurações — gerencia conexão pelo painel, sem precisar abrir URL avulsa.
+
+#### ⚡ Real-time + notificações (PRs #27, #29)
+- (#27) **SSE** — `/admin/api/events` substitui polling 5s. EventEmitter singleton (`src/events.js`) propaga `conversation.changed`, `connections.changed`, `appointments.changed`, `students.changed`. Latência ~100ms vs 3-5s. Polling fica de fallback (30s quando SSE saudável).
+- (#29) **Sistema de notificação** — banner persistente quando WhatsApp tá fora + toast stack pra eventos pontuais (msg failed, janela 24h fechada, num inválido). Browser notification quando aba em background.
+
+#### 🧠 Editar e treinar agente — Fase 1+2 (PR #30)
+- **Knowledge base estruturado** (`academia_info` table): 16 chaves por categoria (planos, modalidades, horários, contato, promo, diferenciais). UI editável em "Configurações → Conhecimento" com save automático no blur. `db.buildAcademiaInfoBlock()` injeta no `dynamicCtx` da IA — mudanças aparecem na próxima resposta sem invalidar o cache de 38k chars.
+- **Playground** ("Configurações → Testar agente"): chat isolado pra simular conversa com IA. Não toca DB de mensagens nem WhatsApp. Mostra tokens (input + cache + output), latência, custo estimado em R$. `agent.simulateReply()` paralelo ao `reply()` mas sem efeitos colaterais.
+
+### Estado de fim de sessão
+- ✅ Todas features mergeadas em main, em produção
+- ✅ Baileys conectado no número pessoal do Johnny pra teste — funcional
+- ✅ IA respondendo, áudio bidirecional, painel multi-agente, SSE em tempo real
+- ⏳ Próximo passo operacional: trocar do número pessoal pro número da academia (pausar JetSales no número, abrir Conexões → Desconectar → escanear QR novo)
+
+### O que NÃO foi feito (próximas fases)
+- Fase 3 — Version history do prompt (snapshots + diff + revert)
+- Fase 4 — Coaching loop (👎 vira form "como deveria ter respondido" → few-shot)
+- Fase 5 — Tone settings (sliders formal/casual, curto/extenso)
+- Multi-número (hoje suporta 1)
+
+---
+
 ## 2026-05-01 — Redesign WhatsApp Web da aba Inbox
 
 **Contexto:** O Johnny pediu pra deixar o painel "mais sofisticado, intuitivo e profissional" e trazer a parte de mensagens "o mais próximo possível do layout do WhatsApp oficial", além de criar um menu lateral com alunos em atendimento ativo.
