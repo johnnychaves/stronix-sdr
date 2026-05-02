@@ -4,6 +4,86 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 — Validação Bateria A-E do agent v2 (PR #32) via script
+
+**Contexto:** Antes de construir Fase 2 (Roteador), rodar os 21 cenários do PG_CENARIOS pra confirmar que a infra do v2 (parser, máquina de estado, regra de valores, handoff por tentativas) funciona.
+
+**O que foi feito:**
+- Criado [`scripts/baterias-v2.js`](scripts/baterias-v2.js) — roda 21 cenários via `simulateReplyV2`, gera relatório markdown
+- Rodou 21/21 sem crash. Custo: ~$0,22 USD (~R$1,21)
+- Relatório: [`scripts/baterias-v2-result.md`](scripts/baterias-v2-result.md)
+- Asserts da Bateria E: **1/4 passou** (E.4 só)
+
+**Findings — em ordem de severidade:**
+
+| # | Sev | Onde | O que | Causa raiz |
+|---|---|---|---|---|
+| 1 | 🔴 Alto | E.3 — prompt núcleo | Bot trava em `qualificacao_objetivo` por 5+ turnos. Lead respondeu "João" (turno 4), "tarde" (5), "quarta" (6), "14h" (7), "beleza confirmado" (8) e bot continua re-perguntando "resultado físico vs qualidade vida". Conversa nunca chega em `proposta_visita` → nunca emite `[AGENDAMENTO]`. | Núcleo não tem regra "se lead pular etapas com sinal claro de avançar (dia/hora/confirmação), capturar e progredir o estágio". |
+| 2 | 🟡 Médio | `simulateReplyV2` | Não replica linhas 312-329 do `replyV2`: append em `objecoes_levantadas`, reset/incremento de `tentativas_objecao_atual`, force `estagio_atual=handoff_humano` em 3 tentativas. | Função do playground foi escrita simplificada. Causa direta das falhas E.1 e E.2. Em produção (replyV2) essa lógica existe e funciona. |
+| 3 | 🟡 Médio | `simulateReplyV2` | Não chama `detectsValueRequest` + auto-incremento de `insistencias_valor` (linhas 252-254 do replyV2). LLM ainda emite via tag, mas auto-incremento backend é silent fallback. | Mesma causa: simulate simplificado. |
+| 4 | 🟡 Médio | A.4 turnos 3-7 + outros | Bot não emite `[ESTADO:...]` em todo turno mesmo o núcleo dizendo que é OBRIGATÓRIA. Em A.4: tag presente nos turnos 1-2, ausente em 3-7. | Núcleo precisa reforço/exemplo do anti-padrão. Em produção, replyV2 mantém estado anterior se vier sem tag — não corrompe DB, mas perde rastreabilidade. |
+| 5 | 🟢 Baixo | E.3 turno 15 | Resposta veio vazia (`> ` apenas). Bot recebeu "preciso adiar pra outra semana" e emitiu só a tag `[ESTADO:...]` sem texto pro lead. | Bug raro mas embaraçoso em produção. Núcleo deve forçar mínimo 1 frase de texto sempre. |
+
+**O que FUNCIONOU bem (seguir replicando):**
+- Roteiro de qualificação 7 turnos completo (A.4): oi → parado → emagrecer → Maria → manhã → terça → 9h → confirma "Terça às 9h tá confirmado pra tua aula experimental" ✓
+- Insistências de valor 1/2/3 detectadas corretamente (A.3, B.1, E.1, E.2)
+- Tabela do mais caro pro mais barato após 3ª insistência ✓
+- Virada obrigatória pra aula experimental após valores ✓
+- Defletir Gympass sem perder o roteiro (B.4) ✓
+- Handoff direto pra: lesão (C.3), aluno financeiro (D.2), grosseria (D.3) ✓
+- Reposicionamento contra plano mensal (B.5) ✓
+- Públicos especiais marcam módulo `publicos_especificos` (C.1, C.2) ✓
+- Parser robusto: tag malformada não crasha, parser limpa do texto (E.4) ✓
+
+**Próximos passos discutidos:**
+1. Decidir se fixes precedem Fase 2 (Roteador) ou se o Roteador resolve naturalmente Finding #1
+2. Não foi aberto PR — relatório local pra Johnny decidir
+
+---
+
+## 2026-05-02 — Fixes pré-Fase 2 aplicados (Bateria E: 1/4 → 2/4)
+
+**Contexto:** Após validação que mostrou Bateria E 1/4 + bug crítico E.3 (loop em qualificacao_objetivo), aplicados 3 fixes locais no worktree antes de seguir pra Fase 2 (Roteador).
+
+**O que mudou:**
+
+1. **Fix A — Paridade `simulateReplyV2` ↔ `replyV2`** ([agent-v2.js](src/agent-v2.js))
+   - Extraídas 2 funções puras compartilhadas: `computeInsistenciasValor(currentInsist, userText)` e `computeStateUpdate(currentState, parsed)` — retorna `{ stateFields, appendedObjecao }`
+   - `replyV2` chama as funções puras, persiste via `db.appendObjecaoLevantada` + `db.updateLeadState`
+   - `simulateReplyV2` chama as MESMAS funções, atualiza state em memória (com dedup em `objecoes_levantadas`)
+   - Adicionado auto-incremento de `insistencias_valor` no simulate (linha 367) — antes só replyV2 fazia
+   - Garante `objecoes_levantadas` como array no simulate (proteção contra null vindo do cliente)
+   - **Efeito:** Playground agora simula corretamente lógica de mudança de objeção, force handoff em 3 tentativas, etc.
+
+2. **Fix B — Bug E.3 (loop em qualificacao_objetivo)** ([prompt-nucleo-v2.js](src/prompt-nucleo-v2.js))
+   - Adicionada seção "REGRA ANTI-LOOP — LEAD PULOU ETAPA (CRÍTICA)" na máquina de estado
+   - Adicionado anti-padrão concreto "ANTI-PADRÃO 2: LOOP IGNORANDO SINAL DE AVANÇO" com exemplo certo vs errado
+   - Regra: se lead respondeu sinal claro (nome, manhã/tarde, dia, hora, "confirmado") sem responder a binária pendente, CAPTURA o sinal e AVANÇA estágio. Pode pedir 1x a info pulada, mas nunca fica em loop.
+   - **Efeito em bateria:** E.3 passou de FAIL → PASS. Bot agora avança "tarde" → "quarta" → "14h" → "fechado" e emite `[AGENDAMENTO:nome=João|dia=quarta|hora=14h|modalidade=pilates]` corretamente. **Corrigiu bug REAL de produção** que travava agendamento em conversas atípicas.
+
+3. **Fix C — Tag obrigatória + texto mínimo** ([prompt-nucleo-v2.js](src/prompt-nucleo-v2.js))
+   - Adicionado TOPO BLINDADO 🚨 antes de "QUEM VOCÊ É" forçando tags na linha 1+2 e texto na linha 3+
+   - Adicionados itens 7 e 8 nas Regras de Ouro
+   - Adicionados itens 1-2 e 4 na Checagem Final
+   - **Efeito parcial:** Bot emite tag em respostas curtas ("Te vejo quarta", "Aceita Pix") agora — mas continua esquecendo em respostas longas/elaboradas de objeção (E.1, E.2). Limitação intrínseca do LLM em respostas com argumentação extensa.
+
+**Re-validação (após fixes):**
+- 21/21 sem crash
+- **Bateria E: 2/4 passou** (E.3 + E.4) vs 1/4 antes
+- E.1 mudou de 1 entrada → 0 entradas em `objecoes_levantadas` (regressão tática mas trade-off aceitável: bot priorizou rebater objeção com argumentos longos sobre emitir tag)
+- E.2 ainda falha por mesma razão
+- Custo total: $0,22 (~R$1,21)
+
+**Trade-off aceito:** Fix C v2 (topo blindado) ganhou E.3 (agendamento real captura) e perdeu rastreabilidade em E.1 (objeções não persistem 100% no histórico). Em produção, `replyV2` mantém estado anterior se tag faltar — não corrompe DB, só perde rastreabilidade pra debug. **Agendamento real é mais crítico que histórico fiel de objeções.**
+
+**O que segue não-resolvido:**
+- Bot esquece tag `[ESTADO:]` em respostas longas elaboradas (Findings residuais E.1, E.2). Solução cirúrgica seria migrar pra **tool use estruturado** da Anthropic SDK (em vez de tag no texto), mas isso é re-arquitetura que não cabe agora.
+- Sugestão pra futuro: adicionar log de warning em `replyV2` quando turno vem sem `[ESTADO:]` pra dar visibilidade em produção.
+
+**Decisão:** fixes locais commitados, NÃO foi feito push nem aberto PR. Aguardando sinal do Johnny pra: (a) push + abrir PR, (b) seguir pra Fase 2 sem PR (acumula fixes), ou (c) descartar e revisitar.
+
+---
+
 ## 2026-05-02 — Maratona: design completo + Baileys + features de produção (PRs #1 a #30)
 
 Sessão longa que evoluiu o sistema de "MVP funcional" pra "plataforma feature-complete pronta pra produção". 30 PRs mergeados.
