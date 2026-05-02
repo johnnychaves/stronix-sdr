@@ -1607,6 +1607,63 @@ router.get('/', (req, res) => {
     .chat-mic:active { transform: scale(.96); }
     .chat-mic svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
+    /* Botão emoji (composer) */
+    .chat-emoji {
+      background: transparent; color: var(--text-secondary);
+      border: none; width: 40px; height: 40px;
+      border-radius: 50%; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all var(--t-fast);
+      font-size: 22px; line-height: 1;
+    }
+    .chat-emoji:hover { background: var(--bg-4); }
+    .chat-emoji.active { background: var(--brand-soft); color: var(--brand); }
+
+    /* Painel de emojis (popup acima do composer) */
+    .chat-input-wrap { position: relative; }
+    .emoji-panel {
+      position: absolute; bottom: calc(100% + 4px); left: 12px;
+      width: 360px; max-width: calc(100% - 24px);
+      height: 320px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 12px; box-shadow: var(--shadow-lg);
+      z-index: 50; overflow: hidden;
+      display: flex; flex-direction: column;
+      animation: emojiPanelIn .15s ease-out;
+    }
+    @keyframes emojiPanelIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .emoji-panel.hidden { display: none; }
+    .emoji-tabs {
+      display: flex; flex-shrink: 0;
+      background: var(--bg-2); border-bottom: 1px solid var(--border-subtle);
+    }
+    .emoji-tab {
+      flex: 1; padding: 8px 4px;
+      background: none; border: none; cursor: pointer;
+      font-size: 20px; line-height: 1;
+      border-bottom: 2px solid transparent;
+      transition: border-color var(--t-fast), background var(--t-fast);
+      opacity: .65;
+    }
+    .emoji-tab:hover { opacity: 1; background: rgba(255,255,255,.04); }
+    .emoji-tab.active { border-bottom-color: var(--brand); opacity: 1; }
+    .emoji-grid {
+      flex: 1; overflow-y: auto;
+      display: grid; grid-template-columns: repeat(8, 1fr);
+      gap: 2px; padding: 8px;
+    }
+    .emoji-cell {
+      background: none; border: none; cursor: pointer;
+      font-size: 22px; line-height: 1;
+      padding: 6px; border-radius: 6px;
+      transition: background var(--t-fast), transform var(--t-fast);
+    }
+    .emoji-cell:hover { background: var(--bg-4); transform: scale(1.15); }
+    .emoji-cell:active { transform: scale(1); }
+
     /* Modo gravação — substitui temporariamente a input bar */
     .chat-input-bar.recording {
       gap: var(--sp-3);
@@ -2638,7 +2695,9 @@ router.get('/', (req, res) => {
         : '';
       return \`
         \${banner}
+        <div class="emoji-panel hidden" id="emoji-panel"></div>
         <div class="chat-input-bar">
+          <button class="chat-emoji" id="chat-emoji-btn" onclick="toggleEmojiPanel(event)" title="Inserir emoji" type="button">😊</button>
           <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}..." rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)"></textarea>
           <button class="chat-mic" onclick="startRecording('\${c.from}')" title="Gravar áudio">
             <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
@@ -2710,6 +2769,101 @@ router.get('/', (req, res) => {
       sendChatReply(phone);
     }
   }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Emoji picker
+  // ─────────────────────────────────────────────────────────────────
+  const EMOJI_CATEGORIES = [
+    { id: 'recent',   icon: '🕒', emojis: [] },
+    { id: 'smileys',  icon: '😊', emojis: ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🥸','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥','😓','🤗','🤔','🤭','🤫','🤥','😶','😐','😑','😬','🙄','😯','😦','😧','😮','😲','🥱','😴','🤤','😪','😵','🤐','🥴','🤢','🤮','🤧','😷','🤒','🤕','🤑','🤠','🤡','😈','👿','💀','👻','👽','🤖','💩'] },
+    { id: 'gestures', icon: '👍', emojis: ['👍','👎','👌','✌️','🤞','🤟','🤘','🤙','👋','🤚','🖐️','✋','🖖','👏','🙌','🤲','🤝','🙏','✍️','💪','🦾','🦵','🦶','👂','👃','🧠','👀','👁️','💋','💄','👅','👄','🦷','🤳','💅','👶','🧒','👦','👧','🧑','👱','👨','🧔','👩','🧓','👴','👵'] },
+    { id: 'hearts',   icon: '❤️', emojis: ['❤️','🧡','💛','💚','💙','💜','🤎','🖤','🤍','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','♥️','💌','💋','💯','💢','💥','💫','💦','💨','🕳️','💣','🔥','✨','⭐','🌟','💎'] },
+    { id: 'sport',    icon: '🏋️', emojis: ['💪','🏋️','🏋️‍♂️','🏋️‍♀️','🏃','🏃‍♂️','🏃‍♀️','🚴','🚴‍♂️','🚴‍♀️','🚵','🤸','🤾','⛹️','🥊','🥋','🧘','🧘‍♂️','🧘‍♀️','🏊','🏊‍♂️','🏊‍♀️','🏄','⛷️','🏂','🏆','🥇','🥈','🥉','🎯','⚽','🏀','🏈','⚾','🥎','🎾','🏐','🏉','🎱','🏓','🏸','🥅','⛳','🎮','🕹️'] },
+    { id: 'food',     icon: '🍔', emojis: ['🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🥬','🥒','🌶️','🫑','🌽','🥕','🧄','🧅','🥔','🍠','🥐','🥯','🍞','🥖','🥨','🧀','🥚','🍳','🧈','🥞','🧇','🥓','🥩','🍗','🍖','🌭','🍔','🍟','🍕','🥪','🥙','🧆','🌮','🌯','🥗','🍝','🍜','🍲','🥘','🍣','🍱','🍤','🍩','🍪','🎂','🍰','🍦','🍧','🍨','🥧','🍫','🍬','🍭','☕','🍵','🧃','🥤','🍶','🍺','🍻','🥂','🍷','🥃','🍸','🍹','🍾'] },
+    { id: 'party',    icon: '🎉', emojis: ['🎉','🎊','🎈','🎁','🎂','🍾','🥂','🍻','🌹','💐','🌷','🌸','🌺','🌻','🎀','🎗️','🎟️','🎫','🎖️','🏅','🏆','🎯','🎪','🎭','🎨','🎬','🎤','🎧','🎼','🎵','🎶','🥁','🎷','🎺','🎸','🎻'] },
+    { id: 'objects',  icon: '✅', emojis: ['✅','❌','✔️','❎','⭕','🚫','⛔','📛','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🟤','🔇','🔈','🔉','🔊','📣','📢','💬','💭','🗯️','♨️','💤','⚡','🌈','🚀','✈️','🛫','🛬','🚗','🏠','🏢','🏪','📱','💻','⌚','📷','📹','💡','🔑','🔒','🔓','🔔','🎯','🚩','📍','📌'] },
+  ];
+  let emojiActiveCat = 'smileys';
+  let emojiRecent = [];
+  try {
+    const saved = localStorage.getItem('emojiRecent');
+    if (saved) emojiRecent = JSON.parse(saved).slice(0, 32);
+  } catch {}
+
+  function toggleEmojiPanel(e) {
+    if (e) e.stopPropagation();
+    const panel = document.getElementById('emoji-panel');
+    const btn = document.getElementById('chat-emoji-btn');
+    if (!panel) return;
+    const wasHidden = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden');
+    if (btn) btn.classList.toggle('active', wasHidden);
+    if (wasHidden) {
+      // Renderiza painel quando abre
+      renderEmojiPanel();
+    }
+  }
+
+  function renderEmojiPanel() {
+    const panel = document.getElementById('emoji-panel');
+    if (!panel) return;
+    // Tabs sempre — mas esconde "recent" se vazio
+    const cats = EMOJI_CATEGORIES.filter(c => c.id !== 'recent' || emojiRecent.length > 0);
+    if (!cats.find(c => c.id === emojiActiveCat)) emojiActiveCat = 'smileys';
+    const tabsHtml = cats.map(c =>
+      '<button class="emoji-tab' + (c.id === emojiActiveCat ? ' active' : '') +
+        '" data-cat="' + c.id + '" onclick="selectEmojiCat(\\'' + c.id + '\\')">' + c.icon + '</button>'
+    ).join('');
+    const activeCat = cats.find(c => c.id === emojiActiveCat);
+    const emojis = activeCat.id === 'recent' ? emojiRecent : activeCat.emojis;
+    const gridHtml = emojis.map(e =>
+      '<button class="emoji-cell" type="button" onclick="insertEmoji(\\'' + e.replace(/'/g, "\\\\'") + '\\')">' + e + '</button>'
+    ).join('');
+    panel.innerHTML =
+      '<div class="emoji-tabs">' + tabsHtml + '</div>' +
+      '<div class="emoji-grid">' + gridHtml + '</div>';
+  }
+
+  function selectEmojiCat(catId) {
+    emojiActiveCat = catId;
+    renderEmojiPanel();
+  }
+
+  function insertEmoji(emoji) {
+    const ta = document.getElementById('chat-input');
+    if (!ta) return;
+    const start = ta.selectionStart || 0;
+    const end = ta.selectionEnd || 0;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    ta.value = before + emoji + after;
+    ta.selectionStart = ta.selectionEnd = start + emoji.length;
+    ta.focus();
+    autoGrowChat(ta);
+    // Atualiza recentes (move pro topo)
+    emojiRecent = [emoji, ...emojiRecent.filter(e => e !== emoji)].slice(0, 32);
+    try { localStorage.setItem('emojiRecent', JSON.stringify(emojiRecent)); } catch {}
+  }
+
+  // Click fora do painel fecha
+  document.addEventListener('click', e => {
+    const panel = document.getElementById('emoji-panel');
+    const btn = document.getElementById('chat-emoji-btn');
+    if (!panel || panel.classList.contains('hidden')) return;
+    if (panel.contains(e.target) || (btn && btn.contains(e.target))) return;
+    panel.classList.add('hidden');
+    if (btn) btn.classList.remove('active');
+  });
+  // Esc fecha
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const panel = document.getElementById('emoji-panel');
+    if (panel && !panel.classList.contains('hidden')) {
+      panel.classList.add('hidden');
+      const btn = document.getElementById('chat-emoji-btn');
+      if (btn) btn.classList.remove('active');
+    }
+  });
 
   async function sendChatReply(phone) {
     const ta = document.getElementById('chat-input');
