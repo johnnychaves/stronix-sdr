@@ -486,11 +486,13 @@ router.get('/api/events', (req, res) => {
   const onAppt = () => send('appointments.changed', {});
   const onStud = () => send('students.changed', {});
   const onAlert = (data) => send('alert', data);
+  const onV2 = (data) => send('v2.metrics.changed', data || {});
   events.bus.on('conversation.changed', onConv);
   events.bus.on('connections.changed', onConn);
   events.bus.on('appointments.changed', onAppt);
   events.bus.on('students.changed', onStud);
   events.bus.on('alert', onAlert);
+  events.bus.on('v2.metrics.changed', onV2);
 
   // Heartbeat a cada 25s — alguns proxies cortam conexão idle após 30-60s
   const heartbeat = setInterval(() => {
@@ -505,6 +507,7 @@ router.get('/api/events', (req, res) => {
     events.bus.off('appointments.changed', onAppt);
     events.bus.off('students.changed', onStud);
     events.bus.off('alert', onAlert);
+    events.bus.off('v2.metrics.changed', onV2);
   });
 });
 
@@ -1186,6 +1189,178 @@ router.post('/api/students/bulk', (req, res) => {
   const result = db.bulkUpsertStudents(items);
   console.log(`[admin] bulk students: inserted=${result.inserted} updated=${result.updated} skipped=${result.skipped}`);
   res.json(result);
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// PR #37 — V2 MONITORING (admin only)
+// ─────────────────────────────────────────────────────────────────────
+
+// Lista conversas v2 com filtro opcional de status.
+router.get('/api/v2/conversations', auth.requireAdmin, (req, res) => {
+  const { status, limit } = req.query;
+  const validStatus = ['em_andamento', 'agendou', 'handoff', 'perdeu'];
+  const filter = (status && validStatus.includes(status)) ? status : null;
+  const lim = Math.min(parseInt(limit, 10) || 200, 500);
+  try {
+    const rows = db.getV2Conversations({ status: filter, limit: lim });
+    res.json({ conversations: rows, total: rows.length });
+  } catch (err) {
+    console.error('[v2/conversations] erro:', err.message);
+    res.status(500).json({ error: 'falha ao listar conversas' });
+  }
+});
+
+// Detalhe completo de uma conversa pra painel lateral.
+router.get('/api/v2/conversation/:phone', auth.requireAdmin, (req, res) => {
+  try {
+    const detail = db.getV2ConversationDetail(req.params.phone);
+    if (!detail) return res.status(404).json({ error: 'conversa v2 não encontrada' });
+    res.json(detail);
+  } catch (err) {
+    console.error('[v2/conversation] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Métricas do período.
+router.get('/api/v2/metrics', auth.requireAdmin, (req, res) => {
+  const period = req.query.period || '7d';
+  if (!db.V2_PERIODS[period]) return res.status(400).json({ error: 'period inválido (use: 1h | today | 7d | 14d | 30d)' });
+  try {
+    const m = db.getV2Metrics(period);
+    res.json(m);
+  } catch (err) {
+    console.error('[v2/metrics] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Alertas ativos (banner vermelho).
+router.get('/api/v2/alerts', auth.requireAdmin, (req, res) => {
+  try {
+    const alerts = db.getV2Alerts();
+    res.json({ alerts, count: alerts.length });
+  } catch (err) {
+    console.error('[v2/alerts] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Avaliação 3-níveis (extends conversation_reviews).
+router.put('/api/v2/review/:phone', auth.requireAdmin, (req, res) => {
+  const { rating, comment } = req.body || {};
+  if (!db.isValidReviewRating(rating)) {
+    return res.status(400).json({ error: "rating deve ser 'good', 'aceitavel' ou 'bad'" });
+  }
+  // Confere que phone existe em contacts (FK)
+  if (!db.getContact(req.params.phone)) {
+    return res.status(404).json({ error: 'phone não encontrado em contacts' });
+  }
+  try {
+    db.upsertReview(req.params.phone, rating, comment || null);
+    // Notifica via SSE pra atualizar UI em tempo real
+    try { require('./events').bus.emit('v2.metrics.changed', { phone: req.params.phone, type: 'review' }); } catch {}
+    res.json({ ok: true, rating, comment: comment || null });
+  } catch (err) {
+    console.error('[v2/review] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Força geração de resumo agora (combinado no review do PR36).
+router.post('/api/v2/force-resumo/:phone', auth.requireAdmin, async (req, res) => {
+  try {
+    const { updateResumoDinamicoBackground } = require('./resumo-dinamico');
+    db.logV2Event(db.V2_EVENT_TYPES.FORCE_RESUMO, req.params.phone, null, { user: req.user?.id });
+    const result = await updateResumoDinamicoBackground(req.params.phone);
+    res.json({ ok: true, result });
+  } catch (err) {
+    console.error('[v2/force-resumo] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Status atual da versão (env baseline + override + efetiva).
+router.get('/api/v2/version', auth.requireAdmin, (req, res) => {
+  const webhook = require('./webhook');
+  res.json({
+    env: webhook.AGENT_VERSION_ENV,
+    override: db.getRuntimeFlag('agent_version_override'),
+    current: webhook.getCurrentAgentVersion(),
+  });
+});
+
+// Pausa v2: força AGENT_VERSION=v1 instantâneo. Com confirmação dupla no front.
+router.post('/api/v2/pause', auth.requireAdmin, (req, res) => {
+  const { confirm } = req.body || {};
+  if (confirm !== 'PAUSAR_V2_AGORA') {
+    return res.status(400).json({ error: "envie body { confirm: 'PAUSAR_V2_AGORA' } pra confirmar" });
+  }
+  db.setRuntimeFlag('agent_version_override', 'v1', req.user?.id);
+  db.logV2Event(db.V2_EVENT_TYPES.VERSION_CHANGE, null, null, {
+    action: 'pause',
+    user: req.user?.id,
+    user_name: req.user?.display_name,
+  });
+  console.warn(`[v2/pause] AGENT_VERSION=v1 forçado por ${req.user?.display_name || req.user?.id}`);
+  try { require('./events').bus.emit('v2.metrics.changed', { type: 'version_change' }); } catch {}
+  res.json({ ok: true, current: 'v1', message: 'v2 pausado. Próximas mensagens caem em v1.' });
+});
+
+// Resume: limpa override (volta pra env var).
+router.post('/api/v2/resume', auth.requireAdmin, (req, res) => {
+  const { confirm } = req.body || {};
+  if (confirm !== 'RESUMIR_V2') {
+    return res.status(400).json({ error: "envie body { confirm: 'RESUMIR_V2' } pra confirmar" });
+  }
+  db.setRuntimeFlag('agent_version_override', '', req.user?.id);
+  db.logV2Event(db.V2_EVENT_TYPES.VERSION_CHANGE, null, null, {
+    action: 'resume',
+    user: req.user?.id,
+    user_name: req.user?.display_name,
+  });
+  const webhook = require('./webhook');
+  console.warn(`[v2/resume] override removido por ${req.user?.display_name || req.user?.id}, current=${webhook.getCurrentAgentVersion()}`);
+  try { require('./events').bus.emit('v2.metrics.changed', { type: 'version_change' }); } catch {}
+  res.json({ ok: true, current: webhook.getCurrentAgentVersion(), message: 'override removido. Volta pra env var.' });
+});
+
+// Export CSV de conversas v2 do período.
+router.get('/api/v2/export', auth.requireAdmin, (req, res) => {
+  const period = req.query.period || '7d';
+  if (!db.V2_PERIODS[period]) return res.status(400).json({ error: 'period inválido' });
+  try {
+    const since = Date.now() - db.V2_PERIODS[period];
+    const conversations = db.getV2Conversations({ limit: 10000 }).filter(c => c.last_contact_at >= since);
+    const escapeCsv = (v) => {
+      if (v === null || v === undefined) return '';
+      const s = String(v).replace(/\r?\n/g, ' ').replace(/"/g, '""');
+      return /[",;]/.test(s) ? `"${s}"` : s;
+    };
+    const headers = [
+      'phone', 'name', 'status', 'estagio_atual', 'objecao_ativa',
+      'insistencias_valor', 'modalidade_recomendada', 'disponibilidade',
+      'total_msgs_lead', 'total_msgs_johnny', 'review_rating', 'review_comment',
+      'data_agendamento', 'hora_agendamento', 'last_contact_at', 'last_message',
+    ];
+    let csv = headers.join(';') + '\n';
+    for (const c of conversations) {
+      csv += [
+        c.phone, c.name, c._status, c.estagio_atual, c.objecao_ativa,
+        c.insistencias_valor, c.modalidade_recomendada, c.disponibilidade,
+        c.total_mensagens_lead, c.total_mensagens_johnny, c.review_rating, c.review_comment,
+        c.data_agendamento, c.hora_agendamento,
+        c.last_contact_at ? new Date(c.last_contact_at).toISOString() : '',
+        c.last_message,
+      ].map(escapeCsv).join(';') + '\n';
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="v2-conversas-${period}-${Date.now()}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('[v2/export] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Painel HTML
@@ -2812,6 +2987,100 @@ router.get('/', (req, res) => {
 
     /* Selecção de texto */
     ::selection { background: var(--brand-soft); color: var(--text-primary); }
+
+    /* ─────────────────────────────────────────────────────────────────────
+       PR #37 — Monitor v2 (admin tooling)
+       ───────────────────────────────────────────────────────────────────── */
+    .v2m { display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+    @media (max-width: 1100px) { .v2m { grid-template-columns: 1fr; } }
+    .v2m-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    .v2m-side { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; max-height: calc(100vh - 200px); overflow-y: auto; }
+
+    .v2m-alerts { display: flex; flex-direction: column; gap: 8px; }
+    .v2m-alert { padding: 12px 14px; border-radius: 10px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    .v2m-alert.critical { background: #4a1d1d; color: #ffd0d0; border-left: 4px solid #ff4d4d; }
+    .v2m-alert.warning { background: #4a3b1d; color: #fff0c0; border-left: 4px solid #ffc54d; }
+    .v2m-alert .ico { font-size: 18px; }
+    .v2m-alert .body { flex: 1; }
+    .v2m-alert .body strong { display: block; }
+    .v2m-alert .body span { font-size: 12px; opacity: 0.85; }
+
+    .v2m-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .v2m-filters select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text-primary); padding: 6px 10px; border-radius: 8px; font-size: 13px; }
+    .v2m-filters .v2m-pill { padding: 6px 12px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12px; cursor: pointer; user-select: none; }
+    .v2m-filters .v2m-pill.active { background: var(--brand-soft); border-color: var(--brand); color: var(--text-primary); }
+    .v2m-filters .v2m-pill .ct { opacity: 0.7; margin-left: 4px; }
+
+    .v2m-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+    .v2m-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+    .v2m-card .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .v2m-card .val { font-size: 22px; font-weight: 600; color: var(--text-primary); margin-top: 4px; }
+    .v2m-card .sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .v2m-card.alert-bg { background: #4a1d1d33; border-color: #ff4d4d55; }
+
+    .v2m-funil { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+    .v2m-funil h4 { margin: 0 0 10px 0; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .v2m-funil-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 13px; }
+    .v2m-funil-row .name { width: 180px; color: var(--text-primary); }
+    .v2m-funil-row .bar { flex: 1; height: 18px; background: var(--surface-2); border-radius: 4px; position: relative; overflow: hidden; }
+    .v2m-funil-row .bar > div { height: 100%; background: var(--brand); border-radius: 4px; transition: width 0.3s; }
+    .v2m-funil-row .ct { width: 40px; text-align: right; color: var(--text-muted); }
+
+    .v2m-list { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; max-height: 60vh; overflow-y: auto; }
+    .v2m-conv { padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+    .v2m-conv:hover { background: var(--surface-2); }
+    .v2m-conv.selected { background: var(--brand-soft); border-left: 3px solid var(--brand); }
+    .v2m-conv .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; }
+    .v2m-conv .top .ph { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; color: var(--text-muted); }
+    .v2m-conv .top .badges { display: flex; gap: 4px; align-items: center; }
+    .v2m-conv .badge { padding: 2px 7px; border-radius: 999px; font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px; }
+    .v2m-conv .badge.b-em_andamento { background: #2d4f7a; color: #b8d8ff; }
+    .v2m-conv .badge.b-agendou { background: #1d4d2d; color: #c0ffc0; }
+    .v2m-conv .badge.b-handoff { background: #4d3d1d; color: #ffe0a0; }
+    .v2m-conv .badge.b-perdeu { background: #3d3d3d; color: #aaa; }
+    .v2m-conv .stage { font-size: 11px; color: var(--text-muted); }
+    .v2m-conv .preview { font-size: 12px; color: var(--text-primary); margin-top: 4px; line-height: 1.3; max-height: 32px; overflow: hidden; text-overflow: ellipsis; }
+    .v2m-conv .modules { font-size: 10px; color: var(--brand-light); margin-top: 4px; font-family: 'SF Mono', Menlo, monospace; }
+    .v2m-conv .review-mark { font-size: 14px; }
+
+    .v2m-detail h3 { margin: 0 0 8px 0; font-size: 14px; }
+    .v2m-detail .field { margin-bottom: 10px; }
+    .v2m-detail .field .k { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .v2m-detail .field .v { font-size: 13px; color: var(--text-primary); margin-top: 2px; word-break: break-word; }
+    .v2m-detail .review-buttons { display: flex; gap: 6px; margin: 10px 0; }
+    .v2m-detail .review-buttons button { flex: 1; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary); cursor: pointer; font-size: 13px; transition: all 0.1s; }
+    .v2m-detail .review-buttons button:hover { background: var(--surface); }
+    .v2m-detail .review-buttons button.r-good { border-color: #1d4d2d; }
+    .v2m-detail .review-buttons button.r-good.active { background: #1d4d2d; color: #c0ffc0; }
+    .v2m-detail .review-buttons button.r-aceitavel { border-color: #4d3d1d; }
+    .v2m-detail .review-buttons button.r-aceitavel.active { background: #4d3d1d; color: #ffe0a0; }
+    .v2m-detail .review-buttons button.r-bad { border-color: #4a1d1d; }
+    .v2m-detail .review-buttons button.r-bad.active { background: #4a1d1d; color: #ffd0d0; }
+    .v2m-detail textarea { width: 100%; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-primary); border-radius: 8px; padding: 8px; font-size: 13px; resize: vertical; min-height: 60px; box-sizing: border-box; }
+    .v2m-detail .actions { display: flex; gap: 6px; margin-top: 8px; }
+    .v2m-detail .actions button { padding: 6px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary); cursor: pointer; }
+    .v2m-detail .actions button:hover { background: var(--surface); }
+    .v2m-detail .msgs { margin-top: 12px; max-height: 320px; overflow-y: auto; }
+    .v2m-detail .msg { padding: 6px 8px; margin-bottom: 4px; border-radius: 6px; font-size: 12px; }
+    .v2m-detail .msg.user { background: var(--surface-2); }
+    .v2m-detail .msg.assistant { background: var(--brand-soft); }
+    .v2m-detail .msg .who { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+
+    .v2m-controls { display: flex; flex-direction: column; gap: 12px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+    .v2m-controls .ctl-row { display: flex; gap: 10px; align-items: center; }
+    .v2m-pause-btn { background: #ff4d4d; color: white; border: none; padding: 12px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .v2m-pause-btn:hover { background: #ff6b6b; }
+    .v2m-pause-btn:disabled { background: #444; cursor: not-allowed; }
+    .v2m-resume-btn { background: var(--brand); color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+
+    .v2m-tour-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 9000; display: flex; align-items: center; justify-content: center; }
+    .v2m-tour-card { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; padding: 22px; max-width: 460px; box-shadow: 0 16px 48px rgba(0,0,0,0.5); }
+    .v2m-tour-card h3 { margin: 0 0 8px 0; }
+    .v2m-tour-card p { font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+    .v2m-tour-card .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; }
+    .v2m-tour-card .step { font-size: 11px; color: var(--text-muted); }
+    .v2m-tour-card button { background: var(--brand); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+    .v2m-tour-card .skip { background: transparent; color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -2847,6 +3116,12 @@ router.get('/', (req, res) => {
       <div class="nav-item admin-only" data-nav="metrics" onclick="switchTab('metrics', this)" title="Métricas" style="display:none">
         <span class="ic"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg></span>
         <span class="lbl">Métricas</span>
+      </div>
+
+      <div class="nav-item admin-only" data-nav="v2-monitor" onclick="switchTab('v2-monitor', this)" title="Monitoramento v2" style="display:none">
+        <span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+        <span class="lbl">Monitor v2</span>
+        <span class="nav-badge" id="nav-badge-v2-alerts" style="background:var(--danger);display:none">0</span>
       </div>
 
       <div style="height:14px"></div>
@@ -3025,6 +3300,90 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadMetrics()">↻ Atualizar</button>
   </div>
   <div id="metrics-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px"></div>
+</div>
+
+<!-- ───────── PR #37 — Monitor v2 (admin only) ───────── -->
+<div id="tab-v2-monitor" class="panel">
+  <div class="conv-header">
+    <h2>Monitor v2 — janela de validação</h2>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select id="v2m-period" onchange="v2mLoadAll()" title="Período">
+        <option value="today">Hoje</option>
+        <option value="7d" selected>7 dias</option>
+        <option value="14d">14 dias</option>
+        <option value="30d">30 dias</option>
+      </select>
+      <button class="refresh-btn" onclick="v2mLoadAll()">↻ Atualizar</button>
+    </div>
+  </div>
+
+  <!-- Banner alertas (se houver) -->
+  <div id="v2m-alerts" class="v2m-alerts" style="margin-top:12px"></div>
+
+  <div class="v2m" style="margin-top:14px">
+    <!-- Coluna principal: métricas + lista -->
+    <div class="v2m-main">
+
+      <!-- Cards de métricas -->
+      <div id="v2m-metrics" class="v2m-metrics"></div>
+
+      <!-- Funil -->
+      <div id="v2m-funil" class="v2m-funil" style="display:none"></div>
+
+      <!-- Filtros de status -->
+      <div class="v2m-filters" style="margin-top:6px">
+        <span style="font-size:12px;color:var(--text-muted)">Status:</span>
+        <span class="v2m-pill active" data-status="" onclick="v2mFilterStatus(this, '')">Todas <span class="ct" id="v2m-ct-all">0</span></span>
+        <span class="v2m-pill" data-status="em_andamento" onclick="v2mFilterStatus(this, 'em_andamento')">Em andamento <span class="ct" id="v2m-ct-em_andamento">0</span></span>
+        <span class="v2m-pill" data-status="agendou" onclick="v2mFilterStatus(this, 'agendou')">Agendou <span class="ct" id="v2m-ct-agendou">0</span></span>
+        <span class="v2m-pill" data-status="handoff" onclick="v2mFilterStatus(this, 'handoff')">Handoff <span class="ct" id="v2m-ct-handoff">0</span></span>
+        <span class="v2m-pill" data-status="perdeu" onclick="v2mFilterStatus(this, 'perdeu')">Perdeu <span class="ct" id="v2m-ct-perdeu">0</span></span>
+        <span style="margin-left:14px;font-size:12px;color:var(--text-muted)">Avaliação:</span>
+        <select id="v2m-review-filter" onchange="v2mRenderList()">
+          <option value="">Todas</option>
+          <option value="none">Não avaliadas</option>
+          <option value="bad">Só ❌</option>
+          <option value="aceitavel">Só ⚠️</option>
+          <option value="good">Só ✅</option>
+        </select>
+      </div>
+
+      <!-- Lista de conversas v2 -->
+      <div id="v2m-list" class="v2m-list">
+        <div class="empty" style="padding:30px;text-align:center;color:var(--text-muted)">Carregando…</div>
+      </div>
+
+      <!-- Controles -->
+      <div class="v2m-controls" id="v2m-controls">
+        <div style="font-size:12px;color:var(--text-muted)">Versão atual: <strong id="v2m-version-badge">—</strong></div>
+        <div class="ctl-row">
+          <button class="v2m-pause-btn" id="v2m-pause-btn" onclick="v2mPauseV2()">⏸ Pausar v2 imediatamente</button>
+          <button class="v2m-resume-btn" id="v2m-resume-btn" onclick="v2mResumeV2()" style="display:none">▶ Retomar (volta pra env)</button>
+          <a class="v2m-resume-btn" id="v2m-export-btn" href="#" onclick="v2mExportCsv(event)">⬇ Exportar CSV do período</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Coluna lateral: detalhe da conversa selecionada -->
+    <div class="v2m-side v2m-detail" id="v2m-detail">
+      <div style="text-align:center;padding:30px 10px;color:var(--text-muted);font-size:13px">
+        💡 Selecione uma conversa pra ver o detalhe + avaliar
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tour de onboarding (overlay) -->
+<div id="v2m-tour" class="v2m-tour-overlay" style="display:none">
+  <div class="v2m-tour-card">
+    <div class="step" id="v2m-tour-step">Passo 1 de 4</div>
+    <h3 id="v2m-tour-title">Bem-vindo ao Monitor v2</h3>
+    <p id="v2m-tour-text">Aqui você acompanha em tempo real todas as conversas do agente v2.</p>
+    <div class="actions">
+      <button class="skip" onclick="v2mTourSkip()">Pular</button>
+      <button onclick="v2mTourNext()" id="v2m-tour-next">Próximo</button>
+    </div>
+  </div>
 </div>
 
 <div id="tab-modulos" class="panel">
@@ -4509,6 +4868,8 @@ router.get('/', (req, res) => {
     if (tab === 'alunos') loadStudents();
     if (tab === 'users') loadUsers();
     if (tab === 'metrics') loadMetrics();
+    if (tab === 'v2-monitor' && window.__v2mLoadOnTab) window.__v2mLoadOnTab();
+    else if (window.__v2mUnloadOnTab) window.__v2mUnloadOnTab();
     if (tab === 'conexoes') {
       loadConnections();
       startConexoesPolling();
@@ -5404,6 +5765,11 @@ router.get('/', (req, res) => {
           showToast(data);
         } catch (err) { console.error('[sse] alert parse fail:', err); }
       });
+      sseSource.addEventListener('v2.metrics.changed', () => {
+        // Recarrega só se a aba v2-monitor está ativa (otimização)
+        const onV2Tab = document.getElementById('tab-v2-monitor')?.classList.contains('active');
+        if (onV2Tab && window.__v2mLoadOnTab) v2mLoadAll();
+      });
       sseSource.onerror = () => {
         sseFailures++;
         sseHealthy = false;
@@ -5502,6 +5868,372 @@ router.get('/', (req, res) => {
     // Banner de conexão (visível enquanto WhatsApp tá fora)
     refreshConnectionBanner();
   })();
+
+  // ─────────────────────────────────────────────────────────────────────
+  // PR #37 — Monitor v2 (admin tooling)
+  // ─────────────────────────────────────────────────────────────────────
+
+  let v2mState = {
+    period: '7d',
+    statusFilter: '',
+    selectedPhone: null,
+    conversations: [],
+    pollHandle: null,
+    commentDebounce: null,
+  };
+
+  async function v2mLoadAll() {
+    v2mState.period = document.getElementById('v2m-period')?.value || '7d';
+    await Promise.all([v2mLoadAlerts(), v2mLoadMetrics(), v2mLoadConversations(), v2mLoadVersion()]);
+  }
+
+  async function v2mLoadAlerts() {
+    try {
+      const r = await fetch('/admin/api/v2/alerts');
+      if (!r.ok) return;
+      const data = await r.json();
+      const c = document.getElementById('v2m-alerts');
+      const navBadge = document.getElementById('nav-badge-v2-alerts');
+      if (!data.alerts.length) {
+        c.innerHTML = '';
+        if (navBadge) navBadge.style.display = 'none';
+        return;
+      }
+      if (navBadge) {
+        navBadge.style.display = '';
+        navBadge.textContent = data.alerts.length;
+      }
+      c.innerHTML = data.alerts.map(a => \`
+        <div class="v2m-alert \${a.level}">
+          <span class="ico">\${a.level === 'critical' ? '🚨' : '⚠️'}</span>
+          <div class="body">
+            <strong>\${escapeHtml(a.message)}</strong>
+            <span>code: <code>\${escapeHtml(a.code)}</code></span>
+          </div>
+        </div>
+      \`).join('');
+    } catch (e) { console.error('[v2m] alerts:', e.message); }
+  }
+
+  async function v2mLoadMetrics() {
+    try {
+      const r = await fetch('/admin/api/v2/metrics?period=' + encodeURIComponent(v2mState.period));
+      if (!r.ok) return;
+      const m = await r.json();
+
+      const tempoH = m.tempo_medio_ate_agendou_ms
+        ? (m.tempo_medio_ate_agendou_ms / (1000 * 60 * 60)).toFixed(1) + 'h'
+        : '—';
+
+      const cards = [
+        { lbl: 'Total leads v2', val: m.total_leads, sub: m.period },
+        { lbl: '% agendou', val: m.pct_agendou.toFixed(1) + '%', sub: m.funil['agendamento_confirmado'] || 0 + ' conversas' },
+        { lbl: '% handoff', val: m.pct_handoff.toFixed(1) + '%', sub: m.funil['handoff_humano'] || 0 + ' conversas' },
+        { lbl: '% perdeu (>24h)', val: m.pct_perdeu.toFixed(1) + '%' },
+        { lbl: 'Tempo médio até agendar', val: tempoH },
+        { lbl: 'Total turnos', val: m.total_turns, sub: 'tag_ok + tag_esquecida' },
+        { lbl: '% tag esquecida', val: m.pct_tag_esquecida.toFixed(1) + '%', sub: 'limite alerta: 30%', alert: m.pct_tag_esquecida > 30 },
+        { lbl: '% router empty', val: m.pct_router_empty.toFixed(1) + '%', sub: 'cobertura insuficiente' },
+        { lbl: 'Crashes', val: m.crashes, alert: m.crashes > 0 },
+        { lbl: 'Preço inventado', val: m.preco_inventado, alert: m.preco_inventado > 0 },
+        { lbl: 'Valor antecipado', val: m.valor_antecipado, alert: m.valor_antecipado > 0 },
+      ];
+
+      document.getElementById('v2m-metrics').innerHTML = cards.map(c => \`
+        <div class="v2m-card\${c.alert ? ' alert-bg' : ''}">
+          <div class="lbl">\${escapeHtml(c.lbl)}</div>
+          <div class="val">\${escapeHtml(String(c.val))}</div>
+          \${c.sub ? '<div class="sub">' + escapeHtml(String(c.sub)) + '</div>' : ''}
+        </div>
+      \`).join('');
+
+      // Funil: distribuição de leads por estágio
+      const funilEl = document.getElementById('v2m-funil');
+      const funilEntries = Object.entries(m.funil).sort((a,b) => b[1] - a[1]);
+      if (funilEntries.length) {
+        const max = Math.max(...funilEntries.map(([,v]) => v));
+        funilEl.style.display = '';
+        funilEl.innerHTML = '<h4>Distribuição por estágio</h4>' + funilEntries.map(([k, v]) => \`
+          <div class="v2m-funil-row">
+            <span class="name">\${escapeHtml(k)}</span>
+            <div class="bar"><div style="width:\${(v/max*100).toFixed(0)}%"></div></div>
+            <span class="ct">\${v}</span>
+          </div>
+        \`).join('');
+      } else {
+        funilEl.style.display = 'none';
+      }
+    } catch (e) { console.error('[v2m] metrics:', e.message); }
+  }
+
+  async function v2mLoadConversations() {
+    try {
+      const r = await fetch('/admin/api/v2/conversations?limit=300');
+      if (!r.ok) {
+        document.getElementById('v2m-list').innerHTML = '<div class="empty" style="padding:30px;text-align:center;color:var(--text-muted)">Erro ao carregar.</div>';
+        return;
+      }
+      const data = await r.json();
+      v2mState.conversations = data.conversations || [];
+      // Counters por status
+      const counts = { '': v2mState.conversations.length, em_andamento: 0, agendou: 0, handoff: 0, perdeu: 0 };
+      for (const c of v2mState.conversations) counts[c._status] = (counts[c._status] || 0) + 1;
+      for (const k of ['', 'em_andamento', 'agendou', 'handoff', 'perdeu']) {
+        const el = document.getElementById('v2m-ct-' + (k || 'all'));
+        if (el) el.textContent = counts[k] || 0;
+      }
+      v2mRenderList();
+    } catch (e) { console.error('[v2m] conversations:', e.message); }
+  }
+
+  function v2mRenderList() {
+    const el = document.getElementById('v2m-list');
+    let convs = v2mState.conversations;
+    if (v2mState.statusFilter) convs = convs.filter(c => c._status === v2mState.statusFilter);
+    const reviewFilter = document.getElementById('v2m-review-filter')?.value;
+    if (reviewFilter === 'none') convs = convs.filter(c => !c.review_rating);
+    else if (reviewFilter) convs = convs.filter(c => c.review_rating === reviewFilter);
+
+    if (!convs.length) {
+      el.innerHTML = '<div class="empty" style="padding:30px;text-align:center;color:var(--text-muted)">Nenhuma conversa neste filtro.</div>';
+      return;
+    }
+    el.innerHTML = convs.map(c => {
+      const reviewMark = c.review_rating === 'good' ? '<span class="review-mark">✅</span>' :
+                       c.review_rating === 'aceitavel' ? '<span class="review-mark">⚠️</span>' :
+                       c.review_rating === 'bad' ? '<span class="review-mark">❌</span>' : '';
+      const elapsed = c.last_contact_at ? fmtRelativeTime(c.last_contact_at) : '—';
+      const preview = (c.last_message || '').replace(/\\[(?:ESTADO|MODULO_REQUERIDO|AGENDAMENTO):[^\\]]+\\]/g, '').trim().slice(0, 100);
+      return \`
+        <div class="v2m-conv \${v2mState.selectedPhone === c.phone ? 'selected' : ''}" onclick="v2mSelect('\${c.phone}')">
+          <div class="top">
+            <span class="ph">\${escapeHtml(c._phone_masked)}</span>
+            <span class="badges">
+              \${reviewMark}
+              <span class="badge b-\${c._status}">\${c._status.replace('_', ' ')}</span>
+            </span>
+          </div>
+          <div class="stage">\${escapeHtml(c.estagio_atual || '—')} · \${escapeHtml(elapsed)} · \${c.total_mensagens_lead || 0} msgs lead / \${c.total_mensagens_johnny || 0} johnny</div>
+          <div class="preview">\${escapeHtml(preview)}</div>
+          \${c.modulo_pendente ? '<div class="modules">📦 módulo pendente: ' + escapeHtml(c.modulo_pendente) + '</div>' : ''}
+        </div>
+      \`;
+    }).join('');
+  }
+
+  function v2mFilterStatus(el, status) {
+    document.querySelectorAll('.v2m-filters .v2m-pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    v2mState.statusFilter = status;
+    v2mRenderList();
+  }
+
+  async function v2mSelect(phone) {
+    v2mState.selectedPhone = phone;
+    v2mRenderList();
+    const el = document.getElementById('v2m-detail');
+    el.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-muted)">Carregando…</div>';
+    try {
+      const r = await fetch('/admin/api/v2/conversation/' + encodeURIComponent(phone));
+      if (!r.ok) {
+        el.innerHTML = '<div style="padding:20px;color:var(--danger)">Erro ao carregar detalhe.</div>';
+        return;
+      }
+      const d = await r.json();
+      const s = d.state || {};
+      const r2 = d.review;
+      const fields = [
+        ['Estágio', s.estagio_atual],
+        ['Próx. ação', s.proxima_acao],
+        ['Insistências valor', (s.insistencias_valor || 0) + '/3'],
+        ['Objetivo', s.objetivo],
+        ['Modalidade', s.modalidade_recomendada],
+        ['Disponibilidade', s.disponibilidade],
+        ['Objeção ativa', s.objecao_ativa],
+        ['Tentativas objeção', (s.tentativas_objecao_atual || 0) + '/3'],
+        ['Histórico objeções', (s.objecoes_levantadas || []).join(', ')],
+        ['Módulo pendente', s.modulo_pendente],
+        ['Aula agendada', s.aula_experimental_agendada ? 'sim' : 'não'],
+        ['Data agendamento', s.data_agendamento],
+        ['Hora agendamento', s.hora_agendamento],
+        ['Total msgs', (s.total_mensagens_lead || 0) + ' lead / ' + (s.total_mensagens_johnny || 0) + ' johnny'],
+        ['Resumo dinâmico', s.resumo_dinamico_n_msgs ? (s.resumo_dinamico_n_msgs + ' msgs resumidas') : '—'],
+      ].filter(f => f[1] !== null && f[1] !== undefined && f[1] !== '');
+
+      const msgsHtml = (d.messages || []).slice(-30).map(m => {
+        const cleaned = (m.content || '').replace(/\\[(?:ESTADO|MODULO_REQUERIDO|AGENDAMENTO):[^\\]]+\\]/g, '').trim();
+        return \`<div class="msg \${m.role}"><span class="who">\${m.role === 'user' ? 'lead' : 'johnny'}</span> \${escapeHtml(cleaned)}</div>\`;
+      }).join('');
+
+      const eventsHtml = (d.events || []).slice(0, 8).map(e =>
+        \`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">\${new Date(e.timestamp).toLocaleString('pt-BR')} · \${escapeHtml(e.event_type)}</div>\`
+      ).join('');
+
+      const rating = r2?.rating || '';
+      const comment = r2?.comment || '';
+
+      el.innerHTML = \`
+        <h3>\${escapeHtml(d.contact?.name || d.phone_masked)}</h3>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;font-family:monospace">\${escapeHtml(d.phone_masked)}</div>
+
+        <div class="review-buttons">
+          <button class="r-good \${rating === 'good' ? 'active' : ''}" onclick="v2mReview('\${phone}', 'good')">✅ Deu certo</button>
+          <button class="r-aceitavel \${rating === 'aceitavel' ? 'active' : ''}" onclick="v2mReview('\${phone}', 'aceitavel')">⚠️ Aceitável</button>
+          <button class="r-bad \${rating === 'bad' ? 'active' : ''}" onclick="v2mReview('\${phone}', 'bad')">❌ Deu errado</button>
+        </div>
+        <textarea id="v2m-comment-\${phone}" placeholder="O que faria diferente? (autosalva)" oninput="v2mDebounceComment('\${phone}', '\${rating || 'aceitavel'}')">\${escapeHtml(comment)}</textarea>
+
+        <div class="actions">
+          <button onclick="v2mForceResumo('\${phone}')">⟳ Forçar resumo agora</button>
+        </div>
+
+        <div style="margin-top:14px">\${fields.map(f => '<div class="field"><div class="k">' + escapeHtml(f[0]) + '</div><div class="v">' + escapeHtml(String(f[1])) + '</div></div>').join('')}</div>
+
+        \${eventsHtml ? '<div style="margin-top:14px"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Eventos recentes</div>' + eventsHtml + '</div>' : ''}
+
+        \${msgsHtml ? '<div style="margin-top:14px;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Histórico</div><div class="msgs">' + msgsHtml + '</div>' : ''}
+      \`;
+    } catch (e) { console.error('[v2m] detail:', e.message); }
+  }
+
+  async function v2mReview(phone, rating) {
+    const comment = document.getElementById('v2m-comment-' + phone)?.value || '';
+    try {
+      const r = await fetch('/admin/api/v2/review/' + encodeURIComponent(phone), {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ rating, comment }),
+      });
+      if (!r.ok) throw new Error('falhou');
+      // Re-render do detalhe atualizado
+      v2mSelect(phone);
+      // Atualiza lista (review marker)
+      v2mLoadConversations();
+    } catch (e) { alert('Erro ao salvar avaliação: ' + e.message); }
+  }
+
+  function v2mDebounceComment(phone, currentRating) {
+    if (v2mState.commentDebounce) clearTimeout(v2mState.commentDebounce);
+    v2mState.commentDebounce = setTimeout(() => {
+      // Garante que tem rating (default 'aceitavel' se vazio)
+      const conv = v2mState.conversations.find(c => c.phone === phone);
+      const rating = conv?.review_rating || currentRating || 'aceitavel';
+      v2mReview(phone, rating);
+    }, 700);
+  }
+
+  async function v2mForceResumo(phone) {
+    try {
+      const r = await fetch('/admin/api/v2/force-resumo/' + encodeURIComponent(phone), { method: 'POST' });
+      const data = await r.json();
+      alert('Resumo: ' + (data.result?.reason || 'ok'));
+      v2mSelect(phone);
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+
+  async function v2mLoadVersion() {
+    try {
+      const r = await fetch('/admin/api/v2/version');
+      if (!r.ok) return;
+      const v = await r.json();
+      const badge = document.getElementById('v2m-version-badge');
+      if (badge) {
+        badge.textContent = v.current + (v.override ? ' (override)' : ' (env)');
+        badge.style.color = v.current === 'v2' ? 'var(--brand)' : 'var(--text-muted)';
+      }
+      const pauseBtn = document.getElementById('v2m-pause-btn');
+      const resumeBtn = document.getElementById('v2m-resume-btn');
+      if (pauseBtn && resumeBtn) {
+        pauseBtn.style.display = (v.current === 'v2') ? '' : 'none';
+        resumeBtn.style.display = v.override ? '' : 'none';
+      }
+    } catch (e) { console.error('[v2m] version:', e.message); }
+  }
+
+  async function v2mPauseV2() {
+    if (!confirm('Pausar v2 imediatamente? Próximas mensagens caem em v1.')) return;
+    if (!confirm('Tem CERTEZA? Confirme novamente.')) return;
+    try {
+      const r = await fetch('/admin/api/v2/pause', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ confirm: 'PAUSAR_V2_AGORA' }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'falhou');
+      alert('✅ v2 pausado. Próximas mensagens em v1.');
+      v2mLoadVersion();
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+
+  async function v2mResumeV2() {
+    if (!confirm('Remover override e voltar pra env var?')) return;
+    try {
+      const r = await fetch('/admin/api/v2/resume', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ confirm: 'RESUMIR_V2' }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'falhou');
+      alert('✅ override removido. Versão atual: ' + data.current);
+      v2mLoadVersion();
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+
+  function v2mExportCsv(ev) {
+    ev.preventDefault();
+    window.location = '/admin/api/v2/export?period=' + encodeURIComponent(v2mState.period);
+  }
+
+  // ─── Onboarding tour ───
+  const V2M_TOUR_STEPS = [
+    { title: '🚦 Bem-vindo ao Monitor v2', text: 'Aqui você acompanha em tempo real todas as conversas do agente v2 durante a janela de validação.' },
+    { title: '📊 Métricas e funil', text: 'Os cards mostram conversões, % de agendamento, handoff, tag esquecida, valor antecipado, crashes. O funil mostra distribuição por estágio. Filtra por período no canto superior direito.' },
+    { title: '✅ Avalie cada conversa', text: 'Clica numa conversa pra abrir o detalhe lateral. Use ✅ / ⚠️ / ❌ pra avaliar e escreva o que faria diferente. Tudo autosalva.' },
+    { title: '⏸ Pausa de emergência', text: 'Se algo der errado, o botão vermelho "Pausar v2" volta pra v1 instantâneo (sem restart). Use sem medo.' },
+  ];
+  let v2mTourIdx = 0;
+  function v2mTourStart() {
+    if (localStorage.getItem('v2m_tour_seen') === '1') return;
+    v2mTourIdx = 0;
+    document.getElementById('v2m-tour').style.display = 'flex';
+    v2mTourRender();
+  }
+  function v2mTourRender() {
+    const s = V2M_TOUR_STEPS[v2mTourIdx];
+    document.getElementById('v2m-tour-step').textContent = 'Passo ' + (v2mTourIdx + 1) + ' de ' + V2M_TOUR_STEPS.length;
+    document.getElementById('v2m-tour-title').textContent = s.title;
+    document.getElementById('v2m-tour-text').textContent = s.text;
+    document.getElementById('v2m-tour-next').textContent = (v2mTourIdx === V2M_TOUR_STEPS.length - 1) ? 'Começar' : 'Próximo';
+  }
+  function v2mTourNext() {
+    if (v2mTourIdx < V2M_TOUR_STEPS.length - 1) { v2mTourIdx++; v2mTourRender(); }
+    else { v2mTourSkip(); }
+  }
+  function v2mTourSkip() {
+    document.getElementById('v2m-tour').style.display = 'none';
+    localStorage.setItem('v2m_tour_seen', '1');
+  }
+  // Expor pra HTML inline
+  window.v2mLoadAll = v2mLoadAll;
+  window.v2mFilterStatus = v2mFilterStatus;
+  window.v2mRenderList = v2mRenderList;
+  window.v2mSelect = v2mSelect;
+  window.v2mReview = v2mReview;
+  window.v2mDebounceComment = v2mDebounceComment;
+  window.v2mForceResumo = v2mForceResumo;
+  window.v2mPauseV2 = v2mPauseV2;
+  window.v2mResumeV2 = v2mResumeV2;
+  window.v2mExportCsv = v2mExportCsv;
+  window.v2mTourNext = v2mTourNext;
+  window.v2mTourSkip = v2mTourSkip;
+  window.__v2mLoadOnTab = function() {
+    v2mLoadAll();
+    v2mTourStart();
+    if (v2mState.pollHandle) clearInterval(v2mState.pollHandle);
+    v2mState.pollHandle = setInterval(v2mLoadAll, 30000);
+  };
+  window.__v2mUnloadOnTab = function() {
+    if (v2mState.pollHandle) { clearInterval(v2mState.pollHandle); v2mState.pollHandle = null; }
+  };
 </script>
 </body>
 </html>`);

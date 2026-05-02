@@ -22,6 +22,12 @@ const {
   buildResumoBlock,
   updateResumoDinamicoBackground,
 } = require('./resumo-dinamico');
+const {
+  detectsPrecoInventado,
+  detectsValorAntecipado,
+  detectsTagEsquecida,
+  extractPrecosOficiaisFromAcademiaInfo,
+} = require('./v2-detectors');
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -283,6 +289,19 @@ function computeStateUpdate(currentState, parsed) {
 // ═══════════════════════════════════════════════════════════════
 
 async function replyV2(from, text, { isAudio = false } = {}) {
+  try {
+    return await replyV2Inner(from, text, { isAudio });
+  } catch (err) {
+    // Instrumentação PR #37: log de crash pra alertas
+    db.logV2Event(db.V2_EVENT_TYPES.CRASH, from, null, {
+      message: err.message,
+      stack: err.stack ? err.stack.split('\n').slice(0, 4).join(' | ') : null,
+    });
+    throw err;
+  }
+}
+
+async function replyV2Inner(from, text, { isAudio = false } = {}) {
   // 1. Garante contato + lead_state
   db.getOrCreateContact(from);
   const state = db.getOrCreateLeadState(from);
@@ -314,6 +333,12 @@ async function replyV2(from, text, { isAudio = false } = {}) {
     text,
     modulo_pendente: stateNow.modulo_pendente,
   });
+
+  // Instrumentação PR #37: log se Roteador não devolveu nenhum módulo
+  // (cobertura insuficiente das 18 keywords). Mede pra Fase 2.5 condicional.
+  if (!moduleNames.length) {
+    db.logV2Event(db.V2_EVENT_TYPES.ROUTER_EMPTY, from, null, { text: text?.slice(0, 100) });
+  }
 
   // 7. Monta dynamic context
   const { dynamicCtx, tagsAtivas } = buildDynamicContext({
@@ -387,6 +412,34 @@ async function replyV2(from, text, { isAudio = false } = {}) {
   db.incrementLeadStateCounter(from, 'total_mensagens_johnny', 1);
 
   console.log(`[agent-v2] ${from} estagio=${stateNow.estagio_atual} insist=${stateNow.insistencias_valor} mod=${moduleNames.join(',') || 'nenhum'} → "${cleanText.slice(0, 60)}..."`);
+
+  // ─── Instrumentação PR #37 — eventos pra métricas e alertas ───
+  // tag_esquecida: parser não achou [ESTADO:] na resposta (limitação intrínseca
+  // do Sonnet em respostas longas, known issue do PR33).
+  const tagCheck = detectsTagEsquecida(parsed);
+  if (tagCheck.triggered) {
+    db.logV2Event(db.V2_EVENT_TYPES.TAG_ESQUECIDA, from, null, { preview: cleanText.slice(0, 80) });
+  } else {
+    // Conta turnos OK pra denominador da % de tag esquecida.
+    db.logV2Event(db.V2_EVENT_TYPES.TURN_OK, from, null);
+  }
+  // valor_antecipado e preco_inventado rodam APENAS se bot mencionou valor.
+  // Otimização: extractMoneyValues uma vez pelos detectores internos, mas detectors
+  // são leves (só regex), aceito custo redundante.
+  try {
+    const valorCheck = detectsValorAntecipado(cleanText, stateNow.insistencias_valor);
+    if (valorCheck.triggered) {
+      db.logV2Event(db.V2_EVENT_TYPES.VALOR_ANTECIPADO, from, null, valorCheck.context);
+    }
+    const precosOficiais = extractPrecosOficiaisFromAcademiaInfo(db.getAcademiaInfoMap());
+    const precoCheck = detectsPrecoInventado(cleanText, precosOficiais);
+    if (precoCheck.triggered) {
+      db.logV2Event(db.V2_EVENT_TYPES.PRECO_INVENTADO, from, null, precoCheck.context);
+    }
+  } catch (e) {
+    // Detectors NUNCA podem derrubar replyV2 — log silencioso e segue
+    console.warn('[agent-v2] detector falhou:', e.message);
+  }
 
   // 15. Resumo dinâmico (Fase 3) — fire-and-forget. Não bloqueia a resposta.
   // Se conversa atingiu threshold, gera/atualiza o resumo via Haiku em background.
