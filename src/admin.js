@@ -1277,7 +1277,7 @@ router.get('/', (req, res) => {
     .user-pill .pill-act svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
     /* ─── Content (à direita do rail) ─── */
-    .content { display: grid; grid-template-rows: 56px 1fr; height: 100vh; overflow: hidden; min-width: 0; }
+    .content { display: grid; grid-template-rows: 1fr; height: 100vh; overflow: hidden; min-width: 0; }
 
     /* Topbar contextual */
     .topbar {
@@ -2480,23 +2480,6 @@ router.get('/', (req, res) => {
   <!-- ════════ Conteúdo ════════ -->
   <div class="content">
 
-    <div class="topbar">
-      <div class="crumb">
-        <span class="root">STRONIX SDR</span>
-        <span class="sep">›</span>
-        <span class="now" id="crumb-now">Conversas <span class="crumb-tag" id="crumb-tag"></span></span>
-      </div>
-      <div class="topbar-acts">
-        <button class="topbar-btn" id="new-chat-btn" onclick="openNewChat(event)" title="Nova conversa" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
-        <div class="status-pill"><div class="st-dot"></div>Agente online · WhatsApp conectado</div>
-      </div>
-    </div>
-
     <!-- Tabs legacy (escondidas, só mantidas pra compat com JS antigo) -->
     <div class="tabs" aria-hidden="true">
       <div class="tab active" onclick="switchTab('prompt')">Prompt</div>
@@ -2530,6 +2513,12 @@ router.get('/', (req, res) => {
     <div class="inbox-col inbox-col-left">
       <div class="inbox-col-header">
         <h3>Conversas <span class="count-badge" id="filter-count">0</span></h3>
+        <button class="refresh-mini" id="new-chat-btn" onclick="openNewChat(event)" title="Nova conversa" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
         <button class="refresh-mini" onclick="loadConversations({force:true})" title="Atualizar">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
         </button>
