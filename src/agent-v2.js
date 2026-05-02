@@ -2,21 +2,19 @@
 // AGENT V2 — Johnny modular (núcleo + módulos sob demanda)
 // ═══════════════════════════════════════════════════════════════
 //
-// Implementação da Fase 0+1 do plano de refatoração v2:
+// Implementação das Fases 0, 1 e 2 do plano de refatoração v2:
 // - Parser de [ESTADO:...] e [MODULO_REQUERIDO:nome|nenhum]
 // - Detector regex de pedido de valor (auto-incremento backend)
 // - Montador de prompt em camadas (núcleo cacheado + KB cacheada + estado + módulo + dyn ctx)
+// - Roteador de módulos determinístico (router-v2.js) — decide quais módulos
+//   carregar dinamicamente baseado em estado + keywords no texto do lead
 // - replyV2() paralelo ao reply() v1; ativa via AGENT_VERSION=v2
-//
-// SEM Roteador ainda (Fase 2 — PR #33). Por enquanto carrega APENAS o
-// módulo declarado em lead_state.modulo_pendente (fallback do turno
-// anterior). Demais módulos: inacessíveis, IA responde com "deixa eu
-// confirmar com a equipe" — comportamento intencional desta fase.
 
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('./config');
 const db = require('./db');
 const NUCLEO_V2 = require('./prompt-nucleo-v2');
+const { routeModules } = require('./router-v2');
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -155,8 +153,7 @@ function buildStateBlock(state) {
 }
 
 // Constrói o bloco do(s) módulo(s) carregado(s).
-// Na Fase 0+1: só carrega o modulo_pendente (do turno anterior).
-// Na Fase 2: o Roteador decide quais carregar.
+// Na Fase 2 o Roteador (router-v2.js) decide quais carregar.
 function buildModulesBlock(moduleNames) {
   if (!moduleNames || !moduleNames.length) return '';
   const rows = db.getPromptModuleContents(moduleNames);
@@ -299,11 +296,13 @@ async function replyV2(from, text, { isAudio = false } = {}) {
   // 5. Re-lê estado pós-incremento
   const stateNow = db.getLeadState(from);
 
-  // 6. Módulo a carregar — SÓ o pendente do turno anterior (Fase 0+1, sem Roteador)
-  const moduleNames = [];
-  if (stateNow.modulo_pendente) {
-    moduleNames.push(stateNow.modulo_pendente);
-  }
+  // 6. Módulos a carregar — Roteador determinístico (Fase 2)
+  // Combina: modulo_pendente (tag manual do turno anterior) + estado + keywords no texto.
+  const moduleNames = routeModules({
+    state: stateNow,
+    text,
+    modulo_pendente: stateNow.modulo_pendente,
+  });
 
   // 7. Monta dynamic context
   const { dynamicCtx, tagsAtivas } = buildDynamicContext({
@@ -403,7 +402,11 @@ async function simulateReplyV2(history, userMessage, simulatedState = null) {
     state, isFirstMessage: history.length === 0, isReturning: false, daysSinceLast: null, isAudio: false,
   });
 
-  const moduleNames = state.modulo_pendente ? [state.modulo_pendente] : [];
+  const moduleNames = routeModules({
+    state,
+    text: userMessage,
+    modulo_pendente: state.modulo_pendente,
+  });
   const systemBlocks = buildSystemBlocks({ state, moduleNames, dynamicCtx });
 
   const cleanHistory = (history || [])
