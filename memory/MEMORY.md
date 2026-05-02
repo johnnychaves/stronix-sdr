@@ -25,11 +25,11 @@ Este arquivo é o ponto de entrada do sistema de memória. Leia-o primeiro para 
 ## Contexto rápido
 
 - **Projeto:** SDR de IA pelo WhatsApp pra STRONIX Academia (Av. Edgar Pires de Castro, 9392, Lageado, Porto Alegre/RS)
-- **Status:** Plataforma feature-complete em produção via **Baileys** (WhatsApp Web protocol). Inclui IA Sonnet 4.5, multi-agente com handoff, painel completo redesenhado estilo WhatsApp, áudio bidirecional, SSE real-time, knowledge base editável, playground de testes, sistema de notificação. Aguardando trocar do número pessoal de teste pro número da academia.
+- **Status:** Plataforma feature-complete em produção via **Baileys**. Inclui IA Sonnet 4.5, multi-agente com handoff, painel WhatsApp-style, áudio bidirecional, SSE real-time, knowledge base editável, playground, notificações. **Em curso:** refatoração do Johnny pra arquitetura modular v2 (Fase 0+1 implementada — PR #32 aberto, ainda em validação via Bateria E no playground; AGENT_VERSION=v1 mantém produção intocada). Aguarda também trocar pro número da academia.
 - **Stack:** Node.js + Express + Claude Sonnet 4.5 + SQLite + Whisper + ElevenLabs + **Baileys** (com Meta Cloud API ainda disponível como fallback via `WHATSAPP_PROVIDER=meta`)
 - **URL produção:** https://stronix-sdr-production.up.railway.app
 - **Repo:** github.com/johnnychaves/stronix-sdr (privado)
-- **Última atualização:** 2026-05-02
+- **Última atualização:** 2026-05-02 (sessão de refatoração v2 do Johnny — Fase 0+1)
 
 ---
 
@@ -110,19 +110,26 @@ PORT=[Railway define automaticamente]
 ```
 src/
 ├── index.js              ← entry Express, bootstrap Baileys se PROVIDER=baileys
-├── webhook.js            ← HTTP webhook (Meta) + handleIncomingMessage compartilhado
+├── webhook.js            ← HTTP webhook (Meta) + handleIncomingMessage; toggle AGENT_VERSION v1/v2
 ├── whatsapp.js           ← FACADE — delega pro provider ativo
 ├── whatsapp-meta.js      ← Meta Cloud API (sendMessage, sendAudio, uploadMedia, transcode)
 ├── whatsapp-baileys.js   ← Baileys (WebSocket, QR, auth state, JID resolve, status updates)
-├── agent.js              ← reply() (produção) + simulateReply() (playground)
-├── prompt.js             ← SYSTEM_PROMPT estático (38k chars, cacheado)
-├── db.js                 ← SQLite (16 tabelas, helpers, canonicalize phone, kb)
+├── agent.js              ← reply() v1 (PROMPT MONOLÍTICO 38k, ATIVO em produção)
+├── agent-v2.js           ← replyV2() + simulateReplyV2() — máquina de estado modular (Fase 0+1)
+├── prompt.js             ← SYSTEM_PROMPT v1 (38k chars, cacheado, em uso)
+├── prompt-nucleo-v2.js   ← Núcleo v2 (12.5k chars, sem módulos, aguarda Fase 2)
+├── prompt-modules-seed.js ← seed dos 28 módulos (carregados no boot do db.js)
+├── db.js                 ← SQLite (18 tabelas, helpers, canonicalize phone, kb, lead_state, prompt_modules)
 ├── auth.js               ← cookie-based session, requireAuth, requireAdmin
 ├── events.js             ← EventEmitter singleton pro SSE
 ├── tts.js                ← ElevenLabs voz clonada
 ├── transcriber.js        ← Whisper (transcribeAudioBuffer provider-agnostic)
-├── admin.js              ← painel HTML completo + endpoints REST + SSE
+├── admin.js              ← painel HTML completo + endpoints REST + SSE + módulos UI + playground v2
 └── config.js             ← carrega .env (Meta vars opcionais se Baileys)
+
+scripts/
+├── import_students.py    ← importação bulk de alunos do xlsx
+└── test-regex-valor.js   ← teste do detector de pedido de valor (21 casos, 21/21 passam)
 
 scripts/
 └── import_students.py    ← importação bulk de alunos do xlsx
@@ -179,4 +186,58 @@ CRUD /admin/api/students
 CRUD /admin/api/appointments
 PUT  /admin/api/reviews/:phone
 GET  /admin/api/metrics                      — admin only
+
+# Agent v2 (Fase 0+1, em validação)
+GET  /admin/api/prompt-modules                — lista os 28
+GET  /admin/api/prompt-modules/:name          — conteúdo
+PUT  /admin/api/prompt-modules/:name          — admin only
+PATCH /admin/api/prompt-modules/:name/active  — admin only
+GET  /admin/api/lead-state/:phone             — debug
+DELETE /admin/api/lead-state/:phone           — admin only (reset)
+POST /admin/api/playground/v2/message         — playground v2 (state simulado)
 ```
+
+---
+
+## Refatoração Johnny v2 — onde parou (2026-05-02)
+
+**Documento mestre + 5 anexos** (núcleo, módulos batch1/2/3, engrenagens) recebidos do user. Todos lidos e implementados na Fase 0+1.
+
+### O que está PRONTO (PR #32, ABERTO, aguardando merge):
+
+- Schema `lead_state` (23 campos, FK contacts) + `prompt_modules` (28 módulos seed)
+- Núcleo v2 (12.5k chars) em [src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js)
+- 28 módulos em [src/prompt-modules-seed.js](../src/prompt-modules-seed.js): 12 conhecimento + 10 objeções + 6 situacionais
+- [src/agent-v2.js](../src/agent-v2.js): `replyV2()` + `simulateReplyV2()`
+- Parser `[ESTADO]` / `[MODULO_REQUERIDO]` / `[AGENDAMENTO]` (resiliente, position-agnostic)
+- Detector regex de pedido de valor (21/21 testes em [scripts/test-regex-valor.js](../scripts/test-regex-valor.js))
+- Auto-incremento determinístico backend de contadores (`insistencias_valor`, `tentativas_objecao_atual`)
+- Force handoff_humano em 3 tentativas mesma objeção
+- Montador de prompt em 5 camadas com cache awareness
+- Toggle `AGENT_VERSION=v1|v2` no webhook (default v1 — produção intocada)
+- Aba **Módulos do prompt** no admin (admin only) — edita os 28 módulos
+- Playground v2 com 21 cenários pré-carregados (Baterias A-E) + painel debug lateral
+
+### Próximos passos (em sequência):
+
+1. **Validação manual** via Bateria E no playground (resp do user antes de mergear)
+2. **PR #32 merge** após validação
+3. **PR #33 — Fase 2: Roteador** (Haiku 4.5) — carregamento dinâmico dos módulos baseado em estado + tags + última msg
+4. **PR #34 — Fase 3: Resumo dinâmico** — background quando >15 msgs
+5. **PR #35 — Fase 4: Validação completa** + dashboard + rollout 5% → 25% → 50% → 100% via hash do telefone
+
+### Decisões travadas com user (não mexer sem nova conversa):
+
+- Tabela `lead_state` SEPARADA de `contacts` (FK), nunca estender contacts
+- Cache: núcleo (12.5k) + KB cacheados; estado/módulos/dyn ctx SEM cache
+- Roteador será Haiku 4.5 separado (Fase 2) — não confundir com tag MODULO_REQUERIDO emitida pelo Johnny no fim (esse é fallback)
+- Determinístico SEM Haiku pra: `audio`, `lead_retornando`, `lead_aluno_existente`, `cenarios_borda` (fora horário), `objecoes_geral` (junto com objecao_X)
+- Falsos positivos do regex de valor são aceitos conscientemente (custo: incrementa `insistencias_valor` 1x)
+- Rollout: NADA em produção até PR #35 verde com TODAS Baterias A-E passando. AGENT_VERSION=v1 default mantido. Rollout depois via hash do telefone (5% → 25% → 50% → 100%) — sem ativações intermediárias.
+
+### Anexos do plano (referência):
+
+Conteúdo completo dos anexos foi incorporado no código:
+- Anexo 1 (núcleo) → src/prompt-nucleo-v2.js
+- Anexos 2/3/4 (28 módulos) → src/prompt-modules-seed.js
+- Anexo 5 (schema/parser/roteador/resumo/fluxo) → src/db.js (schema+helpers) + src/agent-v2.js (parser+montador). Roteador ainda PENDENTE pra Fase 2.

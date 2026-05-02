@@ -4,6 +4,43 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-02 (sessão 2) — Refatoração Johnny v2: arquitetura modular com lazy-load de módulos
+
+**Decisão:** Refatorar o Johnny SDR de prompt monolítico (38k chars) pra arquitetura em camadas:
+- **Núcleo enxuto** (12.5k chars, cacheado) com identidade + máquina de estado + regras de ouro
+- **28 módulos** (1-3k chars cada) carregados sob demanda
+- **Ficha do lead** persistida em SQL (`lead_state` table)
+- **Resumo dinâmico** quando conversa > 15 msgs (Fase 3, ainda não impl)
+- **Roteador Haiku** decide quais módulos carregar (Fase 2, ainda não impl)
+
+**Por quê:**
+- Lost-in-the-middle em prompts grandes (mesmo Sonnet 4.5)
+- Regras duplicadas com variações sutis (especialmente regra dos valores)
+- Falta de máquina de estado explícita — agente "deduzia" estágio do funil
+- Tokens por chamada: ~30k → ~6-8k esperado (75% economia)
+- Manutenibilidade: edita módulo isolado sem risco de quebrar o resto
+
+**Implementação faseada (4 PRs):**
+- PR #32 — Fase 0+1: infra base + núcleo + parsers + montador. **ABERTO, em validação.**
+- PR #33 — Fase 2: Roteador Haiku 4.5
+- PR #34 — Fase 3: Resumo dinâmico em background
+- PR #35 — Fase 4: Validação Baterias A-E + rollout 5%→100% via hash
+
+**Trade-offs aceitos:**
+- 1 chamada Anthropic extra/turno (Haiku) — ~$0.0005/turno, irrelevante
+- Latência +300-500ms (Haiku roteador) — invisível pra UX de WhatsApp
+- Complexidade de código aumenta — mitigado por testes (21/21 regex de valor)
+
+**Decisões internas dentro dessa refatoração:**
+- Tabela `lead_state` SEPARADA de `contacts` (FK), nunca estender contacts
+- Cache: núcleo + KB cacheados; estado/módulos/dyn ctx SEM cache
+- Roteador será Haiku 4.5 separado (Fase 2) — Johnny também emite tag `[MODULO_REQUERIDO]` no fim como FALLBACK pra próximo turno
+- Determinístico SEM Haiku pra: audio, lead_retornando, lead_aluno_existente, cenarios_borda (fora horário) — o Roteador só decide o que precisa de semântica
+- Toggle via `AGENT_VERSION=v1|v2` env var. Default v1 — código v2 deployed mas inativo até validação completa
+- Rollout: NADA em produção até PR #35 verde com TODAS Baterias A-E passando. Sem ativações intermediárias mesmo que tecnicamente funcione
+
+---
+
 ## 2026-05-02 — Baileys (WhatsApp Web protocol) em vez de Meta Cloud API
 
 **Decisão:** Migrar WhatsApp transport de Meta Cloud API pra Baileys, com toggle `WHATSAPP_PROVIDER=meta|baileys` mantendo Meta como fallback funcional.

@@ -1,8 +1,31 @@
 # Status Atual do Projeto
 
-> Última atualização: 2026-05-02
+> Última atualização: 2026-05-02 (sessão 2 — refatoração Johnny v2 Fase 0+1)
 
-## Estado: Plataforma feature-complete em Baileys, aguardando troca pro número da academia ✅
+## Estado: Plataforma em produção (v1) + refatoração v2 em validação ✅
+
+**Em produção (Johnny v1, AGENT_VERSION=v1 default):** todas features (Baileys, design WhatsApp, multi-agente, áudio, SSE, KB, playground, notificações). Funcionando estável.
+
+**Em validação (Johnny v2, em PR #32):** arquitetura modular com 28 módulos sob demanda + máquina de estado por lead. Código deployed mas inativo (toggle por env). Aguarda user rodar Bateria E no playground antes de mergear.
+
+### O que está em PR #32 (aberto, não mergeado):
+- Schema `lead_state` + `prompt_modules` (28 seedados)
+- Núcleo v2 (12.5k chars vs 38k do v1)
+- Parser de tags `[ESTADO]` / `[MODULO_REQUERIDO]` / `[AGENDAMENTO]`
+- Detector regex de valor (21/21 testes passando)
+- Auto-incremento determinístico de contadores
+- Aba "Módulos do prompt" no admin (28 cards editáveis)
+- Playground v2 com 21 cenários pré-carregados (Baterias A-E)
+- Toggle `AGENT_VERSION=v1|v2` (default v1)
+
+### Próximos passos travados com user:
+1. Validar Bateria E no playground (manualmente, em outra sessão)
+2. Mergear PR #32 quando estiver verde
+3. PR #33 — Fase 2: Roteador Haiku 4.5
+4. PR #34 — Fase 3: Resumo dinâmico
+5. PR #35 — Fase 4: Validação Baterias A-E + dashboard + rollout 5%→25%→50%→100% via hash
+
+**REGRA OPERACIONAL TRAVADA:** AGENT_VERSION=v2 NÃO ATIVA EM PRODUÇÃO até PR #35 verde. Sem ativações intermediárias.
 
 Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda: design WhatsApp Web completo, multi-agente, áudio bidirecional com player no painel, real-time via SSE, knowledge base editável, playground de testes, sistema de notificação. **Trocou de Meta Cloud API pra Baileys** pra remover restrição de janela 24h. Hoje rodando via número pessoal pra teste — próximo passo é desconectar e escanear QR com o número da academia (que tá no JetSales hoje).
 

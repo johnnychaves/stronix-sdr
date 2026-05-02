@@ -4,6 +4,149 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-02 (sessão 2) — Parser de tags estruturadas emitidas pela própria IA
+
+**Contexto:** Refatoração v2 do Johnny precisa que a IA emita estado da conversa estruturado a cada turno. Princípio: "LLM sinaliza estado > sistema adivinhar via NLP".
+
+**Solução** (src/agent-v2.js):
+
+```js
+// Tag formato: [ESTADO:campo1=valor1|campo2=valor2|...]
+function parsePipeKV(body) {
+  const out = {};
+  if (!body) return out;
+  for (const p of body.split('|')) {
+    const eq = p.indexOf('=');
+    if (eq === -1) continue;
+    const key = p.slice(0, eq).trim();
+    const val = p.slice(eq + 1).trim();
+    if (key) out[key] = val;
+  }
+  return out;
+}
+
+function parseAndStripTags(answer) {
+  const result = { stateFields: null, requiredModule: null, agendamento: null, cleanText: answer };
+  // Regex case-insensitive position-agnostic — tag pode vir início/meio/fim
+  const m1 = answer.match(/\\[ESTADO:([^\\]]+)\\]/i);
+  if (m1) {
+    result.stateFields = parsePipeKV(m1[1]);
+    result.cleanText = result.cleanText.replace(/\\[ESTADO:[^\\]]+\\]\\s*\\n?/gi, '');
+  }
+  // ... idem pra MODULO_REQUERIDO e AGENDAMENTO
+  result.cleanText = result.cleanText.trim();
+  return result;
+}
+```
+
+**Princípios:**
+- Strip da tag é AGRESSIVO (case-insensitive, regex `gi`) — evita vazar pro WhatsApp
+- Validação de enums no `db.updateLeadState` (não no parser) — separa concerns
+- Tag malformada NÃO crasha — mantém estado anterior + loga
+- Backend é fonte da verdade pra contadores (`insistencias_valor`, `tentativas_objecao_atual`) — IA declara, mas backend valida e ajusta
+
+---
+
+## 2026-05-02 (sessão 2) — Detector regex de pedido de valor (BR)
+
+**Contexto:** Backend precisa incrementar `insistencias_valor` deterministicamente ANTES de chamar o Johnny, pra ele saber se já está no 3º pedido (regra dos valores).
+
+**Solução** (src/agent-v2.js):
+
+```js
+const VALOR_KW = /\\b(valor(?:es)?|pre[çc]o|pre[çc]os|mensalidade(?:s)?|investimento|barato|caro|tabela|or[çc]amento|custa(?:m)?|cobra(?:m)?)\\b/i;
+const QUANTO_FRASE = /\\b(quanto|qto)\\s+(custa|fica|[ée]|sai|cobra|pago|paga|d[áa])/i;
+const NEGATIVE_PATTERNS = [
+  /valor\\s+(d[ao]|de\\s+)\\s*(experi[êe]ncia|amizade|pessoa|alma|tempo)/i,
+  /(d[ãa]o|d[ãa]r|valoriza|valorizam)\\s+valor/i,
+  /tabela\\s+de\\s+(treino|exerc[íi]cios|alimenta[çc][ãa]o|h[áa]bitos)/i,
+];
+
+function detectsValueRequest(text) {
+  if (!text) return false;
+  for (const r of NEGATIVE_PATTERNS) if (r.test(text)) return false;
+  return VALOR_KW.test(text) || QUANTO_FRASE.test(text);
+}
+```
+
+**Validado** em [scripts/test-regex-valor.js](../scripts/test-regex-valor.js) com 21 casos:
+- 10 positivos (qual o valor, quanto custa, mensalidade, etc) → todos disparam
+- 10 negativos (valor da experiência, ganhar valor, tabela de treino, etc) → nenhum dispara
+- 1 falso positivo aceito conscientemente ("barato é até quem sabe vender") — frase rara, custo baixo
+
+**Lição:** word-boundary `\\b` é crítico em regex de keywords. `/valor/i` mata "valor da experiência"; `/\\bvalor\\b/i` + lookbehind por contextos figurados resolve.
+
+---
+
+## 2026-05-02 (sessão 2) — Montador de prompt em camadas com cache awareness
+
+**Contexto:** Prompt v2 tem 5 partes com características de cache diferentes. Ordem importa — primeira diferença invalida cache de tudo depois.
+
+**Solução** (src/agent-v2.js):
+
+```js
+function buildSystemBlocks({ state, moduleNames, dynamicCtx }) {
+  const blocks = [
+    // 1. Núcleo estático ~12.5k. CACHEADO (idêntico entre conversas)
+    { type: 'text', text: NUCLEO_V2, cache_control: { type: 'ephemeral' } },
+  ];
+
+  // 2. Knowledge base (planos, horários). CACHEADO (raramente muda)
+  const kb = db.buildAcademiaInfoBlock();
+  if (kb && kb.trim()) {
+    blocks.push({ type: 'text', text: kb, cache_control: { type: 'ephemeral' } });
+  }
+
+  // 3. Estado do lead. SEM CACHE (varia por turno)
+  const stateBlock = buildStateBlock(state);
+  if (stateBlock) blocks.push({ type: 'text', text: stateBlock });
+
+  // 4. Módulos carregados. SEM CACHE (varia por turno)
+  const modBlock = buildModulesBlock(moduleNames);
+  if (modBlock) blocks.push({ type: 'text', text: modBlock });
+
+  // 5. Tags dinâmicas (primeiro turno, fora horário, etc). SEM CACHE
+  if (dynamicCtx && dynamicCtx.trim()) blocks.push({ type: 'text', text: dynamicCtx });
+
+  return blocks;
+}
+```
+
+**Princípio crítico:** Anthropic faz prefix matching pra cache. Bloco cacheável SEMPRE primeiro, SEMPRE na mesma ordem. Camadas 3+ podem variar à vontade — não invalida cache de 1+2.
+
+---
+
+## 2026-05-02 (sessão 2) — Auto-incremento determinístico de contadores (backend > IA)
+
+**Contexto:** Documento mestre alinha que contadores (`insistencias_valor`, `tentativas_objecao_atual`) devem ser determinísticos no BACKEND, não confiados à IA.
+
+**Solução** (src/agent-v2.js `replyV2`):
+
+```js
+// 1. Detecta pedido de valor via regex ANTES de chamar Claude
+if (detectsValueRequest(text) && (state.insistencias_valor || 0) < 3) {
+  db.incrementLeadStateCounter(from, 'insistencias_valor', 1, 3);
+}
+
+// 2. Após Claude responder, detecta MUDANÇA de objeção pra resetar contador
+if (parsed.stateFields?.objecao_ativa) {
+  const newObj = parsed.stateFields.objecao_ativa;
+  if (newObj && newObj !== stateNow.objecao_ativa) {
+    parsed.stateFields.tentativas_objecao_atual = 0;
+    db.appendObjecaoLevantada(from, newObj);
+  } else if (newObj === stateNow.objecao_ativa) {
+    // Mesma objeção persistindo → +1
+    const next = (stateNow.tentativas_objecao_atual || 0) + 1;
+    parsed.stateFields.tentativas_objecao_atual = Math.min(3, next);
+    if (next >= 3) parsed.stateFields.estagio_atual = 'handoff_humano';  // forçado
+  }
+}
+```
+
+**Princípio:** IA emite estado pra coerência interna. Backend é a FONTE DA VERDADE pros contadores. Se Claude declarar `insistencias_valor=2` mas o backend já incrementou pra 3, prevalece o backend (via update). Garante que regra dos valores na 3ª insistência NUNCA falha.
+
+---
+
 ## 2026-05-02 — Baileys: JID resolution antes de enviar (bug 9-dígito BR)
 
 **Contexto:** Mensagens enviadas via Baileys não chegavam no destinatário porque o JID gerado tinha o formato errado. WhatsApp BR registra contas em 2 formatos:

@@ -4,6 +4,100 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 (sessão 2) — Refatoração Johnny v2: Fase 0+1 (PR #32 aberto)
+
+User mandou documento mestre + 5 anexos (núcleo v2, 28 módulos batch1/2/3, engrenagens com schema/parser/roteador/resumo/fluxo). Discussão alinhou 4 decisões + plano de 4 PRs.
+
+### Decisões travadas (com user, em sequência de mensagens):
+
+1. **Tabela `lead_state` separada** de `contacts` (FK pra phone), nunca estender contacts.
+2. **Migração:** contatos existentes ganham `lead_state` na 1ª mensagem após deploy v2 (default `estagio_atual=qualificacao_inicial`).
+3. **Rollback safety:** `AGENT_VERSION=v1|v2` env var. Default v1 — código v2 deployed mas inativo.
+4. **Modelo Roteador (Fase 2):** Haiku 4.5 separado, não tag emitida pelo Johnny.
+5. **Roteamento híbrido proposto:** carregamento determinístico (sem Haiku) pra `audio`, `lead_retornando`, `lead_aluno_existente`, `cenarios_borda` fora horário, `objecoes_geral`. Haiku só pra decisão semântica (knowledge factual + escolha de objeção específica).
+6. **Cache awareness:** núcleo + KB cacheados; estado/módulos/dyn ctx sem cache (varia turno).
+7. **Playground:** user roda Bateria E no PR #32 antes de mergear; Baterias A-D no PR #35 antes do rollout.
+8. **Rollout:** SEM ativações intermediárias. Só liberamos pra produção após PR #35 verde com todas baterias passando. Sequência 5% → 25% → 50% → 100% via hash do telefone após aprovação.
+
+### Implementado no PR #32 (Fase 0 + Fase 1):
+
+**Schema (src/db.js):**
+- Tabela `lead_state` com 23 campos (estagio_atual, proxima_acao, insistencias_valor, objetivo, modalidade_recomendada, disponibilidade, objecao_ativa, objecoes_levantadas JSON, tentativas_objecao_atual, aula_experimental_agendada, data/hora/modalidade_agendada, primeira/ultima_mensagem_em, total_mensagens_lead/johnny, resumo_dinamico, tags_sistema_ativas JSON, is_aluno_existente, encerrada_em, motivo_encerramento, modulo_pendente, updated_at). FK `contacts.phone`.
+- Tabela `prompt_modules` (name PK, title, content, category, active).
+- Migrações idempotentes via CREATE IF NOT EXISTS.
+
+**Helpers DB:**
+- `getLeadState`, `getOrCreateLeadState`, `updateLeadState` (com validação de enums — valores inválidos ignorados silenciosamente).
+- `incrementLeadStateCounter` (insistencias_valor, tentativas_objecao_atual, totais).
+- `appendObjecaoLevantada` (histórico cumulativo).
+- `resetLeadState` (debug).
+- CRUD `prompt_modules` + `seedPromptModulesIfEmpty` (popula no boot).
+
+**Núcleo v2 (src/prompt-nucleo-v2.js):**
+- 12.5k chars (vs 38k do v1).
+- Identidade + protocolo de tags + máquina de estado (10 estágios) + regra dos valores única + 6 regras de ouro + estilo + blacklist + módulos disponíveis + handoff + anti-padrão + checagem final.
+
+**28 módulos (src/prompt-modules-seed.js):**
+- Conhecimento (12): info_academia, modalidades, planos_e_precos, apresentacao_planos, equipe_tecnica, provas_sociais, concorrencia, cancelamento_congelamento, pagamento, indicacao, transferencia_clube, fluxo_aula_experimental.
+- Objeções (10): objecoes_geral, objecao_preco/tempo/pensar/adiar/mensal/pagamento/conjuge/distancia/convenio.
+- Situacionais (6): publicos_especificos, lead_retornando, lead_aluno_existente, cenarios_borda, audio, tecnicas_persuasao.
+- Doc mestre falava 27 (11+10+6); real são 28 (fluxo_aula_experimental veio bonus no batch1 — categorizado como 'sistema'/'conhecimento' dependendo do uso).
+
+**Agent v2 (src/agent-v2.js):**
+- `detectsValueRequest(text)`: regex word-boundary + 3 negative patterns. 21 casos de teste passam.
+- `parsePipeKV(body)`: extrai `campo=valor|campo=valor`.
+- `parseAndStripTags(answer)`: extrai [ESTADO], [MODULO_REQUERIDO], [AGENDAMENTO]. Position-agnostic (case-insensitive). Resiliente: tag malformada não crasha.
+- `buildStateBlock(state)`: ~300-500 chars, instrução pra IA usar/respeitar contadores.
+- `buildSystemBlocks({state, moduleNames, dynamicCtx})`: 5 camadas em ordem fixa pra cache hit (núcleo cached, KB cached, estado, módulos, dyn ctx).
+- `replyV2(from, text)`: pipeline completo (detecta sinais, auto-incrementa, salva user msg, monta prompt, chama Sonnet, parseia, atualiza state, salva resposta).
+- `simulateReplyV2(history, message, state)`: versão isolada pro playground, não persiste.
+
+**Webhook toggle (src/webhook.js):**
+- `const AGENT_VERSION = (process.env.AGENT_VERSION || 'v1').toLowerCase()`.
+- `processBatch` chama `replyV2` se v2, senão `reply` v1. Código v1 100% intocado.
+
+**UI Admin:**
+- Aba "Módulos do prompt" (Configurações → Módulos, admin only): 28 cards expansíveis com textarea + Salvar + Ativar/Desativar.
+- Endpoints REST: `GET/PUT /api/prompt-modules`, `PATCH /api/prompt-modules/:name/active`, `GET/DELETE /api/lead-state/:phone`.
+
+**Playground v2:**
+- Toggle dropdown `v1 | v2`.
+- Em v2: dropdown de 21 cenários pré-carregados das Baterias A-E.
+- Painel debug lateral mostrando state simulado em tempo real (estagio, insistencias, objecao_ativa, modulo_pendente, etc).
+- Endpoint `POST /api/playground/v2/message` que usa `simulateReplyV2`.
+- Carregar cenário envia mensagens automaticamente em sequência.
+
+**Tests:**
+- `scripts/test-regex-valor.js`: 21/21 passando (10 positivos, 10 negativos, 1 falso positivo aceito conscientemente: "barato é até quem sabe vender").
+
+### O que NÃO foi feito ainda (próximas fases):
+
+**PR #33 — Fase 2: Roteador**
+- Função `agent.routeModules(state, tags, isStudent, lastMessage)` chamando Haiku 4.5
+- Cache in-memory de roteamento (TTL 5min)
+- Fallback: se Johnny pedir `[MODULO_REQUERIDO:X]` que roteador não carregou, marca em `lead_state.modulo_pendente`
+- Carregamento determinístico paralelo (sem Haiku) pra: audio, lead_retornando, lead_aluno_existente, cenarios_borda (fora horário)
+
+**PR #34 — Fase 3: Resumo dinâmico**
+- Trigger: `total_mensagens > 15`
+- Worker via `setImmediate` (não bloqueia resposta)
+- Salva em `lead_state.resumo_dinamico`
+- Montador usa resumo + últimas 10 msgs quando presente
+- Plano B documentado: trocar pra fila SQLite quando passar de 50 resumos/dia ou >2 simultâneos
+
+**PR #35 — Fase 4: Validação e rollout**
+- Rodar Baterias A-D + E manualmente via playground
+- Dashboard simples (distribuição por estágio, tempo médio até agendamento, taxa handoff)
+- Rollout via env var `AGENT_ROLLOUT_PERCENT` + hash do telefone
+
+### Status no fim da sessão:
+
+- ✅ PR #32 aberto e pushed: https://github.com/johnnychaves/stronix-sdr/pull/32
+- ⏳ User vai validar Bateria E no playground em outra sessão
+- 🔒 Produção SEGURA: AGENT_VERSION default v1, código novo deployed mas inativo
+
+---
+
 ## 2026-05-02 — Maratona: design completo + Baileys + features de produção (PRs #1 a #30)
 
 Sessão longa que evoluiu o sistema de "MVP funcional" pra "plataforma feature-complete pronta pra produção". 30 PRs mergeados.
