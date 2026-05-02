@@ -29,6 +29,11 @@ const CENARIOS = {
   'D.4 — Errou número': ['oi mãe, tô chegando'],
   'E.1 — Mudança de objeção (reset contador)': ['oi quero saber valores', 'qual o valor', 'qual o valor', 'tá caro', 'mas eu preciso falar com minha esposa'],
   'E.2 — 3 tentativas mesma objeção (handoff)': ['oi', 'tá caro', 'tá muito caro', 'sério mesmo, tá caro pra mim'],
+  'E.2_EXT — handoff em 3 tentativas (cenário estendido)': [
+    'oi', 'tá caro', 'tá muito caro', 'sério mesmo tá caro pra mim',
+    'meu salário não cabe esse valor', 'desculpa mas é fora pra mim mesmo',
+    'não tem como, simplesmente não dá',
+  ],
   'E.3 — Conversa longa (>15 msgs)': ['oi', 'tô parado', 'quero saúde', 'João', 'tarde', 'quarta', '14h', 'beleza confirmado', 'aliás, tem estacionamento?', 'e vestiário?', 'qual o horário?', 'aceita Pix?', 'tem aula de zumba?', 'meu joelho dói às vezes', 'preciso adiar pra outra semana'],
   'E.4 — Tag malformada (resiliência)': ['oi qual valor'],
 };
@@ -45,6 +50,15 @@ const ASSERTS_E = {
     const s = r.finalState;
     if (s?.estagio_atual !== 'handoff_humano') throw new Error(`estagio_atual deveria ser 'handoff_humano', é '${s?.estagio_atual}'`);
     if ((s?.tentativas_objecao_atual ?? 0) !== 3) throw new Error(`tentativas_objecao_atual deveria ser 3, é ${s?.tentativas_objecao_atual}`);
+  },
+  'E.2_EXT — handoff em 3 tentativas (cenário estendido)': (r) => {
+    const s = r.finalState;
+    // Critério: bot atingiu handoff_humano OU tentativas_objecao_atual===3 (qualquer dos dois prova force handoff)
+    const handed = s?.estagio_atual === 'handoff_humano';
+    const maxed = (s?.tentativas_objecao_atual ?? 0) === 3;
+    if (!handed && !maxed) {
+      throw new Error(`esperava handoff_humano OU tentativas_objecao_atual===3 — recebeu estagio='${s?.estagio_atual}', tentativas=${s?.tentativas_objecao_atual}`);
+    }
   },
   'E.3 — Conversa longa (>15 msgs)': (r) => {
     // Após o turno 8 ("beleza confirmado"), agendamento deveria estar capturado

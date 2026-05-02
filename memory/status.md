@@ -190,7 +190,7 @@ Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda
 |---|---|---|
 | **Trocar pro número real da academia** | 🔴 Alta (próximo passo) | Hoje rodando no celular pessoal do Johnny pra teste. Quando estável: para o JetSales, abre Conexões → Desconectar → escaneia QR com número da academia. Tudo pronto. |
 | **AGENT_VERSION fica em v1 até Fase 2 completa** | 🔴 Política firme | Mesmo após merge do PR33 (fixes pré-Fase 2), `AGENT_VERSION=v1` continua default. Sistema sem Roteador é incompleto e cai em fallback genérico em conversas com objeção/contexto fora do roteiro principal. |
-| **Fase 2 — Roteador de módulos** | 🟡 Próximo PR (PR34?) | Construir lógica que decide DINAMICAMENTE quais módulos carregar baseado em estado + contexto. Hoje só carrega `modulo_pendente` do turno anterior. Ver comentário em [agent-v2.js:11](src/agent-v2.js:11). |
+| ~~Fase 2 — Roteador de módulos~~ | ✅ Concluído PR #34 | [src/router-v2.js](src/router-v2.js) determinístico: estado (estagio + objecao_ativa) + 18 keywords pt-br + limit 3 módulos. 39/39 + 14/14 unit tests passam. Bateria E: 3/4 (subiu de 2/4 do PR33). |
 | **Medição rollout 5% — tag esquecida** | 🟡 Pré-rollout v2 | Após Fase 2 + ligar `AGENT_VERSION=v2` em 5% das conversas: contar quantas vezes `[ESTADO:]` não foi emitido em 50 conversas reais. Critérios: <10% aceita como known issue, 10-20% prioriza Fase 6, >20% abre re-arquitetura com tool use estruturado como Fase 6 prioritária. Known issue aberto no PR33. |
 | Templates Meta (fallback opcional) | 🟢 Baixa | Se precisar mandar pra contato fora da janela 24h em modo Meta. Não necessário em Baileys. |
 | Fase 3 — Version history do prompt | 🟡 Média | Snapshot a cada save + diff + revert. Ainda não implementado. |

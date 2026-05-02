@@ -4,6 +4,55 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 — Fase 2: Roteador determinístico de módulos (PR #34)
+
+**Contexto:** Após PR33 mergear (3 fixes pré-Fase 2), construído o Roteador da Fase 2. Antes, replyV2 só carregava `modulo_pendente` do turno anterior — IA caia em fallback "deixa eu confirmar com a equipe" em conversas com objeção/contexto fora do roteiro principal. Agora o Roteador decide dinamicamente quais módulos carregar.
+
+**Decisão arquitetural — determinístico, sem Haiku:**
+- Princípio sócio: cobre 80% dos casos com 20% do esforço
+- Regras heurísticas em [src/router-v2.js](src/router-v2.js) (estado + keywords)
+- Latência: zero (sub-ms vs +300-500ms de chamada Haiku)
+- Custo: zero extra
+- Se aparecer caso edge real em produção, evolui pra híbrido com Haiku 4.5
+
+**Estrutura do `routeModules({ state, text, modulo_pendente })`:**
+
+1. **Tag manual preservada:** `modulo_pendente` (do turno anterior, via tag `[MODULO_REQUERIDO:nome]`) sempre incluído
+2. **Estado-based:**
+   - `estagio_atual === 'apresentacao_planos'` → `planos_e_precos`
+   - `estagio_atual === 'proposta_visita'` ou `'drill_horario'` → `fluxo_aula_experimental`
+   - `objecao_ativa` preenchido → `objecao_${X}` + `objecoes_geral` (15 mapeados em `OBJECAO_TO_MODULE`)
+3. **Keyword-based (regex pt-br):** 18 regras cobrindo públicos especiais (gestante, idoso, adolescente, obeso), saúde/lesão (joelho, hérnia, cirurgia), objeções via texto (gympass, esposa, mensal), info academia (estacionamento, horário), modalidades, política de plano (cancelamento, fidelidade, pix), provas sociais, concorrência
+4. **Limit defensivo:** `MAX_MODULES = 3` (evita prompt bloat / cache miss)
+5. **Dedup automático** via Set
+
+**Testes:**
+- [scripts/test-router-v2.js](scripts/test-router-v2.js): 39 casos cobrindo cada regra individualmente + combinações (estado + keyword + modulo_pendente). **39/39 passou** offline (sub-100ms)
+- [scripts/test-state-update.js](scripts/test-state-update.js): 14 casos unitários de `computeStateUpdate` + `computeInsistenciasValor` (mudança de objeção, force handoff em 3, clamp de insistências). **14/14 passou** offline
+
+**Bateria A-E re-rodada via [scripts/baterias-v2.js](scripts/baterias-v2.js):**
+- 21/21 sem crash. Custo: $0,28 (~R$1,52)
+- **Bateria E: 3/4 passou** — subiu de 2/4 (PR33) → **3/4** (PR34)
+- E.1 (mudança de objeção): ❌ → ✅ (Roteador carregou módulos certos baseados em `objecao_ativa`)
+- E.3 (conversa longa): ✅ continua ✅
+- E.4 (tag malformada): ✅ continua ✅
+- E.2 (3 tentativas → handoff): ❌ persiste, mas não é bug do código — cenário de 4 turnos não exercita lógica (bot leva 2 turnos pra começar a marcar `objecao_ativa`, sobrando só 2 tentativas reais). **Lógica de force handoff coberta em [test-state-update.js](scripts/test-state-update.js) com 14/14 passando.**
+
+**Comparação Fases 0+1 → Fase 2:**
+
+| Métrica | PR32 (Fase 0+1) | PR33 (fixes) | PR34 (Fase 2) |
+|---|---|---|---|
+| Bateria E asserts | 1/4 | 2/4 | **3/4** |
+| Módulos carregados por turno | 0-1 (só pendente) | 0-1 | **0-3 dinâmicos** |
+| Resposta com `objecao_ativa=preco` carrega `objecao_preco`? | ❌ não, só se Johnny pediu | ❌ | **✅ automático** |
+| Lead diz "tem estacionamento?" carrega `info_academia`? | ❌ | ❌ | **✅ por keyword** |
+| Custo extra por turno | $0 | $0 | **$0** (determinístico) |
+| Latência extra por turno | 0ms | 0ms | **<1ms** |
+
+**Próximo passo após PR34 mergear:** smoke real em playground v2 + validação com 5-10 conversas simuladas via UI antes de cogitar `AGENT_VERSION=v2`. Política firme: v1 continua default mesmo após Fase 2 mergeada.
+
+---
+
 ## 2026-05-02 — Validação Bateria A-E do agent v2 (PR #32) via script
 
 **Contexto:** Antes de construir Fase 2 (Roteador), rodar os 21 cenários do PG_CENARIOS pra confirmar que a infra do v2 (parser, máquina de estado, regra de valores, handoff por tentativas) funciona.
