@@ -6,8 +6,20 @@ const wa = require('./whatsapp');
 
 // Toggle entre Johnny v1 (prompt monolítico) e v2 (núcleo + módulos).
 // Default v1 — só ativa v2 quando AGENT_VERSION=v2 explícito.
-const AGENT_VERSION = (process.env.AGENT_VERSION || 'v1').toLowerCase();
-console.log(`[webhook] agent version: ${AGENT_VERSION}`);
+// PR #37: pode ser pausado via DB flag (admin "pausar v2 imediatamente")
+// sem precisar restart. Lê env como baseline e checa override em DB.
+const AGENT_VERSION_ENV = (process.env.AGENT_VERSION || 'v1').toLowerCase();
+console.log(`[webhook] agent version (env): ${AGENT_VERSION_ENV}`);
+
+// Resolve a cada request — barato (1 query SQLite indexada). Permite admin
+// flipar pra v1 instantâneo via UI sem mexer em variável Railway.
+function getCurrentAgentVersion() {
+  try {
+    const override = require('./db').getRuntimeFlag('agent_version_override');
+    if (override === 'v1' || override === 'v2') return override;
+  } catch { /* DB pode estar inicializando */ }
+  return AGENT_VERSION_ENV;
+}
 const { sendMessage, notifyStudent, notifyAssignedConsultor, PROVIDER } = wa;
 const { transcribeAudio, transcribeAudioBuffer } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
@@ -143,8 +155,10 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
   }
 
   // Roteamento por versão do agente. v2 usa núcleo + lead_state; v1 é o
-  // prompt monolítico antigo. Default v1 (rollout controlado por env var).
-  const result = AGENT_VERSION === 'v2'
+  // prompt monolítico antigo. Default v1 (rollout controlado por env var,
+  // override por v2_runtime_flags pra pausa instantânea via admin).
+  const currentVersion = getCurrentAgentVersion();
+  const result = currentVersion === 'v2'
     ? await replyV2(from, text, { isAudio: anyAudio })
     : await reply(from, text, { isAudio: anyAudio, forceAudio });
   const shouldSendAudio = forceAudio || result.useAudio;
@@ -284,3 +298,6 @@ router.post('/', async (req, res) => {
 
 module.exports = router;
 module.exports.handleIncomingMessage = handleIncomingMessage;
+// PR #37: helpers exportados pra admin.js usar nos endpoints /v2/version e /v2/pause
+module.exports.getCurrentAgentVersion = getCurrentAgentVersion;
+module.exports.AGENT_VERSION_ENV = AGENT_VERSION_ENV;

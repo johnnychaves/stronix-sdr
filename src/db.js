@@ -262,6 +262,53 @@ if (!lsCols.find(c => c.name === 'resumo_dinamico_n_msgs')) {
   console.log('[db] migração: coluna resumo_dinamico_n_msgs adicionada em lead_state');
 }
 
+// Migração PR #37: estende conversation_reviews pra aceitar 'aceitavel' (3-níveis).
+// SQLite não permite ALTER CHECK direto — precisa table-rebuild se schema antigo.
+// Detecta via sqlite_master.sql se o CHECK já tem 'aceitavel' antes de mexer.
+const reviewsTbl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='conversation_reviews'").get();
+if (reviewsTbl && !reviewsTbl.sql.includes("'aceitavel'")) {
+  db.exec(`
+    ALTER TABLE conversation_reviews RENAME TO conversation_reviews_old;
+    CREATE TABLE conversation_reviews (
+      phone TEXT PRIMARY KEY,
+      rating TEXT NOT NULL CHECK(rating IN ('good', 'aceitavel', 'bad')),
+      comment TEXT,
+      reviewed_at INTEGER NOT NULL,
+      FOREIGN KEY (phone) REFERENCES contacts(phone) ON DELETE CASCADE
+    );
+    INSERT INTO conversation_reviews (phone, rating, comment, reviewed_at)
+      SELECT phone, rating, comment, reviewed_at FROM conversation_reviews_old;
+    DROP TABLE conversation_reviews_old;
+    CREATE INDEX IF NOT EXISTS idx_reviews_rating ON conversation_reviews(rating);
+    CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at ON conversation_reviews(reviewed_at DESC);
+  `);
+  console.log("[db] migração: conversation_reviews estendida pra aceitar 'aceitavel'");
+}
+
+// Migração PR #37: tabela append-only de eventos pra métricas e alertas.
+// event_type cobre: tag_esquecida, router_empty, preco_inventado, valor_antecipado,
+// crash, version_change, force_resumo. value/meta livres pra extensão.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS v2_metrics_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    phone TEXT,
+    value REAL,
+    meta TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_v2_log_ts ON v2_metrics_log(timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_v2_log_event_ts ON v2_metrics_log(event_type, timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_v2_log_phone ON v2_metrics_log(phone);
+
+  CREATE TABLE IF NOT EXISTS v2_runtime_flags (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    updated_by INTEGER
+  );
+`);
+
 // ─────────────────────────────────────────────────────────────────────
 // PREPARED STATEMENTS (otimizadas, reusadas)
 // ─────────────────────────────────────────────────────────────────────
@@ -1182,6 +1229,329 @@ function buildAcademiaInfoBlock() {
   return out;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// PR #37 — V2 monitoring: helpers de log, métricas, alertas e flags runtime
+// ─────────────────────────────────────────────────────────────────────
+
+// Tipos de evento conhecidos. Usado como contrato com agent-v2 e admin UI.
+const V2_EVENT_TYPES = {
+  TAG_ESQUECIDA: 'tag_esquecida',           // parser não achou [ESTADO:] na resposta
+  ROUTER_EMPTY: 'router_empty',             // routeModules() retornou []
+  PRECO_INVENTADO: 'preco_inventado',       // bot mencionou preço fora do academia_info
+  VALOR_ANTECIPADO: 'valor_antecipado',     // bot passou valor antes de insistencias_valor=3
+  CRASH: 'crash',                           // exception não tratada em replyV2
+  VERSION_CHANGE: 'version_change',         // pausa/resume v2
+  FORCE_RESUMO: 'force_resumo',             // admin forçou geração de resumo
+  TURN_OK: 'turn_ok',                       // turno completo sem flag — denominador pra %
+};
+
+// Append-only log de eventos. Performance OK pra ~10k events/dia.
+function logV2Event(eventType, phone = null, value = null, meta = null) {
+  try {
+    const metaStr = meta ? (typeof meta === 'string' ? meta : JSON.stringify(meta)) : null;
+    db.prepare(`
+      INSERT INTO v2_metrics_log (timestamp, event_type, phone, value, meta)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(Date.now(), eventType, phone, value, metaStr);
+  } catch (e) {
+    console.error('[db] logV2Event falhou:', e.message);
+  }
+}
+
+// Janelas de tempo (ms) pra filtros do painel.
+const V2_PERIODS = {
+  '1h': 60 * 60 * 1000,
+  'today': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '14d': 14 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+
+function periodToMs(period) {
+  return V2_PERIODS[period] || V2_PERIODS['7d'];
+}
+
+// Conta eventos de um tipo dentro de janela.
+function countV2Events(eventType, periodMs) {
+  const since = Date.now() - periodMs;
+  const row = db.prepare(`
+    SELECT COUNT(*) as c FROM v2_metrics_log
+    WHERE event_type = ? AND timestamp >= ?
+  `).get(eventType, since);
+  return row?.c || 0;
+}
+
+// Lista eventos crus pra debug / auditoria. Limit defensivo.
+function listV2Events(eventType = null, periodMs = null, limit = 200) {
+  const since = periodMs ? Date.now() - periodMs : 0;
+  let sql = `SELECT id, timestamp, event_type, phone, value, meta FROM v2_metrics_log WHERE timestamp >= ?`;
+  const params = [since];
+  if (eventType) { sql += ' AND event_type = ?'; params.push(eventType); }
+  sql += ' ORDER BY timestamp DESC LIMIT ?';
+  params.push(limit);
+  return db.prepare(sql).all(...params).map(r => {
+    if (r.meta) { try { r.meta = JSON.parse(r.meta); } catch { /* keep string */ } }
+    return r;
+  });
+}
+
+// Conversas v2 ativas — heurística: tem row em lead_state (v2 cria, v1 não).
+// Inclui filtro de status: em_andamento / agendou / handoff / perdeu.
+// "perdeu" = sem msg há >24h E não atingiu agendamento_confirmado nem handoff_humano.
+function getV2Conversations({ status = null, limit = 200 } = {}) {
+  const PERDIDO_THRESHOLD = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  // JOIN lead_state (v2) + contacts + última msg + review
+  const rows = db.prepare(`
+    SELECT
+      ls.phone,
+      c.name,
+      c.last_contact_at,
+      ls.estagio_atual,
+      ls.objecao_ativa,
+      ls.insistencias_valor,
+      ls.modalidade_recomendada,
+      ls.disponibilidade,
+      ls.modulo_pendente,
+      ls.total_mensagens_lead,
+      ls.total_mensagens_johnny,
+      ls.aula_experimental_agendada,
+      ls.data_agendamento,
+      ls.hora_agendamento,
+      ls.resumo_dinamico_n_msgs,
+      r.rating as review_rating,
+      r.comment as review_comment,
+      (SELECT content FROM messages WHERE phone = ls.phone ORDER BY id DESC LIMIT 1) as last_message
+    FROM lead_state ls
+    LEFT JOIN contacts c ON c.phone = ls.phone
+    LEFT JOIN conversation_reviews r ON r.phone = ls.phone
+    ORDER BY c.last_contact_at DESC
+    LIMIT ?
+  `).all(limit);
+
+  // Calcula status derivado e mascara phone.
+  for (const r of rows) {
+    const idle = r.last_contact_at ? now - r.last_contact_at : Infinity;
+    if (r.estagio_atual === 'agendamento_confirmado') r._status = 'agendou';
+    else if (r.estagio_atual === 'handoff_humano') r._status = 'handoff';
+    else if (idle > PERDIDO_THRESHOLD) r._status = 'perdeu';
+    else r._status = 'em_andamento';
+    r._phone_masked = maskPhone(r.phone);
+  }
+  if (status) return rows.filter(r => r._status === status);
+  return rows;
+}
+
+// Mascara últimos 4 dígitos pra UI: 5551995304633 → 5551995****
+function maskPhone(phone) {
+  if (!phone || phone.length < 4) return phone;
+  return phone.slice(0, -4) + '****';
+}
+
+// Detalhe completo de uma conversa pra painel lateral.
+function getV2ConversationDetail(phone) {
+  phone = canonicalizeContactPhone(phone);
+  const state = getLeadState(phone);
+  if (!state) return null;
+  const contact = getContact(phone);
+  const messages = stmts.getMessagesForContact.all(phone).map(m => ({
+    role: m.role,
+    content: m.content,
+    was_audio: m.was_audio,
+    delivery_status: m.delivery_status,
+    created_at: m.created_at,
+  }));
+  const review = db.prepare('SELECT * FROM conversation_reviews WHERE phone = ?').get(phone);
+  // Pega últimos eventos relacionados a esse phone (tag esquecida etc)
+  const events = db.prepare(`
+    SELECT timestamp, event_type, value, meta FROM v2_metrics_log
+    WHERE phone = ? ORDER BY timestamp DESC LIMIT 50
+  `).all(phone).map(e => {
+    if (e.meta) { try { e.meta = JSON.parse(e.meta); } catch {} }
+    return e;
+  });
+  return {
+    phone,
+    phone_masked: maskPhone(phone),
+    contact,
+    state,
+    messages,
+    review,
+    events,
+  };
+}
+
+// Métricas agregadas pro dashboard.
+function getV2Metrics(period = '7d') {
+  const periodMs = periodToMs(period);
+  const since = Date.now() - periodMs;
+
+  // Funil baseado em estagio_atual de leads que tiveram atividade no período
+  const funilRows = db.prepare(`
+    SELECT ls.estagio_atual, COUNT(DISTINCT ls.phone) as c
+    FROM lead_state ls
+    LEFT JOIN contacts c ON c.phone = ls.phone
+    WHERE c.last_contact_at >= ?
+    GROUP BY ls.estagio_atual
+  `).all(since);
+  const funil = {};
+  let totalLeads = 0;
+  for (const r of funilRows) {
+    funil[r.estagio_atual] = r.c;
+    totalLeads += r.c;
+  }
+
+  const agendou = funil['agendamento_confirmado'] || 0;
+  const handoff = funil['handoff_humano'] || 0;
+  // Perdidos: tem lead_state, last_contact >24h atrás, mas não chegou em agendou/handoff
+  const perdidos = db.prepare(`
+    SELECT COUNT(DISTINCT ls.phone) as c FROM lead_state ls
+    LEFT JOIN contacts c ON c.phone = ls.phone
+    WHERE c.last_contact_at >= ?
+      AND c.last_contact_at < ?
+      AND ls.estagio_atual NOT IN ('agendamento_confirmado', 'handoff_humano')
+  `).get(since, Date.now() - 24 * 60 * 60 * 1000).c || 0;
+
+  // Eventos de qualidade
+  const turnsOk = countV2Events(V2_EVENT_TYPES.TURN_OK, periodMs);
+  const tagEsquecida = countV2Events(V2_EVENT_TYPES.TAG_ESQUECIDA, periodMs);
+  const routerEmpty = countV2Events(V2_EVENT_TYPES.ROUTER_EMPTY, periodMs);
+  const totalTurns = turnsOk + tagEsquecida;
+  const precoInventado = countV2Events(V2_EVENT_TYPES.PRECO_INVENTADO, periodMs);
+  const valorAntecipado = countV2Events(V2_EVENT_TYPES.VALOR_ANTECIPADO, periodMs);
+  const crashes = countV2Events(V2_EVENT_TYPES.CRASH, periodMs);
+
+  // Tempo médio do primeiro contato até agendou
+  const tempoMedio = db.prepare(`
+    SELECT AVG(c.last_contact_at - c.first_contact_at) as avg_ms
+    FROM lead_state ls
+    LEFT JOIN contacts c ON c.phone = ls.phone
+    WHERE ls.estagio_atual = 'agendamento_confirmado'
+      AND c.last_contact_at >= ?
+  `).get(since).avg_ms;
+
+  return {
+    period,
+    since,
+    total_leads: totalLeads,
+    funil,
+    pct_agendou: totalLeads ? (agendou / totalLeads) * 100 : 0,
+    pct_handoff: totalLeads ? (handoff / totalLeads) * 100 : 0,
+    pct_perdeu: totalLeads ? (perdidos / totalLeads) * 100 : 0,
+    pct_tag_esquecida: totalTurns ? (tagEsquecida / totalTurns) * 100 : 0,
+    pct_router_empty: totalTurns ? (routerEmpty / totalTurns) * 100 : 0,
+    total_turns: totalTurns,
+    crashes,
+    preco_inventado: precoInventado,
+    valor_antecipado: valorAntecipado,
+    tempo_medio_ate_agendou_ms: tempoMedio || null,
+  };
+}
+
+// Calcula alertas ativos baseado nos critérios do PR37.
+// Retorna array de { level: 'critical'|'warning', code, message, context }.
+function getV2Alerts() {
+  const alerts = [];
+
+  // 1. 3 reviews ❌ seguidas (mais recentes)
+  const last3Bad = db.prepare(`
+    SELECT phone, rating FROM conversation_reviews
+    ORDER BY reviewed_at DESC LIMIT 3
+  `).all();
+  if (last3Bad.length === 3 && last3Bad.every(r => r.rating === 'bad')) {
+    alerts.push({
+      level: 'critical',
+      code: 'three_bad_reviews',
+      message: '3 conversas seguidas marcadas ❌',
+      context: { phones: last3Bad.map(r => maskPhone(r.phone)) },
+    });
+  }
+
+  // 2-4. Eventos críticos nas últimas 24h
+  const period24h = 24 * 60 * 60 * 1000;
+  const precoInv = countV2Events(V2_EVENT_TYPES.PRECO_INVENTADO, period24h);
+  if (precoInv > 0) {
+    alerts.push({
+      level: 'critical',
+      code: 'preco_inventado',
+      message: `Bot inventou preço/regra ${precoInv}x nas últimas 24h`,
+      context: { count: precoInv },
+    });
+  }
+  const valorAnt = countV2Events(V2_EVENT_TYPES.VALOR_ANTECIPADO, period24h);
+  if (valorAnt > 0) {
+    alerts.push({
+      level: 'critical',
+      code: 'valor_antecipado',
+      message: `Bot passou valor antes da 3ª insistência ${valorAnt}x nas últimas 24h`,
+      context: { count: valorAnt },
+    });
+  }
+
+  // 3. Tag esquecida em >30% das primeiras 20 conversas v2 (rolling)
+  const last20 = db.prepare(`
+    SELECT DISTINCT phone FROM lead_state ORDER BY primeira_mensagem_em DESC LIMIT 20
+  `).all().map(r => r.phone);
+  if (last20.length >= 20) {
+    const placeholders = last20.map(() => '?').join(',');
+    const tagFalhas = db.prepare(`
+      SELECT COUNT(*) as c FROM v2_metrics_log
+      WHERE event_type = ? AND phone IN (${placeholders})
+    `).get(V2_EVENT_TYPES.TAG_ESQUECIDA, ...last20).c;
+    const totalTurnsLast20 = db.prepare(`
+      SELECT COUNT(*) as c FROM v2_metrics_log
+      WHERE event_type IN (?, ?) AND phone IN (${placeholders})
+    `).get(V2_EVENT_TYPES.TAG_ESQUECIDA, V2_EVENT_TYPES.TURN_OK, ...last20).c;
+    if (totalTurnsLast20 > 0) {
+      const pct = (tagFalhas / totalTurnsLast20) * 100;
+      if (pct > 30) {
+        alerts.push({
+          level: 'warning',
+          code: 'tag_esquecida_alta',
+          message: `Tag [ESTADO:] esquecida em ${pct.toFixed(1)}% das últimas 20 conversas (limite 30%)`,
+          context: { pct, total: totalTurnsLast20, falhas: tagFalhas },
+        });
+      }
+    }
+  }
+
+  // 5. Crashes nas últimas 24h
+  const crashes = countV2Events(V2_EVENT_TYPES.CRASH, period24h);
+  if (crashes > 0) {
+    alerts.push({
+      level: 'critical',
+      code: 'crash',
+      message: `Agente crashou ${crashes}x nas últimas 24h`,
+      context: { count: crashes },
+    });
+  }
+
+  return alerts;
+}
+
+// Runtime flags persistidos em DB. Sobreviem restart.
+function getRuntimeFlag(key) {
+  const row = db.prepare('SELECT value FROM v2_runtime_flags WHERE key = ?').get(key);
+  return row?.value || null;
+}
+
+function setRuntimeFlag(key, value, userId = null) {
+  db.prepare(`
+    INSERT INTO v2_runtime_flags (key, value, updated_at, updated_by)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at,
+      updated_by = excluded.updated_by
+  `).run(key, value, Date.now(), userId);
+}
+
+// Estende a validação atual de upsertReview pra aceitar 'aceitavel'.
+const VALID_REVIEW_RATINGS = new Set(['good', 'aceitavel', 'bad']);
+function isValidReviewRating(rating) {
+  return VALID_REVIEW_RATINGS.has(rating);
+}
+
 // ─── Boot: seed inicial de prompt_modules (se vazio) ───
 try {
   seedPromptModulesIfEmpty();
@@ -1266,4 +1636,18 @@ module.exports = {
   seedPromptModulesIfEmpty,
   // metrics
   getMetrics,
+  // PR #37 — V2 monitoring
+  V2_EVENT_TYPES,
+  V2_PERIODS,
+  logV2Event,
+  countV2Events,
+  listV2Events,
+  getV2Conversations,
+  getV2ConversationDetail,
+  getV2Metrics,
+  getV2Alerts,
+  getRuntimeFlag,
+  setRuntimeFlag,
+  isValidReviewRating,
+  maskPhone,
 };

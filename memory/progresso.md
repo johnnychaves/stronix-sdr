@@ -4,6 +4,75 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 — PR #37: Admin Tooling (Trilha B) — pré-requisito da janela de validação
+
+**Contexto:** Último PR antes de ligar `AGENT_VERSION=v2` em 5%. Constrói toda a tela de monitoramento que o Johnny vai usar diariamente durante a janela de 50 conversas / 14 dias.
+
+**Componentes entregues:**
+
+A. **Tela de monitoramento** ([src/admin.js](src/admin.js) — nova aba "🚦 Monitor v2"):
+- Lista de conversas v2 com filtros: em andamento / agendou / handoff / perdeu (>24h)
+- Cada linha: phone mascarado (últimos 4 dígitos `5599999000****`), estágio, última msg, tempo decorrido, módulo pendente
+- Painel lateral com detalhe completo: ficha do lead em tempo real, tags emitidas, eventos recentes, histórico cronológico
+- Botões 3-níveis: ✅ Deu certo / ⚠️ Aceitável / ❌ Deu errado + textarea autosalva
+- Filtro avaliação: todas / não avaliadas / só ❌ / só ⚠️ / só ✅
+
+B. **Painel de métricas em tempo real** (cards + funil):
+- % agendou / % handoff / % perdeu (com filtro 1h/today/7d/14d/30d)
+- % tag esquecida (instrumentação combinada PR33) — destaca em vermelho se >30%
+- % `routeModules() === []` (instrumentação combinada PR34)
+- Distribuição por estágio (gráfico de barras CSS-only)
+- Tempo médio do primeiro contato até `agendamento_confirmado`
+- Crashes / preço inventado / valor antecipado (cards com bg vermelho se >0)
+
+C. **Banner de alertas** + nav badge ([src/db.js#getV2Alerts](src/db.js)):
+1. 3 reviews `bad` consecutivas → critical
+2. Preço inventado em 24h → critical
+3. Valor antecipado (antes 3ª insistência) em 24h → critical
+4. Tag esquecida em >30% das últimas 20 conversas → warning
+5. Crashes em 24h → critical
+
+D. **Botões de controle**:
+- ⏸ **Pausar v2 imediatamente** (confirmação dupla, escreve `agent_version_override='v1'` em `v2_runtime_flags`, `webhook.js` lê via `getCurrentAgentVersion()` a cada request — sem restart)
+- ▶ Retomar (volta pra env baseline)
+- ⟳ **Forçar resumo agora** por conversa específica (botão pedido no review do PR36)
+- ⬇ Exportar CSV do período (streaming)
+
+E. **Onboarding tour** (4 steps, `localStorage.v2m_tour_seen` evita re-aparecer):
+- Boas-vindas / Métricas e funil / Como avaliar / Pausa de emergência
+
+**Backend novo:**
+- [src/db.js](src/db.js): migração `conversation_reviews` extends pra aceitar `'aceitavel'` (table-rebuild idempotente via `sqlite_master.sql` check), nova tabela `v2_metrics_log` (append-only com índices), nova tabela `v2_runtime_flags`. Helpers: `logV2Event`, `countV2Events`, `listV2Events`, `getV2Conversations` (com status derivado), `getV2ConversationDetail`, `getV2Metrics`, `getV2Alerts`, `getRuntimeFlag/setRuntimeFlag`, `maskPhone`, `isValidReviewRating`.
+- [src/v2-detectors.js](src/v2-detectors.js) **novo** (~110 linhas): `extractMoneyValues`, `isLikelyDerivation`, `detectsPrecoInventado` (compara contra `academia_info`, aceita derivações <15% do menor preço), `detectsValorAntecipado`, `detectsTagEsquecida`. Falsos positivos aceitos — admin marca "falso alarme" via UI futuro.
+- [src/agent-v2.js](src/agent-v2.js): instrumentação inteira em `replyV2`. Try/catch externo loga `CRASH`. Após Roteador, loga `ROUTER_EMPTY` se `[]`. Após resposta, loga `TAG_ESQUECIDA`/`TURN_OK`, `PRECO_INVENTADO`, `VALOR_ANTECIPADO`. Detectores em try/catch interno — NUNCA derruba `replyV2`.
+- [src/webhook.js](src/webhook.js): variável `AGENT_VERSION_ENV` (baseline do env) + `getCurrentAgentVersion()` que checa override em DB. Permite pausa runtime instantânea via UI.
+- [src/admin.js](src/admin.js): 10 endpoints novos `/api/v2/*` — `conversations`, `conversation/:phone`, `metrics`, `alerts`, `review/:phone`, `force-resumo/:phone`, `version`, `pause`, `resume`, `export`. SSE forwarding `v2.metrics.changed` no endpoint existente.
+
+**Tests:**
+- [scripts/test-v2-detectors.js](scripts/test-v2-detectors.js) **novo**: 33/33 (cobre regex monetário, derivações, preço inventado, valor antecipado, tag esquecida, extração do academia_info).
+- Suite offline total: **133/133** (21 regex-valor + 39 router + 14 state-update + 26 resumo + 33 detectors).
+
+**Seed:**
+- [scripts/seed-v2-test-conversations.js](scripts/seed-v2-test-conversations.js) **novo**: 5 cenários sintéticos (em_andamento / agendou / handoff / perdeu / tag_esquecida) com phones `5599999000+id`. Eventos sintéticos pra tag esquecida alimentando métrica em 36.4% (>30% → alerta amarelo). Permite testar tela ANTES de ligar v2 em prod (critério de aceitação).
+
+**Smoke local validado** via Chrome MCP:
+- Login admin → aba Monitor v2 → tour aparece → métricas carregam → 5 conversas listadas com badges de status corretos → click conversa → detalhe lateral abre com ficha completa + histórico + 3 botões avaliação → click ✅ → marcador ✓ aparece imediatamente na lista.
+- Bug encontrado e corrigido: `state.isAdmin` referência fora de escopo no IIFE (variável da app principal). Removida (endpoint já checa `requireAdmin`).
+- Bug encontrado e corrigido: tempo médio negativo no seed (last_contact < first_contact). Seed agora atualiza ambos retroativos.
+
+**Bateria pós-PR37 (zero regressão):**
+- 22/22 sem crash. Custo $0,30. Bateria E: 3/6 (dentro da variabilidade 3-5 confirmada no PR36 com 5 runs).
+- F.1 (Fase 3) ✅ continua passando — instrumentação não atrapalhou Roteador/Resumo.
+- E.2/E.2_EXT/E.3 oscilam (variabilidade do Sonnet, known issue PR33).
+
+**Política de flag mantida:** `AGENT_VERSION=v1` continua default. Pré-requisitos antes de v2 em 5%:
+1. ✅ PR37 mergeado (admin tooling)
+2. ⏳ Smoke manual playground v2 (Johnny faz, ~30min)
+3. ⏳ Liga `AGENT_VERSION=v2` em 5% via hash
+4. ⏳ Janela de 50 conversas / 14 dias
+
+---
+
 ## 2026-05-02 — Fase 3: Resumo dinâmico em background (PR #36) + refactor pós-review
 
 **Contexto:** Conversas longas (20+ msgs) carregavam 50 msgs cheias no prompt cada turno → token bloat + cache miss. Fase 3 substitui por (resumo estruturado + últimas 10 msgs).
