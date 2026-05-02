@@ -323,15 +323,12 @@ async function replyV2(from, text, { isAudio = false } = {}) {
     db.updateLeadState(from, { tags_sistema_ativas: tagsAtivas });
   }
 
-  // 8. Histórico — Fase 3: se já tem resumo, carrega só msgs novas + bloco resumo no system.
-  // Senão, carrega últimas 50 (fallback do PR32).
+  // 8. Histórico — Fase 3 (Anexo 5/Seção 4): se já tem resumo, prompt usa
+  // resumo_dinamico + ÚLTIMAS 10 mensagens (fixas). Senão, carrega 50 últimas.
   let history;
   let resumoBlock = '';
   if (stateNow.resumo_dinamico && (stateNow.resumo_dinamico_n_msgs || 0) > 0) {
-    const totalMsgs = db.getMessageCount(from);
-    const msgsAposResumo = Math.max(totalMsgs - stateNow.resumo_dinamico_n_msgs, 1);
-    // Pega só as msgs novas (mais 1 buffer pra dar contexto direto ao Claude)
-    history = db.getHistory(from, msgsAposResumo);
+    history = db.getHistory(from, 10);
     resumoBlock = buildResumoBlock(stateNow);
   } else {
     history = db.getHistory(from, 50);

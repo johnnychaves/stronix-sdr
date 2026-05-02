@@ -11,6 +11,9 @@ const {
   stripTags,
   formatTranscript,
   buildResumoBlock,
+  validateResumoSchema,
+  RESUMO_SECOES,
+  MIN_SECOES_VALIDAS,
   TRIGGER_THRESHOLD,
   UPDATE_EVERY_N_MSGS,
 } = require('../src/resumo-dinamico');
@@ -123,16 +126,99 @@ const CASES = [
     expect: '',
   },
   {
-    name: 'state com resumo → bloco formatado com header e nota',
+    name: 'state com resumo → bloco formatado com header CONTEXTO PRÉVIO',
     fn: 'buildResumoBlock',
     input: [{ resumo_dinamico: 'LEAD: João\nOBJETIVO: emagrecer', resumo_dinamico_n_msgs: 20 }],
-    matchSubstrings: ['═══ RESUMO DA CONVERSA ANTERIOR ═══', 'LEAD: João', '20 mensagens'],
+    matchSubstrings: ['═══ CONTEXTO PRÉVIO', 'LEAD: João', 'primeiras 20 msgs'],
+  },
+
+  // ─── validateResumoSchema (sanity check) ───
+  {
+    name: 'string vazia → false',
+    fn: 'validateResumoSchema',
+    input: [''],
+    expect: false,
+  },
+  {
+    name: 'null → false',
+    fn: 'validateResumoSchema',
+    input: [null],
+    expect: false,
+  },
+  {
+    name: 'texto livre sem seções → false',
+    fn: 'validateResumoSchema',
+    input: ['Aqui vai um texto sem nenhuma seção formatada do anexo 5'],
+    expect: false,
+  },
+  {
+    name: '2 seções (abaixo do mínimo de 3) → false',
+    fn: 'validateResumoSchema',
+    input: ['LEAD: João\nOBJETIVO: emagrecer\nResto livre sem formato'],
+    expect: false,
+  },
+  {
+    name: '3 seções exatas → true',
+    fn: 'validateResumoSchema',
+    input: ['LEAD: João\nOBJETIVO: emagrecer\nDISPONIBILIDADE: manhã'],
+    expect: true,
+  },
+  {
+    name: '10 seções completas (formato Anexo 5) → true',
+    fn: 'validateResumoSchema',
+    input: [
+      `LEAD: Maria
+OBJETIVO: qualidade de vida
+DISPONIBILIDADE: manhã
+MODALIDADE INDICADA: pilates
+INSISTÊNCIAS DE VALOR: 2
+OBJEÇÕES JÁ LEVANTADAS: nenhuma
+NÍVEL DE ENGAJAMENTO: alto
+INFOS PESSOAIS RELEVANTES: mãe de 2, agenda apertada
+HISTÓRICO DE TENTATIVAS DE FECHAMENTO: propus terça/quarta, ainda sem confirmar
+PRÓXIMA AÇÃO RECOMENDADA: insistir no horário e fechar agendamento`
+    ],
+    expect: true,
+  },
+  {
+    name: 'case-insensitive (lower-case)',
+    fn: 'validateResumoSchema',
+    input: ['lead: x\nobjetivo: y\ndisponibilidade: z'],
+    expect: true,
+  },
+  {
+    name: 'seções no meio do texto (com prefixo) → false (precisa ser começo de linha)',
+    fn: 'validateResumoSchema',
+    input: ['olá LEAD: João palavra OBJETIVO: emagrecer e DISPONIBILIDADE: manhã'],
+    expect: false,
+  },
+
+  // ─── RESUMO_SECOES (sanity check do export) ───
+  {
+    name: 'RESUMO_SECOES tem 10 entradas',
+    fn: 'arrayCheck',
+    input: [RESUMO_SECOES.length],
+    expect: 10,
+  },
+  {
+    name: 'MIN_SECOES_VALIDAS é 3',
+    fn: 'arrayCheck',
+    input: [MIN_SECOES_VALIDAS],
+    expect: 3,
   },
 ];
 
 let pass = 0;
 let fail = 0;
-const fns = { shouldUpdateResumo, stripTags, formatTranscript, buildResumoBlock };
+const fns = {
+  shouldUpdateResumo,
+  stripTags,
+  formatTranscript,
+  buildResumoBlock,
+  validateResumoSchema,
+  // helper trivial pra checar valores constantes exportados
+  arrayCheck: (val) => val,
+};
 
 for (const c of CASES) {
   const got = fns[c.fn](...c.input);
