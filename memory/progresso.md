@@ -4,6 +4,24 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 — PR #34 mergeado + decisões pra próximas fases
+
+**PR #34 (Fase 2 — Roteador) mergeado** após review com 4 perguntas + 2 ajustes do Johnny. Todos atendidos: respostas honestas no body, EXT_E2 cenário estendido criado e passou ✅, output da bateria fixado em `<details>`, bloco "Decisão arquitetural" adicionado, janela temporal definida pra métricas (50 conversas OU 14 dias).
+
+**Decisões persistidas pra próximas fases (em [memory/status.md](memory/status.md) e [memory/decisoes.md](memory/decisoes.md)):**
+
+1. **Métrica adicional pro rollout 5%:** medir `% turnos com routeModules() === []` (zero módulos carregados, evidência de cobertura insuficiente das 39 regras). Critérios: <5% mantém arquitetura determinística, 5-15% considera Fase 2.5 na próxima janela, >15% abre Fase 2.5 como prioritária.
+
+2. **Smoke manual no playground v2 é PRÉ-REQUISITO firme** antes de cogitar `AGENT_VERSION=v2` em 5%. 5-10 cenários reais via UI (Configurações → Testar agente). Não pula essa etapa.
+
+3. **Template padrão de PR (meta-aprendizado):** ajustes recorrentes do reviewer viram checklist obrigatória, não dependem de "lembrar de fazer". Checklist atual em [decisoes.md:7](memory/decisoes.md:7) com 4 itens (anexar output de teste, definir janela temporal pra métricas, reafirmar política de flag, max 2 versões de fix em prompt LLM antes de virar known issue).
+
+4. **Variabilidade de tag esquecida no Sonnet 4.5 confirmada como limitação intrínseca.** E.3 passou no PR33 e falhou no PR34 com código de núcleo praticamente idêntico — evidência ao vivo. Não tentar mais fix de prompt; aguardar rollout pra medir taxa real e decidir Fase 6 (tool use estruturado) conforme critérios.
+
+**Próximo passo operacional:** smoke playground (não foi feito ainda). Sem ele, nada de v2 em produção.
+
+---
+
 ## 2026-05-02 — Fase 2: Roteador determinístico de módulos (PR #34)
 
 **Contexto:** Após PR33 mergear (3 fixes pré-Fase 2), construído o Roteador da Fase 2. Antes, replyV2 só carregava `modulo_pendente` do turno anterior — IA caia em fallback "deixa eu confirmar com a equipe" em conversas com objeção/contexto fora do roteiro principal. Agora o Roteador decide dinamicamente quais módulos carregar.
