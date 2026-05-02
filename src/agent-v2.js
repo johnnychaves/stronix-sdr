@@ -235,6 +235,42 @@ function buildDynamicContext({ state, isFirstMessage, isReturning, daysSinceLast
 }
 
 // ═══════════════════════════════════════════════════════════════
+// LÓGICA COMPARTILHADA — replyV2 e simulateReplyV2 chamam
+// ═══════════════════════════════════════════════════════════════
+
+// Auto-incremento backend de insistencias_valor (regex determinístico).
+// Pure: retorna o novo valor (clampado 0-3) sem mutar o input.
+function computeInsistenciasValor(currentInsist, userText) {
+  const cur = currentInsist || 0;
+  if (cur >= 3) return cur;
+  if (detectsValueRequest(userText)) return cur + 1;
+  return cur;
+}
+
+// Aplica o resultado do parser num estado e retorna { stateFields, appendedObjecao }.
+// Pure: NÃO faz I/O. Quem chama decide como persistir (DB ou memória).
+// - Detecta mudança de objeção → reseta tentativas_objecao_atual=0, sinaliza appendedObjecao
+// - Mesma objeção → tentativas_objecao_atual+=1, força handoff_humano em 3
+function computeStateUpdate(currentState, parsed) {
+  if (!parsed.stateFields) {
+    return { stateFields: null, appendedObjecao: null };
+  }
+  const stateFields = { ...parsed.stateFields };
+  let appendedObjecao = null;
+
+  const newObj = stateFields.objecao_ativa;
+  if (newObj && newObj !== currentState.objecao_ativa) {
+    stateFields.tentativas_objecao_atual = 0;
+    appendedObjecao = newObj;
+  } else if (newObj && newObj === currentState.objecao_ativa) {
+    const next = (currentState.tentativas_objecao_atual || 0) + 1;
+    stateFields.tentativas_objecao_atual = Math.min(3, next);
+    if (next >= 3) stateFields.estagio_atual = 'handoff_humano';
+  }
+  return { stateFields, appendedObjecao };
+}
+
+// ═══════════════════════════════════════════════════════════════
 // REPLY V2 — função principal
 // ═══════════════════════════════════════════════════════════════
 
@@ -250,7 +286,8 @@ async function replyV2(from, text, { isAudio = false } = {}) {
   const isReturning = daysSinceLast !== null && daysSinceLast >= 30;
 
   // 3. Auto-incremento backend de insistencias_valor (regex determinístico)
-  if (detectsValueRequest(text) && (state.insistencias_valor || 0) < 3) {
+  const newInsist = computeInsistenciasValor(state.insistencias_valor, text);
+  if (newInsist !== (state.insistencias_valor || 0)) {
     db.incrementLeadStateCounter(from, 'insistencias_valor', 1, 3);
   }
 
@@ -309,24 +346,9 @@ async function replyV2(from, text, { isAudio = false } = {}) {
   cleanText = cleanText.replace(/\s*[—–]\s*/g, ', ');
 
   // 12. Atualiza lead_state com campos extraídos da tag [ESTADO]
-  if (parsed.stateFields) {
-    // Detecta mudança de objeção pra resetar contador
-    const newObj = parsed.stateFields.objecao_ativa;
-    if (newObj && newObj !== stateNow.objecao_ativa) {
-      parsed.stateFields.tentativas_objecao_atual = 0;
-      // Append no histórico de objeções
-      db.appendObjecaoLevantada(from, newObj);
-    } else if (newObj && newObj === stateNow.objecao_ativa) {
-      // Mesma objeção da rodada anterior → +1 tentativa
-      const next = (stateNow.tentativas_objecao_atual || 0) + 1;
-      parsed.stateFields.tentativas_objecao_atual = Math.min(3, next);
-      // Em 3, força handoff
-      if (next >= 3) {
-        parsed.stateFields.estagio_atual = 'handoff_humano';
-      }
-    }
-    db.updateLeadState(from, parsed.stateFields);
-  }
+  const { stateFields: nextFields, appendedObjecao } = computeStateUpdate(stateNow, parsed);
+  if (appendedObjecao) db.appendObjecaoLevantada(from, appendedObjecao);
+  if (nextFields) db.updateLeadState(from, nextFields);
 
   // Nome capturado na tag → atualiza contacts.name (não em lead_state)
   if (parsed.nameFromTag && parsed.nameFromTag !== '') {
@@ -362,11 +384,19 @@ async function replyV2(from, text, { isAudio = false } = {}) {
 // ═══════════════════════════════════════════════════════════════
 
 async function simulateReplyV2(history, userMessage, simulatedState = null) {
-  const state = simulatedState || {
+  const baseState = simulatedState || {
     estagio_atual: 'qualificacao_inicial',
     insistencias_valor: 0,
     objecoes_levantadas: [],
     tentativas_objecao_atual: 0,
+  };
+  // Garante objecoes_levantadas como array (pode vir null/undefined do cliente)
+  if (!Array.isArray(baseState.objecoes_levantadas)) baseState.objecoes_levantadas = [];
+
+  // Auto-incremento backend de insistencias_valor (paridade com replyV2)
+  const state = {
+    ...baseState,
+    insistencias_valor: computeInsistenciasValor(baseState.insistencias_valor, userMessage),
   };
 
   const { dynamicCtx } = buildDynamicContext({
@@ -397,8 +427,12 @@ async function simulateReplyV2(history, userMessage, simulatedState = null) {
   cleanText = cleanText.replace(/\[AUDIO\]\s*/gi, '').replace(/\[PEDIR_AUDIO\]\s*/gi, '').trim();
   cleanText = cleanText.replace(/\s*[—–]\s*/g, ', ');
 
-  // Atualiza state simulado em memória (não persiste)
-  const nextState = { ...state, ...(parsed.stateFields || {}) };
+  // Atualiza state simulado em memória (paridade com replyV2 — mesma lógica de mudança de objeção)
+  const { stateFields, appendedObjecao } = computeStateUpdate(state, parsed);
+  const nextState = { ...state, ...(stateFields || {}) };
+  if (appendedObjecao && !state.objecoes_levantadas.includes(appendedObjecao)) {
+    nextState.objecoes_levantadas = [...state.objecoes_levantadas, appendedObjecao];
+  }
   if (parsed.requiredModule) nextState.modulo_pendente = parsed.requiredModule;
   else if (state.modulo_pendente) nextState.modulo_pendente = null;
 
@@ -423,4 +457,6 @@ module.exports = {
   parseAndStripTags,
   buildStateBlock,
   buildSystemBlocks,
+  computeInsistenciasValor,
+  computeStateUpdate,
 };
