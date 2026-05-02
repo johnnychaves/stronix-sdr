@@ -554,6 +554,46 @@ router.get('/api/conversations', (req, res) => {
   res.json(getConversations());
 });
 
+// API — cria/inicializa contato (manual, pelo modal de nova conversa).
+// Aceita número em qualquer formato BR comum, normaliza pra 5551XXXXXXXXX.
+// Se já existe, retorna o existente. Se vier nome, atualiza.
+router.post('/api/contacts/init', (req, res) => {
+  const { phone: rawPhone, name } = req.body || {};
+  if (!rawPhone) return res.status(400).json({ error: 'Telefone obrigatório' });
+
+  const phone = normalizePhoneBR(rawPhone);
+  if (!phone) return res.status(400).json({ error: 'Número inválido. Use formato (51) 99999-9999 ou 5551999999999.' });
+
+  const existed = !!db.getContact(phone);
+  db.getOrCreateContact(phone);
+  if (name && name.trim()) {
+    db.setContactName(phone, name);
+  }
+  console.log(`[admin] ${req.user.username} ${existed ? 'abriu' : 'criou'} contato ${phone}${name ? ' (' + name + ')' : ''}`);
+  res.json({ phone, name: name || null, isNew: !existed });
+});
+
+// Normaliza número BR pra formato Meta (13 dígitos: 55 + DDD + 9 + 8 dígitos).
+// Aceita: '5551995304633', '+5551995304633', '(51) 99530-4633', '51 99530-4633',
+//         '51995304633' (sem DDI), '5551 9530-4633' (sem o 9). Retorna null se inválido.
+function normalizePhoneBR(input) {
+  let n = String(input || '').replace(/\D/g, '');
+  if (!n) return null;
+  // Remove o 0 inicial se houver (DDD com 0)
+  if (n.startsWith('0')) n = n.slice(1);
+  // Garante que começa com 55
+  if (!n.startsWith('55')) {
+    if (n.length === 11 || n.length === 10) n = '55' + n;
+    else return null;
+  }
+  // Agora deve ter 12 ou 13 dígitos. Se 12, falta o 9 do mobile — adiciona.
+  if (n.length === 12) {
+    n = n.slice(0, 4) + '9' + n.slice(4);
+  }
+  if (n.length !== 13) return null;
+  return n;
+}
+
 // API — limpa conversa de um número
 router.delete('/api/conversations/:from', (req, res) => {
   clearConversation(req.params.from);
@@ -1060,6 +1100,144 @@ router.get('/', (req, res) => {
        a altura disponível. min-height: 0 evita overflow na grid. */
     .panel { display: none; min-height: 0; overflow-y: auto; padding: var(--sp-6); }
     .panel.active { display: block; }
+
+    /* Botão de ação no topbar (ex: nova conversa) */
+    .topbar-btn {
+      width: 38px; height: 38px; border-radius: 8px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text-secondary);
+      display: flex; align-items: center; justify-content: center;
+      transition: all var(--t-fast);
+    }
+    .topbar-btn:hover { background: var(--bg-3); color: var(--text-primary); }
+    .topbar-btn:active { transform: scale(.95); }
+    .topbar-btn svg { width: 19px; height: 19px; }
+
+    /* ════════════════════════════════════════════════
+       MODAL — backdrop + card centrado
+       ════════════════════════════════════════════════ */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.55);
+      backdrop-filter: blur(3px);
+      z-index: 200;
+      display: flex; align-items: center; justify-content: center;
+      animation: backdropIn .15s ease-out;
+    }
+    .modal-backdrop.hidden { display: none; }
+    @keyframes backdropIn { from { opacity: 0; } to { opacity: 1; } }
+    .modal-card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04) inset;
+      max-width: 520px; width: calc(100vw - 32px);
+      max-height: calc(100vh - 80px);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      animation: modalIn .2s ease-out;
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(8px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .modal-head {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .modal-title { font: 600 16px var(--font-sans); color: var(--text-primary); }
+    .modal-close {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text-muted);
+      display: flex; align-items: center; justify-content: center;
+      transition: all var(--t-fast);
+    }
+    .modal-close:hover { background: var(--bg-3); color: var(--text-primary); }
+
+    /* Modal: Nova conversa específico */
+    .new-chat-card { width: 540px; }
+    .new-chat-search-row {
+      padding: 14px 18px 8px;
+      position: relative;
+    }
+    .new-chat-search-icon {
+      position: absolute; left: 32px; top: 50%; transform: translateY(-50%);
+      width: 16px; height: 16px; color: var(--text-muted);
+    }
+    .new-chat-search {
+      width: 100%; box-sizing: border-box;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 11px 14px 11px 38px;
+      color: var(--text-primary); font: 14px var(--font-sans);
+      outline: none;
+      transition: border-color var(--t-fast), background var(--t-fast);
+    }
+    .new-chat-search::placeholder { color: var(--text-muted); }
+    .new-chat-search:focus { border-color: var(--brand); background: var(--bg-1); }
+    .new-chat-name-row {
+      padding: 0 18px 8px;
+    }
+    .new-chat-name-row.hidden { display: none; }
+    .new-chat-name {
+      width: 100%; box-sizing: border-box;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 11px 14px;
+      color: var(--text-primary); font: 14px var(--font-sans);
+      outline: none;
+      transition: border-color var(--t-fast), background var(--t-fast);
+    }
+    .new-chat-name::placeholder { color: var(--text-muted); }
+    .new-chat-name:focus { border-color: var(--brand); background: var(--bg-1); }
+
+    .new-chat-results {
+      flex: 1; overflow-y: auto;
+      padding: 4px 8px 8px;
+      min-height: 100px; max-height: 360px;
+    }
+    .new-chat-section {
+      font: 600 11px var(--font-sans); color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .06em;
+      padding: 10px 10px 4px;
+    }
+    .new-chat-hint {
+      padding: 24px 18px; text-align: center;
+      color: var(--text-muted); font-size: 13px;
+    }
+    .new-chat-item {
+      display: grid; grid-template-columns: auto 1fr auto; gap: 12px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background var(--t-fast);
+    }
+    .new-chat-item:hover { background: var(--bg-3); }
+    .new-chat-item.create { background: var(--brand-soft); }
+    .new-chat-item.create:hover { background: rgba(0,168,132,.18); }
+    .new-chat-item .av {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 13px;
+      flex-shrink: 0;
+    }
+    .new-chat-item.create .av { background: linear-gradient(135deg, #818cf8, #6366f1); }
+    .new-chat-item .info { display: flex; flex-direction: column; min-width: 0; }
+    .new-chat-item .nm { font: 600 14px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .new-chat-item .ph { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
+    .new-chat-item .arrow { color: var(--text-faint); }
+
+    .new-chat-foot {
+      padding: 10px 18px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-2);
+      font-size: 11.5px; color: var(--text-muted);
+      line-height: 1.5;
+    }
 
     /* Hint do rail (primeira vez) */
     .rail-hint {
@@ -2034,6 +2212,12 @@ router.get('/', (req, res) => {
         <span class="now" id="crumb-now">Conversas <span class="crumb-tag" id="crumb-tag"></span></span>
       </div>
       <div class="topbar-acts">
+        <button class="topbar-btn" id="new-chat-btn" onclick="openNewChat(event)" title="Nova conversa" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
         <div class="status-pill"><div class="st-dot"></div>Agente online · WhatsApp conectado</div>
       </div>
     </div>
@@ -2180,6 +2364,31 @@ router.get('/', (req, res) => {
 </div><!-- /.app -->
 
 <div class="rail-hint" id="rail-hint">Passe o mouse no rail para expandir · <kbd>⌘</kbd> <kbd>B</kbd> para fixar</div>
+
+<!-- Modal: Nova conversa -->
+<div class="modal-backdrop hidden" id="new-chat-backdrop" onclick="if(event.target===this)closeNewChat()">
+  <div class="modal-card new-chat-card" role="dialog" aria-label="Nova conversa">
+    <div class="modal-head">
+      <div class="modal-title">Nova conversa</div>
+      <button class="modal-close" onclick="closeNewChat()" type="button" title="Fechar (Esc)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="new-chat-search-row">
+      <svg class="new-chat-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input class="new-chat-search" id="new-chat-input" placeholder="Buscar por nome ou digitar número (ex: 51 99530-4633)" oninput="onNewChatInput()" onkeydown="onNewChatKey(event)" autocomplete="off">
+    </div>
+    <div class="new-chat-name-row hidden" id="new-chat-name-wrap">
+      <input class="new-chat-name" id="new-chat-name" placeholder="Nome do contato (opcional)" autocomplete="off" onkeydown="onNewChatKey(event)">
+    </div>
+    <div class="new-chat-results" id="new-chat-results">
+      <div class="new-chat-hint">Digite pra buscar contatos cadastrados ou um número novo.</div>
+    </div>
+    <div class="new-chat-foot">
+      <span>⚠️ Para mandar mensagem inicial pra um número que <strong>nunca</strong> falou com a STRONIX, a Meta exige template aprovada (em breve). Se o lead já mandou msg nas últimas 24h, dá certo na hora.</span>
+    </div>
+  </div>
+</div>
 
 <script>
   let originalPrompt = '';
@@ -2790,6 +2999,168 @@ router.get('/', (req, res) => {
     setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Modal Nova Conversa
+  // ─────────────────────────────────────────────────────────────────
+  function openNewChat(e) {
+    if (e) e.stopPropagation();
+    // Garante que estamos na aba conversas (faz sentido abrir só aqui)
+    if (document.getElementById('tab-conversas') && !document.getElementById('tab-conversas').classList.contains('active')) {
+      switchTab('conversas');
+    }
+    const bd = document.getElementById('new-chat-backdrop');
+    if (!bd) return;
+    bd.classList.remove('hidden');
+    const inp = document.getElementById('new-chat-input');
+    const nameInp = document.getElementById('new-chat-name');
+    if (inp) { inp.value = ''; inp.focus(); }
+    if (nameInp) nameInp.value = '';
+    document.getElementById('new-chat-name-wrap').classList.add('hidden');
+    renderNewChatResults('');
+  }
+
+  function closeNewChat() {
+    const bd = document.getElementById('new-chat-backdrop');
+    if (bd) bd.classList.add('hidden');
+  }
+
+  // Detecta se input parece com número BR (ignora texto puro com letras).
+  // Aceita dígitos + espaços + + - ( ) e considera "número" se tiver pelo menos 8 dígitos.
+  function looksLikePhone(input) {
+    const stripped = String(input || '').replace(/[\\s\\-\\(\\)\\+]/g, '');
+    return /^\\d+$/.test(stripped) && stripped.length >= 8;
+  }
+
+  // Normaliza telefone BR no FRONTEND (mesmas regras do backend) — pra preview
+  function normalizePhoneFrontend(input) {
+    let n = String(input || '').replace(/\\D/g, '');
+    if (!n) return null;
+    if (n.startsWith('0')) n = n.slice(1);
+    if (!n.startsWith('55')) {
+      if (n.length === 11 || n.length === 10) n = '55' + n;
+      else return null;
+    }
+    if (n.length === 12) n = n.slice(0, 4) + '9' + n.slice(4);
+    if (n.length !== 13) return null;
+    return n;
+  }
+
+  function onNewChatInput() {
+    const inp = document.getElementById('new-chat-input');
+    const value = inp ? inp.value : '';
+    // Mostra campo de nome se for número detectado
+    const nameWrap = document.getElementById('new-chat-name-wrap');
+    if (nameWrap) {
+      const isPhone = looksLikePhone(value);
+      const normalized = isPhone ? normalizePhoneFrontend(value) : null;
+      const exists = normalized && allConversations.some(c => c.from === normalized);
+      // Mostra campo de nome só quando vai criar contato novo
+      nameWrap.classList.toggle('hidden', !(isPhone && normalized && !exists));
+    }
+    renderNewChatResults(value);
+  }
+
+  function renderNewChatResults(query) {
+    const out = document.getElementById('new-chat-results');
+    if (!out) return;
+    const q = (query || '').trim();
+    if (!q) {
+      out.innerHTML = '<div class="new-chat-hint">Digite pra buscar contatos cadastrados ou um número novo.</div>';
+      return;
+    }
+
+    const isPhone = looksLikePhone(q);
+    const normalized = isPhone ? normalizePhoneFrontend(q) : null;
+
+    // Match em contatos existentes
+    const qLower = q.toLowerCase();
+    const matches = allConversations.filter(c => {
+      const nm = (c.name || '').toLowerCase();
+      const ph = c.from || '';
+      return nm.includes(qLower) || ph.includes(q.replace(/\\D/g, ''));
+    }).slice(0, 20);
+
+    let html = '';
+    if (matches.length) {
+      html += '<div class="new-chat-section">Contatos cadastrados</div>';
+      html += matches.map(c => \`
+        <div class="new-chat-item" onclick="pickExistingContact('\${c.from}')">
+          <div class="av">\${getInitials(c)}</div>
+          <div class="info">
+            <span class="nm">\${escapeHtml(c.name || 'Sem nome')}</span>
+            <span class="ph">\${fmtPhone(c.from)}</span>
+          </div>
+          <span class="arrow">→</span>
+        </div>
+      \`).join('');
+    }
+
+    // Opção de criar nova conversa se input é número válido E não existe ainda
+    if (isPhone && normalized) {
+      const existing = allConversations.find(c => c.from === normalized);
+      if (!existing) {
+        html += '<div class="new-chat-section">Iniciar nova conversa</div>';
+        html += \`
+          <div class="new-chat-item create" onclick="createNewContact('\${normalized}')">
+            <div class="av">+</div>
+            <div class="info">
+              <span class="nm">Iniciar com \${fmtPhone(normalized)}</span>
+              <span class="ph">Vai criar contato novo no painel</span>
+            </div>
+            <span class="arrow">→</span>
+          </div>
+        \`;
+      }
+    }
+
+    if (!html) {
+      html = '<div class="new-chat-hint">Nenhum contato encontrado.<br>Digite um número de WhatsApp pra iniciar conversa nova.</div>';
+    }
+    out.innerHTML = html;
+  }
+
+  function onNewChatKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeNewChat();
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // Enter aciona a primeira opção visível
+      const first = document.querySelector('#new-chat-results .new-chat-item');
+      if (first) first.click();
+    }
+  }
+
+  function pickExistingContact(phone) {
+    closeNewChat();
+    selectConv(phone);
+  }
+
+  async function createNewContact(phone) {
+    const nameInp = document.getElementById('new-chat-name');
+    const name = nameInp ? nameInp.value.trim() : '';
+    try {
+      const r = await fetch('/admin/api/contacts/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, name: name || null }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert('Erro: ' + (data.error || 'falha ao criar contato'));
+        return;
+      }
+      closeNewChat();
+      // Recarrega conversas e seleciona
+      await loadConversations({ force: true });
+      selectConv(data.phone);
+    } catch (err) {
+      alert('Falha de conexão: ' + err.message);
+    }
+  }
+
   function onSearchChange() {
     searchQuery = document.getElementById('inbox-search-input').value;
     renderInboxList();
@@ -2911,7 +3282,7 @@ router.get('/', (req, res) => {
     panel.classList.add('hidden');
     if (btn) btn.classList.remove('active');
   });
-  // Esc fecha
+  // Esc fecha emoji panel e modal de nova conversa
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
     const panel = document.getElementById('emoji-panel');
@@ -2919,6 +3290,10 @@ router.get('/', (req, res) => {
       panel.classList.add('hidden');
       const btn = document.getElementById('chat-emoji-btn');
       if (btn) btn.classList.remove('active');
+    }
+    const newChat = document.getElementById('new-chat-backdrop');
+    if (newChat && !newChat.classList.contains('hidden')) {
+      newChat.classList.add('hidden');
     }
   });
 
