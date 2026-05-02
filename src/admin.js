@@ -1321,7 +1321,7 @@ router.get('/', (req, res) => {
     /* Chat messages */
     .chat-messages {
       flex: 1; overflow-y: auto;
-      padding: var(--sp-4) 8% var(--sp-3);
+      padding: var(--sp-4) 14px var(--sp-3);   /* horizontal era 8% — agora 14px fixos pra balões irem perto da borda */
       background-color: var(--bg-0);
       background-image:
         linear-gradient(0deg, rgba(10,16,20,.94), rgba(10,16,20,.94)),
