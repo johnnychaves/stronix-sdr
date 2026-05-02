@@ -34,9 +34,49 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 - ⚠️ Se Haiku retornar lixo/inventar, próxima resposta pode ser pior. Mitigação: prompt do Haiku diz "NÃO INVENTE" + cap de chars + sanity check de transcript >50 chars.
 - ⚠️ Se processo node morre antes do background terminar (raro em Railway), resumo se perde mas dados originais ficam em messages. Próxima request reativa o trigger.
 
-**Implementação:** PR #36. Lógica em `src/resumo-dinamico.js` (~140 linhas). Camada 4.5 no `buildSystemBlocks` (entre módulos e dynamic ctx, sem cache).
+**Implementação:** PR #36. Lógica em `src/resumo-dinamico.js` (~140 linhas). Camada 4.5 no `buildSystemBlocks` (entre módulos e dynamic ctx, sem cache). Refactor pós-review (commit `83a313d`): prompt expandido pra **10 seções estruturadas** do Anexo 5 + `validateResumoSchema` regex pra rejeitar retorno malformado do Haiku + 6 docs do plano copiados pra `docs/refactoring/`.
 
 **Plano de evolução condicional:** se resumo gerado piorar conversas (medível via review humano dos primeiros 50 leads em rollout 5%), revisar prompt do Haiku ou trocar pra Sonnet 4.5 (custo subiria pra ~$0,01/update — ainda barato).
+
+---
+
+## 2026-05-02 — Template padrão de PR (ajustes recorrentes do reviewer viram checklist)
+
+**Decisão:** Sempre que um ajuste solicitado pelo Johnny em review de PR for recorrente (já apareceu em 2+ PRs), promover pra **checklist obrigatória do template de PR** em vez de depender de "lembrar de fazer".
+
+**Por quê:** No PR34, Johnny apontou 2 ajustes esquecidos do PR33 — anexar output da bateria + janela temporal pra métricas. Eu não havia commitado formalmente esses ajustes mas o spírito era válido. Pra não repetir, viro checklist. No PR36, mesmo padrão repetiu — Johnny pediu doc mestre no repo (estava fora) e validação multi-run da bateria (1 run não comprova variabilidade vs regressão). Adicionados como itens 5 e 6.
+
+**Checklist atual do template de PR (atualizar conforme aparecer):**
+
+1. **PR que roda script de teste/bateria com chamada de LLM** → anexar output em `<details><summary>node scripts/X.js</summary>...</details>` no body. Custo do test run + resultado fixado no histórico daquele PR.
+2. **PR que documenta known issue** → definir critérios mensuráveis (% / threshold) E **janela temporal explícita** (N conversas OU N dias). Sem janela, métrica é cosmético.
+3. **PR que adiciona toggle/flag** → reafirmar política de default no body ("X continua default mesmo após merge"). Evita drift entre intenção e produção.
+4. **PR de fix em prompt LLM** → tentativa máxima de 2 versões (v1 + v2). Se 3ª tentativa não resolver, é limitação intrínseca → documenta como known issue, não insiste.
+5. **PR que implementa fase do plano de refatoração** → se referência (anexo, doc mestre) NÃO está no repo, ação 1 do PR é copiar pra `docs/refactoring/`. Decisão de design sem fonte versionada vira ambíguo em review futuro.
+6. **PR com regressão de testes (mesmo que aparente "variabilidade do LLM")** → rodar bateria 5x antes de aceitar como variabilidade. 1 run é hipótese, 5 runs com mesmo código é dado. Distribuição oscilante (ex: 3-5) confirma. Distribuição constante revela bug real.
+
+**Como manter:** essa lista vive aqui em `decisoes.md`. Ao abrir PR novo, conferir se aplica algum item. Item novo → adicionar aqui no mesmo PR (auto-reforço).
+
+**Trade-off aceito:** mais cerimônia por PR, mas zero "esquecimento sistêmico" de prática boa que já foi acordada uma vez.
+
+---
+
+## 2026-05-02 — Roteador de módulos: determinístico (regex) em vez de Haiku 4.5 separado
+
+**Decisão:** Construir o Roteador de módulos da Fase 2 ([src/router-v2.js](src/router-v2.js)) com regras heurísticas determinísticas (estado + 18 keywords regex pt-br + limit 3), sem chamada extra ao Haiku 4.5.
+
+**Por quê:** Princípio sócio "trocar 1 linha antes de construir 1 semana de arquitetura". Haiku adicionaria +300-500ms latência, +$0,001/turno, +1 ponto de falha (rede + LLM stochastic), e exigiria fixtures pra teste. Regex local: <1ms, $0, idempotente, 39 testes unitários offline em sub-100ms.
+
+**Trade-offs aceitos:**
+- ⚠️ Cobertura limitada às 39 regras. Lead que escreve "etacionamento" (typo), "qto custa" (abreviação), "tem aquela coisa de academia em casa?" (frase incompleta), ou "tem 💪 musculação?" (emoji no meio) → keyword **não bate** → módulo **não carrega**.
+- ⚠️ Zero adaptação semântica. Roteador depende do LLM principal pra estado (`objecao_ativa`).
+- ⚠️ Manutenção manual. Cada nova categoria precisa de regra explícita.
+
+**Mitigação:** quando 0 keywords batem, núcleo + KB academia_info ainda carregam (camadas 1+2 sempre). Johnny tem info básica fixa (preços, horários, modalidades). Em prod isso vira respostas mais genéricas — fallback aceitável mas não ideal.
+
+**Plano de evolução condicional:** se rollout 5% mostrar >15% turnos com `routeModules() === []`, abrir **Fase 2.5 — Híbrido**: determinístico cobre o óbvio (zero latência), Haiku roda **só** quando determinístico devolveu `[]`. Custo só pros casos não cobertos. **Não pré-otimizar isso** — não otimiza o que não está medido.
+
+**Implementação:** PR #34. Lógica em camadas (modulo_pendente → estado → keywords) com dedup via Set + limit defensivo MAX_MODULES=3 (evita prompt bloat).
 
 ---
 

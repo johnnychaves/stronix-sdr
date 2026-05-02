@@ -4,56 +4,53 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
-## 2026-05-02 — Fase 3: Resumo dinâmico em background (PR #36)
+## 2026-05-02 — Fase 3: Resumo dinâmico em background (PR #36) + refactor pós-review
 
-**Contexto:** Conversas longas (20+ msgs) carregavam 50 msgs cheias no prompt cada turno → token bloat + cache miss em conversas que crescem. Fase 3 substitui por (resumo estruturado + msgs novas desde último resumo).
+**Contexto:** Conversas longas (20+ msgs) carregavam 50 msgs cheias no prompt cada turno → token bloat + cache miss. Fase 3 substitui por (resumo estruturado + últimas 10 msgs).
 
-**Decisões arquiteturais:**
+**Implementação inicial (commit `b4c4baf`):**
+- [src/resumo-dinamico.js](src/resumo-dinamico.js) novo: `shouldUpdateResumo`, `gerarResumo` (Haiku 4.5 fire-and-forget), `updateResumoDinamicoBackground`, `buildResumoBlock`
+- [src/db.js](src/db.js): migração coluna `resumo_dinamico_n_msgs`, helper `getAllMessages`
+- [src/agent-v2.js](src/agent-v2.js): replyV2 + simulateReplyV2 + buildSystemBlocks (camada 4.5)
+- [scripts/test-resumo-dinamico.js](scripts/test-resumo-dinamico.js): 16 unit tests
+- Cenário F.1 nas baterias
 
-1. **Modelo: Haiku 4.5 (não Sonnet 4.5)** — sumarização estruturada com formato fixo é caso ideal pra modelo menor. Custo: ~$0,001 por update vs ~$0,01/turn do Sonnet (10x menos).
+**Refactor pós-review (commit `83a313d`):** 4 ajustes do Johnny + 1 bonus
+1. **Doc mestre no repo:** 6 arquivos copiados de `~/Downloads/` pra [docs/refactoring/](docs/refactoring/). Resolve gap estrutural (mesmo problema do PR33).
+2. **Threshold 15 → 20** atualizado no Anexo 5 com nota explicativa (mantém valor da implementação por análise de conversas reais).
+3. **Prompt 6 → 10 seções** estruturadas do Anexo 5 (LEAD, OBJETIVO, DISPONIBILIDADE, MODALIDADE INDICADA, INSISTÊNCIAS DE VALOR, OBJEÇÕES JÁ LEVANTADAS, NÍVEL DE ENGAJAMENTO, INFOS PESSOAIS RELEVANTES, HISTÓRICO DE TENTATIVAS DE FECHAMENTO, PRÓXIMA AÇÃO RECOMENDADA). **Bonus:** `gerarResumo()` agora aceita `state` opcional e passa `insistencias_valor` + `objecoes_levantadas` como CONTEXTO ADICIONAL pro Haiku — vêm do backend, mais confiáveis que parsing impreciso do transcript.
+4. **Sanity check `validateResumoSchema`:** regex valida ≥3 das 10 seções no formato esperado. Se falhar, descarta retorno → próximo trigger tenta de novo. DB não recebe lixo.
+5. **Alinhamentos com Anexo 5:** header `RESUMO DA CONVERSA ANTERIOR` → `CONTEXTO PRÉVIO`; history fixo de 10 últimas msgs.
 
-2. **Background fire-and-forget** — `updateResumoDinamicoBackground(phone)` chamado SEM await no fim do replyV2. Latência adicional na resposta principal: zero. Próximo turno usa resumo atualizado.
+**Validação 5 runs (variabilidade vs regressão):**
+Bateria E rodou 5 vezes com mesmo código (`83a313d`):
+- Distribuição: 3, 4, 3, 4, 5 (oscila → variabilidade confirmada → não-regressão)
+- F.1 (Fase 3): **5/5 = 100%** — Sonnet incorpora resumo consistentemente em todas as runs
+- E.4 (parser): 5/5 = 100%
+- E.3, E.1, E.2_EXT oscilam (variabilidade do Sonnet em respostas longas com `objecao_ativa` — known issue do PR33)
+- Custo: ~$1,50 USD pelas 5 runs
 
-3. **Trigger: 20 msgs total** (10 turnos). Update incremental a cada 10 msgs novas. Trade-off: número alto = resumo desatualiza, número baixo = custo sobe. 10/10 fica balanceado.
-
-4. **Formato estruturado** — não JSON (Haiku pode quebrar). Markdown texto com 6 seções fixas (LEAD, OBJETIVO, PONTOS CHAVE, OBJEÇÕES TRATADAS, PENDENTE, TOM). ~300-500 chars típico.
-
-5. **Camada própria no system block** (4.5 — entre módulos e dynamic ctx). Sem cache (varia por turno). Núcleo + KB ainda cacheados nas camadas 1+2.
-
-**Implementação:**
-
-- [src/resumo-dinamico.js](src/resumo-dinamico.js) novo (~140 linhas):
-  - `shouldUpdateResumo(state, totalMsgs)` — pure, decide trigger
-  - `gerarResumo(messages, contactName)` — chama Haiku 4.5
-  - `updateResumoDinamicoBackground(phone)` — wrapper async com try/catch
-  - `buildResumoBlock(state)` — formata bloco pro system
-  - `stripTags(content)` + `formatTranscript(messages)` — helpers
-- [src/db.js](src/db.js): migração idempotente coluna `resumo_dinamico_n_msgs INTEGER`, helper `getAllMessages(phone)`, exports `getContact` + `getAllMessages`
-- [src/agent-v2.js](src/agent-v2.js):
-  - `replyV2`: se `state.resumo_dinamico` existe, history = só msgs novas + resumoBlock no system. Após responder, dispara `updateResumoDinamicoBackground` fire-and-forget.
-  - `simulateReplyV2`: paridade. Aceita resumo simulado via `state.resumo_dinamico` (playground não persiste).
-  - `buildSystemBlocks`: novo parâmetro `resumoBlock` opcional, vira camada 4.5
-
-**Testes:**
-- [scripts/test-resumo-dinamico.js](scripts/test-resumo-dinamico.js): 16/16 passou. Cobre `shouldUpdateResumo` (6 casos), `stripTags` (5), `formatTranscript` (2), `buildResumoBlock` (3). Roda offline.
-- Suite offline total: **90/90 passou** (21 regex-valor + 39 router + 14 state-update + 16 resumo-dinamico).
-
-**Bateria F (cenário novo F.1):**
-- F.1 — Resumo injetado (continuação coerente): ✅ PASS
-- State injetado: Maria, Pilates, manhã, resumo de 20 msgs anteriores
-- Turno 1 ("qual o valor mesmo?"): bot identificou Maria, apresentou tabela de Pilates (modalidade do resumo, sem inventar), carregou módulo planos_e_precos via Roteador, propôs visita de manhã (disponibilidade do resumo). Não repetiu nenhuma pergunta de qualificação.
-- Turno 2 ("beleza, terça às 9h então"): bot emitiu `[AGENDAMENTO:nome=Maria|dia=terca|hora=9h|modalidade=pilates]` correto, avançou pra `agendamento_confirmado`.
-- Resumo dinâmico está funcionando como projetado: bot retoma conversa de meio sem perder contexto.
-
-**Bateria E re-rodada com Fase 3 ativa:**
-- 22/22 sem crash. Custo: $0,32 (~R$1,78)
-- Bateria E: **4/6 passou** (E.1 + E.2_EXT + E.4 + F.1 ✅; E.2 e E.3 mantém status conhecido)
-- E.2: cenário curto (4 turnos) não exercita 3 tentativas — coberto em test-state-update.js
-- E.3: variabilidade do LLM esquecendo tag em respostas longas (known issue do PR33, esperando rollout)
+**Suite offline total: 100/100** (21 regex-valor + 39 router + 14 state-update + 26 resumo-dinamico, +10 testes novos cobrindo `validateResumoSchema`).
 
 **Política de flag:** `AGENT_VERSION=v1` continua default. Smoke manual no playground v2 + Trilha B (admin tooling — PR37) ainda pré-requisitos antes de v2 em 5%.
 
-**Importante (sinalizado no PR):** Anexo 5 do doc mestre não está no repo. Implementação foi feita com base em interpretação do contexto + comentários antigos do código (`agent-v2.js:279` original mencionava "Fase 3 troca por resumo+10"). Se o doc mestre tiver decisões diferentes (modelo, threshold, formato), Johnny pode redirecionar em review.
+---
+
+## 2026-05-02 — PR #34 mergeado + decisões pra próximas fases (PR #35)
+
+**PR #34 (Fase 2 — Roteador) mergeado** após review com 4 perguntas + 2 ajustes do Johnny. Todos atendidos: respostas honestas no body, EXT_E2 cenário estendido criado e passou ✅, output da bateria fixado em `<details>`, bloco "Decisão arquitetural" adicionado, janela temporal definida pra métricas (50 conversas OU 14 dias).
+
+**Decisões persistidas pra próximas fases (em [memory/status.md](memory/status.md) e [memory/decisoes.md](memory/decisoes.md)):**
+
+1. **Métrica adicional pro rollout 5%:** medir `% turnos com routeModules() === []` (zero módulos carregados, evidência de cobertura insuficiente das 39 regras). Critérios: <5% mantém arquitetura determinística, 5-15% considera Fase 2.5 na próxima janela, >15% abre Fase 2.5 como prioritária.
+
+2. **Smoke manual no playground v2 é PRÉ-REQUISITO firme** antes de cogitar `AGENT_VERSION=v2` em 5%. 5-10 cenários reais via UI (Configurações → Testar agente). Não pula essa etapa.
+
+3. **Template padrão de PR (meta-aprendizado):** ajustes recorrentes do reviewer viram checklist obrigatória, não dependem de "lembrar de fazer". Checklist atual em [decisoes.md](memory/decisoes.md) com 6 itens (após PR36, expandida pra incluir doc mestre no repo + multi-run pra confirmar variabilidade).
+
+4. **Variabilidade de tag esquecida no Sonnet 4.5 confirmada como limitação intrínseca.** E.3 passou no PR33 e falhou no PR34 com código de núcleo praticamente idêntico — evidência ao vivo. Validação multi-run no PR36 reconfirmou (3-5 oscila com mesmo código). Não tentar mais fix de prompt; aguardar rollout pra medir taxa real e decidir Fase 6 (tool use estruturado) conforme critérios.
+
+**Próximo passo operacional:** smoke playground (não foi feito ainda). Sem ele, nada de v2 em produção.
 
 ---
 
