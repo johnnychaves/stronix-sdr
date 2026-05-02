@@ -36,6 +36,39 @@ const CENARIOS = {
   ],
   'E.3 — Conversa longa (>15 msgs)': ['oi', 'tô parado', 'quero saúde', 'João', 'tarde', 'quarta', '14h', 'beleza confirmado', 'aliás, tem estacionamento?', 'e vestiário?', 'qual o horário?', 'aceita Pix?', 'tem aula de zumba?', 'meu joelho dói às vezes', 'preciso adiar pra outra semana'],
   'E.4 — Tag malformada (resiliência)': ['oi qual valor'],
+  // ─── Bateria F (Fase 3 — Resumo Dinâmico, PR #36) ───
+  // F.1: conversa simulada com resumo INJETADO no state inicial (sem precisar
+  // gerar via Haiku — testa que o bot incorpora resumo e segue conversa coerente).
+  'F.1 — Resumo injetado (continuação coerente)': [
+    'qual o valor mesmo?',
+    'beleza, terça às 9h então',
+  ],
+};
+
+// State inicial customizado por cenário (override do default).
+// Usado pra testar comportamentos que dependem de state pré-existente
+// sem ter que rodar 20+ turnos de setup primeiro.
+const INITIAL_STATE = {
+  'F.1 — Resumo injetado (continuação coerente)': {
+    estagio_atual: 'proposta_visita',
+    insistencias_valor: 2,
+    objetivo: 'qualidade_vida',
+    modalidade_recomendada: 'pilates',
+    disponibilidade: 'manha',
+    objecao_ativa: '',
+    objecoes_levantadas: [],
+    tentativas_objecao_atual: 0,
+    resumo_dinamico: `LEAD: Maria, parada faz 3 anos, busca melhorar postura
+OBJETIVO: qualidade_vida
+PONTOS CHAVE:
+- Demonstrou interesse em Pilates após drill de objetivo
+- Mencionou disponibilidade pela manhã
+- Mãe de 2 filhos, agenda apertada
+OBJEÇÕES TRATADAS: nenhuma
+PENDENTE: confirmar dia da semana pra aula experimental
+TOM: engajado mas com pressa`,
+    resumo_dinamico_n_msgs: 20,
+  },
 };
 
 // ─── Asserts objetivos da Bateria E ───
@@ -78,13 +111,37 @@ const ASSERTS_E = {
       if (/\[AGENDAMENTO:/i.test(t.ai)) throw new Error(`resposta contém literal [AGENDAMENTO: — parser falhou`);
     }
   },
+  'F.1 — Resumo injetado (continuação coerente)': (r) => {
+    // Bot deve incorporar info do resumo (Maria, Pilates, manhã) sem precisar perguntar de novo.
+    // Critério: nenhum turno repete pergunta de objetivo/modalidade/nome/disponibilidade já no resumo.
+    const proibidoNoTexto = [
+      /qual\s+(teu|seu)\s+nome/i,
+      /como\s+(é|eh)\s+teu\s+nome/i,
+      /resultado\s+f[íi]sico\s+ou\s+qualidade/i,
+      /manh[ãa]\s+ou\s+(tarde|fim\s+de\s+dia|final\s+do\s+dia)/i,
+      /qual\s+modalidade/i,
+    ];
+    for (const t of r.turns) {
+      for (const re of proibidoNoTexto) {
+        if (re.test(t.ai)) {
+          throw new Error(`bot pergunta info que já tava no resumo (${re}): "${t.ai.slice(0,80)}"`);
+        }
+      }
+    }
+    // Bot DEVE confirmar agendamento no último turno (input do user foi "beleza, terça às 9h")
+    const last = r.turns[r.turns.length - 1];
+    if (!/(terça|terca|9h|confirma|fechad|combinad)/i.test(last.ai)) {
+      throw new Error(`último turno deveria confirmar agendamento — "${last.ai.slice(0,100)}"`);
+    }
+  },
 };
 
 // ─── Roda um cenário ───
 async function runCenario(name, msgs) {
   const turns = [];
   let history = [];
-  let state = null;
+  // INITIAL_STATE override (cenários que precisam de setup pré-existente, ex: F.1 com resumo injetado)
+  let state = INITIAL_STATE[name] ? { ...INITIAL_STATE[name] } : null;
   for (const userMsg of msgs) {
     const result = await simulateReplyV2(history, userMsg, state);
     turns.push({
@@ -222,7 +279,8 @@ async function main() {
     console.error('ERRO: ANTHROPIC_API_KEY não definida no .env');
     process.exit(1);
   }
-  console.log('[baterias-v2] iniciando — 21 cenários\n');
+  const total = Object.keys(CENARIOS).length;
+  console.log(`[baterias-v2] iniciando — ${total} cenários\n`);
 
   const results = [];
   const totals = { totalIn: 0, totalOut: 0, totalCacheRead: 0, totalLatency: 0, totalCalls: 0 };

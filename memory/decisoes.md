@@ -4,11 +4,47 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-02 — Resumo dinâmico via Haiku 4.5 em background (Fase 3, PR #36)
+
+**Decisão:** Conversas longas (≥20 msgs) usam (resumo estruturado + msgs novas) em vez de 50 msgs cheias no prompt. Resumo gerado por **Haiku 4.5** em **fire-and-forget após responder** ao lead. Threshold de 20 msgs pra primeiro resumo + update incremental a cada 10 msgs novas.
+
+**Por quê Haiku (não Sonnet):**
+- Tarefa é sumarização estruturada com formato fixo (6 seções markdown). Não exige criatividade nem instruction-following complexo. Caso ideal pra modelo menor.
+- Custo: ~$0,001/update (Haiku) vs ~$0,01/turn (Sonnet) = 10x menos.
+- Latência: ~500ms (Haiku) — irrelevante porque roda em background.
+- Conversa de 50 msgs = ~3 updates (1 inicial + 2 incrementais) ≈ $0,003 total. Comparado a $0,15 pelo prompt bloat sem resumo, paga sozinho.
+
+**Por quê background fire-and-forget (não inline):**
+- Inline antes de responder = +500ms na latência percebida pelo lead. Inaceitável.
+- Inline depois de responder mas antes de retornar = mesma latência (cliente espera).
+- Fire-and-forget = zero impacto na resposta atual. Próximo turno usa resumo atualizado.
+- Trade-off: race condition possível se 2 mensagens chegam em <500ms (raro em WhatsApp humano). Mitigação: já temos buffer de debounce de 15s no webhook (de 2026-05-01) que naturalmente serializa.
+
+**Por quê threshold 20 msgs / update a cada 10:**
+- 20 msgs = 10 turnos. Antes disso, histórico cabe sem custo significativo.
+- Update a cada 10 = balanço entre desatualização do resumo (alto N = pior) e custo (baixo N = pior). 10 dá ~3-5 updates em conversa de 50 msgs.
+
+**Por quê markdown texto (não JSON):**
+- JSON exige tool use ou prompt mais rígido — Haiku às vezes quebra formatação.
+- Texto markdown com 6 seções fixas (LEAD/OBJETIVO/PONTOS CHAVE/OBJEÇÕES TRATADAS/PENDENTE/TOM) é mais resiliente. Bot lê como contexto narrativo.
+- Sanity check: cap em MAX_RESUMO_CHARS=2000 (~500 chars típico).
+
+**Trade-offs aceitos:**
+- ⚠️ Resumo pode estar levemente desatualizado (até 10 msgs atrás). Bot lê últimas N msgs cruas em paralelo — cobre o gap.
+- ⚠️ Se Haiku retornar lixo/inventar, próxima resposta pode ser pior. Mitigação: prompt do Haiku diz "NÃO INVENTE" + cap de chars + sanity check de transcript >50 chars.
+- ⚠️ Se processo node morre antes do background terminar (raro em Railway), resumo se perde mas dados originais ficam em messages. Próxima request reativa o trigger.
+
+**Implementação:** PR #36. Lógica em `src/resumo-dinamico.js` (~140 linhas). Camada 4.5 no `buildSystemBlocks` (entre módulos e dynamic ctx, sem cache). Refactor pós-review (commit `83a313d`): prompt expandido pra **10 seções estruturadas** do Anexo 5 + `validateResumoSchema` regex pra rejeitar retorno malformado do Haiku + 6 docs do plano copiados pra `docs/refactoring/`.
+
+**Plano de evolução condicional:** se resumo gerado piorar conversas (medível via review humano dos primeiros 50 leads em rollout 5%), revisar prompt do Haiku ou trocar pra Sonnet 4.5 (custo subiria pra ~$0,01/update — ainda barato).
+
+---
+
 ## 2026-05-02 — Template padrão de PR (ajustes recorrentes do reviewer viram checklist)
 
 **Decisão:** Sempre que um ajuste solicitado pelo Johnny em review de PR for recorrente (já apareceu em 2+ PRs), promover pra **checklist obrigatória do template de PR** em vez de depender de "lembrar de fazer".
 
-**Por quê:** No PR34, Johnny apontou 2 ajustes esquecidos do PR33 — anexar output da bateria + janela temporal pra métricas. Eu não havia commitado formalmente esses ajustes mas o spírito era válido. Pra não repetir, viro checklist.
+**Por quê:** No PR34, Johnny apontou 2 ajustes esquecidos do PR33 — anexar output da bateria + janela temporal pra métricas. Eu não havia commitado formalmente esses ajustes mas o spírito era válido. Pra não repetir, viro checklist. No PR36, mesmo padrão repetiu — Johnny pediu doc mestre no repo (estava fora) e validação multi-run da bateria (1 run não comprova variabilidade vs regressão). Adicionados como itens 5 e 6.
 
 **Checklist atual do template de PR (atualizar conforme aparecer):**
 
@@ -16,6 +52,8 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 2. **PR que documenta known issue** → definir critérios mensuráveis (% / threshold) E **janela temporal explícita** (N conversas OU N dias). Sem janela, métrica é cosmético.
 3. **PR que adiciona toggle/flag** → reafirmar política de default no body ("X continua default mesmo após merge"). Evita drift entre intenção e produção.
 4. **PR de fix em prompt LLM** → tentativa máxima de 2 versões (v1 + v2). Se 3ª tentativa não resolver, é limitação intrínseca → documenta como known issue, não insiste.
+5. **PR que implementa fase do plano de refatoração** → se referência (anexo, doc mestre) NÃO está no repo, ação 1 do PR é copiar pra `docs/refactoring/`. Decisão de design sem fonte versionada vira ambíguo em review futuro.
+6. **PR com regressão de testes (mesmo que aparente "variabilidade do LLM")** → rodar bateria 5x antes de aceitar como variabilidade. 1 run é hipótese, 5 runs com mesmo código é dado. Distribuição oscilante (ex: 3-5) confirma. Distribuição constante revela bug real.
 
 **Como manter:** essa lista vive aqui em `decisoes.md`. Ao abrir PR novo, conferir se aplica algum item. Item novo → adicionar aqui no mesmo PR (auto-reforço).
 

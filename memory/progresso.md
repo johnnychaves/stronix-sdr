@@ -4,7 +4,39 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
-## 2026-05-02 — PR #34 mergeado + decisões pra próximas fases
+## 2026-05-02 — Fase 3: Resumo dinâmico em background (PR #36) + refactor pós-review
+
+**Contexto:** Conversas longas (20+ msgs) carregavam 50 msgs cheias no prompt cada turno → token bloat + cache miss. Fase 3 substitui por (resumo estruturado + últimas 10 msgs).
+
+**Implementação inicial (commit `b4c4baf`):**
+- [src/resumo-dinamico.js](src/resumo-dinamico.js) novo: `shouldUpdateResumo`, `gerarResumo` (Haiku 4.5 fire-and-forget), `updateResumoDinamicoBackground`, `buildResumoBlock`
+- [src/db.js](src/db.js): migração coluna `resumo_dinamico_n_msgs`, helper `getAllMessages`
+- [src/agent-v2.js](src/agent-v2.js): replyV2 + simulateReplyV2 + buildSystemBlocks (camada 4.5)
+- [scripts/test-resumo-dinamico.js](scripts/test-resumo-dinamico.js): 16 unit tests
+- Cenário F.1 nas baterias
+
+**Refactor pós-review (commit `83a313d`):** 4 ajustes do Johnny + 1 bonus
+1. **Doc mestre no repo:** 6 arquivos copiados de `~/Downloads/` pra [docs/refactoring/](docs/refactoring/). Resolve gap estrutural (mesmo problema do PR33).
+2. **Threshold 15 → 20** atualizado no Anexo 5 com nota explicativa (mantém valor da implementação por análise de conversas reais).
+3. **Prompt 6 → 10 seções** estruturadas do Anexo 5 (LEAD, OBJETIVO, DISPONIBILIDADE, MODALIDADE INDICADA, INSISTÊNCIAS DE VALOR, OBJEÇÕES JÁ LEVANTADAS, NÍVEL DE ENGAJAMENTO, INFOS PESSOAIS RELEVANTES, HISTÓRICO DE TENTATIVAS DE FECHAMENTO, PRÓXIMA AÇÃO RECOMENDADA). **Bonus:** `gerarResumo()` agora aceita `state` opcional e passa `insistencias_valor` + `objecoes_levantadas` como CONTEXTO ADICIONAL pro Haiku — vêm do backend, mais confiáveis que parsing impreciso do transcript.
+4. **Sanity check `validateResumoSchema`:** regex valida ≥3 das 10 seções no formato esperado. Se falhar, descarta retorno → próximo trigger tenta de novo. DB não recebe lixo.
+5. **Alinhamentos com Anexo 5:** header `RESUMO DA CONVERSA ANTERIOR` → `CONTEXTO PRÉVIO`; history fixo de 10 últimas msgs.
+
+**Validação 5 runs (variabilidade vs regressão):**
+Bateria E rodou 5 vezes com mesmo código (`83a313d`):
+- Distribuição: 3, 4, 3, 4, 5 (oscila → variabilidade confirmada → não-regressão)
+- F.1 (Fase 3): **5/5 = 100%** — Sonnet incorpora resumo consistentemente em todas as runs
+- E.4 (parser): 5/5 = 100%
+- E.3, E.1, E.2_EXT oscilam (variabilidade do Sonnet em respostas longas com `objecao_ativa` — known issue do PR33)
+- Custo: ~$1,50 USD pelas 5 runs
+
+**Suite offline total: 100/100** (21 regex-valor + 39 router + 14 state-update + 26 resumo-dinamico, +10 testes novos cobrindo `validateResumoSchema`).
+
+**Política de flag:** `AGENT_VERSION=v1` continua default. Smoke manual no playground v2 + Trilha B (admin tooling — PR37) ainda pré-requisitos antes de v2 em 5%.
+
+---
+
+## 2026-05-02 — PR #34 mergeado + decisões pra próximas fases (PR #35)
 
 **PR #34 (Fase 2 — Roteador) mergeado** após review com 4 perguntas + 2 ajustes do Johnny. Todos atendidos: respostas honestas no body, EXT_E2 cenário estendido criado e passou ✅, output da bateria fixado em `<details>`, bloco "Decisão arquitetural" adicionado, janela temporal definida pra métricas (50 conversas OU 14 dias).
 
@@ -14,9 +46,9 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 2. **Smoke manual no playground v2 é PRÉ-REQUISITO firme** antes de cogitar `AGENT_VERSION=v2` em 5%. 5-10 cenários reais via UI (Configurações → Testar agente). Não pula essa etapa.
 
-3. **Template padrão de PR (meta-aprendizado):** ajustes recorrentes do reviewer viram checklist obrigatória, não dependem de "lembrar de fazer". Checklist atual em [decisoes.md:7](memory/decisoes.md:7) com 4 itens (anexar output de teste, definir janela temporal pra métricas, reafirmar política de flag, max 2 versões de fix em prompt LLM antes de virar known issue).
+3. **Template padrão de PR (meta-aprendizado):** ajustes recorrentes do reviewer viram checklist obrigatória, não dependem de "lembrar de fazer". Checklist atual em [decisoes.md](memory/decisoes.md) com 6 itens (após PR36, expandida pra incluir doc mestre no repo + multi-run pra confirmar variabilidade).
 
-4. **Variabilidade de tag esquecida no Sonnet 4.5 confirmada como limitação intrínseca.** E.3 passou no PR33 e falhou no PR34 com código de núcleo praticamente idêntico — evidência ao vivo. Não tentar mais fix de prompt; aguardar rollout pra medir taxa real e decidir Fase 6 (tool use estruturado) conforme critérios.
+4. **Variabilidade de tag esquecida no Sonnet 4.5 confirmada como limitação intrínseca.** E.3 passou no PR33 e falhou no PR34 com código de núcleo praticamente idêntico — evidência ao vivo. Validação multi-run no PR36 reconfirmou (3-5 oscila com mesmo código). Não tentar mais fix de prompt; aguardar rollout pra medir taxa real e decidir Fase 6 (tool use estruturado) conforme critérios.
 
 **Próximo passo operacional:** smoke playground (não foi feito ainda). Sem ele, nada de v2 em produção.
 
