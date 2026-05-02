@@ -467,21 +467,37 @@ router.get('/api/whatsapp/status', (req, res) => {
   res.json({ provider, ...baileys.getStatus() });
 });
 
+// Desconecta sessão Baileys e apaga auth state — pra trocar de número
+router.post('/api/baileys/disconnect', auth.requireAdmin, async (req, res) => {
+  const wa = require('./whatsapp');
+  if (wa.PROVIDER !== 'baileys') {
+    return res.status(400).json({ error: 'Provider atual não é Baileys' });
+  }
+  const baileys = wa.getBaileys();
+  if (!baileys) return res.status(503).json({ error: 'Baileys não inicializado' });
+  try {
+    await baileys.disconnect();
+    res.json({ ok: true, message: 'Sessão desconectada. Acesse /admin/baileys/qr pra escanear novo QR.' });
+  } catch (e) {
+    console.error('[admin] erro ao desconectar Baileys:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Página HTML simples mostrando o QR code do Baileys (pra escanear com WhatsApp)
 router.get('/baileys/qr', (req, res) => {
   const wa = require('./whatsapp');
   if (wa.PROVIDER !== 'baileys') {
     return res.status(400).send('<h1>WHATSAPP_PROVIDER não é baileys</h1>');
   }
-  const baileys = wa.getBaileys();
   res.send(`<!doctype html>
 <html lang="pt-BR"><head>
 <meta charset="utf-8"><title>STRONIX SDR — Conectar WhatsApp</title>
-<meta http-equiv="refresh" content="3">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   body { background:#0a1014; color:#e9edef; font-family:system-ui,-apple-system,sans-serif; min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center; padding:24px; }
-  .card { background:#111b21; border:1px solid #222d34; border-radius:14px; padding:32px; max-width:420px; text-align:center; box-shadow:0 30px 80px rgba(0,0,0,.5); }
-  h1 { font-size:18px; margin:0 0 8px; }
+  .card { background:#111b21; border:1px solid #222d34; border-radius:14px; padding:32px; max-width:420px; width:100%; text-align:center; box-shadow:0 30px 80px rgba(0,0,0,.5); }
+  h1 { font-size:18px; margin:0 0 8px; font-weight:600; }
   p { color:#aebac1; font-size:13px; line-height:1.5; margin:0 0 18px; }
   img.qr { width:280px; height:280px; background:#fff; padding:12px; border-radius:10px; }
   .status { padding:8px 14px; border-radius:999px; display:inline-block; font-size:12px; font-weight:600; margin-top:16px; }
@@ -489,37 +505,71 @@ router.get('/baileys/qr', (req, res) => {
   .qr   { background:rgba(251,191,36,.15); color:#fbbf24; }
   .close{ background:rgba(248,113,113,.15); color:#f87171; }
   ol { text-align:left; font-size:12.5px; color:#aebac1; line-height:1.7; padding-left:20px; margin-top:18px; }
+  .me { font-family:ui-monospace,monospace; color:#e9edef; font-size:13px; background:#1a2730; padding:6px 12px; border-radius:6px; display:inline-block; margin:8px 0; }
+  .btn-disconnect { background:transparent; border:1px solid #f87171; color:#f87171; padding:8px 14px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; margin-top:14px; transition:all .15s; }
+  .btn-disconnect:hover { background:rgba(248,113,113,.1); }
+  .btn-back { color:#06cf9c; text-decoration:none; font-size:12.5px; display:block; margin-top:18px; }
+  .btn-back:hover { text-decoration:underline; }
 </style></head><body>
 <div class="card">
-  <h1>📱 Conectar WhatsApp da STRONIX</h1>
-  <p id="status-text">Aguardando QR…</p>
-  <div id="qr-area"></div>
-  <ol>
-    <li>Abre o WhatsApp no celular do número STRONIX</li>
-    <li>Vai em <strong>Configurações → Aparelhos conectados</strong></li>
-    <li>Toca em <strong>Conectar um aparelho</strong></li>
-    <li>Aponta a câmera pro QR acima</li>
-  </ol>
-  <p style="margin-top:18px; font-size:11px; opacity:.7;">Página recarrega a cada 3s automaticamente.</p>
+  <h1>📱 Conectar WhatsApp</h1>
+  <div id="status-text">Carregando…</div>
+  <div id="qr-area" style="margin:14px 0;"></div>
+  <div id="actions"></div>
+  <a class="btn-back" href="/admin">← Voltar pro painel</a>
 </div>
 <script>
-fetch('/admin/api/whatsapp/status').then(r => r.json()).then(s => {
-  const txt = document.getElementById('status-text');
-  const area = document.getElementById('qr-area');
-  if (s.status === 'open') {
-    txt.innerHTML = '<span class="status open">✓ Conectado</span><br><br>Tudo pronto. WhatsApp da STRONIX (' + (s.me || '?') + ') está online.';
-    area.innerHTML = '';
-  } else if (s.status === 'qr' && s.qr) {
-    txt.innerHTML = '<span class="status qr">⏳ Aguardando você escanear</span>';
-    area.innerHTML = '<img class="qr" src="' + s.qr + '" alt="QR Code">';
-  } else if (s.status === 'connecting') {
-    txt.innerHTML = '<span class="status qr">🔄 Iniciando conexão…</span>';
-    area.innerHTML = '';
-  } else {
-    txt.innerHTML = '<span class="status close">⚠ ' + s.status + '</span>';
-    area.innerHTML = '';
+async function refresh() {
+  try {
+    const s = await fetch('/admin/api/whatsapp/status').then(r => r.json());
+    const txt = document.getElementById('status-text');
+    const area = document.getElementById('qr-area');
+    const actions = document.getElementById('actions');
+    if (s.status === 'open') {
+      txt.innerHTML = '<span class="status open">✓ Conectado</span>' +
+        '<p style="margin-top:14px;">Tudo pronto. WhatsApp online:</p>' +
+        '<div class="me">' + (s.me || '?') + '</div>';
+      area.innerHTML = '';
+      actions.innerHTML = '<button class="btn-disconnect" onclick="disconnect()">Desconectar e trocar de número</button>' +
+        '<p style="font-size:11px; opacity:.6; margin-top:14px;">Use isso quando for trocar do número de teste pro número da academia.</p>';
+    } else if (s.status === 'qr' && s.qr) {
+      txt.innerHTML = '<span class="status qr">⏳ Aguardando escanear</span>';
+      area.innerHTML = '<img class="qr" src="' + s.qr + '" alt="QR Code">';
+      actions.innerHTML = '<ol>' +
+        '<li>Abre o <strong>WhatsApp</strong> no celular do número que vai conectar</li>' +
+        '<li>Vai em <strong>Configurações → Aparelhos conectados</strong></li>' +
+        '<li>Toca em <strong>Conectar um aparelho</strong></li>' +
+        '<li>Aponta a câmera pro QR acima</li>' +
+        '</ol>';
+    } else if (s.status === 'connecting') {
+      txt.innerHTML = '<span class="status qr">🔄 Iniciando conexão…</span>';
+      area.innerHTML = '';
+      actions.innerHTML = '';
+    } else if (s.provider !== 'baileys') {
+      txt.innerHTML = '<span class="status close">⚠ Provider não é baileys</span>';
+      actions.innerHTML = '<p>Setar WHATSAPP_PROVIDER=baileys no Railway primeiro.</p>';
+    } else {
+      txt.innerHTML = '<span class="status close">⚠ ' + s.status + '</span>';
+      area.innerHTML = '';
+      actions.innerHTML = '';
+    }
+  } catch (e) {
+    document.getElementById('status-text').innerHTML = '<span class="status close">Erro: ' + e.message + '</span>';
   }
-});
+}
+async function disconnect() {
+  if (!confirm('Desconectar o número atual? Você precisará escanear um novo QR pra reconectar.')) return;
+  const r = await fetch('/admin/api/baileys/disconnect', { method: 'POST' });
+  const data = await r.json();
+  if (r.ok) {
+    alert('Desconectado. Aguardando novo QR...');
+    setTimeout(refresh, 2000);
+  } else {
+    alert('Erro: ' + data.error);
+  }
+}
+refresh();
+setInterval(refresh, 3000);
 </script></body></html>`);
 });
 
