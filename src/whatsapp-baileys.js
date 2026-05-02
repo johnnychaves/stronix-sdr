@@ -177,6 +177,29 @@ function setMessageHandler(cb) {
   onMessageCallback = cb;
 }
 
+// Desconecta e apaga sessão local — usado pra trocar de número
+// (ex: testar com pessoal, depois conectar com número da academia).
+// Após chamar, o setTimeout reconecta sozinho e gera novo QR.
+async function disconnect() {
+  try {
+    if (sock) {
+      try { await sock.logout(); } catch (e) { /* logout pode falhar se já caído */ }
+    }
+  } catch {}
+  try {
+    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+  } catch (e) {
+    console.error('[baileys] erro ao limpar auth:', e.message);
+  }
+  connectionStatus = 'connecting';
+  lastQRDataUrl = null;
+  connectedSince = null;
+  // Reinicia conexão (vai gerar novo QR)
+  setTimeout(() => start().catch(e => console.error('[baileys] erro ao reconectar pós-logout:', e.message)), 1500);
+  console.log('[baileys] sessão desconectada — gerando novo QR...');
+}
+
 // Para uso externo (ex: webhook converter precisa parsear msg)
 function extractMessageBody(msg) {
   const m = msg.message || {};
@@ -201,4 +224,5 @@ module.exports = {
   extractMessageBody,
   phoneOf,
   jidOf,
+  disconnect,
 };
