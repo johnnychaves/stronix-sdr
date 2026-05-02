@@ -1056,7 +1056,9 @@ router.get('/', (req, res) => {
     .status-pill { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); padding: 5px 11px; background: var(--bg-2); border: 1px solid var(--border-subtle); border-radius: 999px; }
     .status-pill .st-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 0 3px rgba(74,222,128,.15); }
 
-    .panel { display: none; height: calc(100vh - 56px); overflow-y: auto; padding: var(--sp-6); }
+    /* Panel fica no row 1fr do grid .content, então preenche automaticamente
+       a altura disponível. min-height: 0 evita overflow na grid. */
+    .panel { display: none; min-height: 0; overflow-y: auto; padding: var(--sp-6); }
     .panel.active { display: block; }
 
     /* Hint do rail (primeira vez) */
@@ -1150,7 +1152,9 @@ router.get('/', (req, res) => {
     .filter-btn.active { background: var(--brand-soft); border-color: rgba(0,168,132,.4); color: var(--brand); }
 
     /* ─── INBOX (3 COLUNAS — ESTILO WHATSAPP WEB PRO) ─── */
-    #tab-conversas { padding: 0; height: calc(100vh - var(--header-h) - var(--tabs-h)); overflow: hidden; }
+    /* Inbox sem padding e ocupa altura total disponível (apenas - 56px do topbar
+       da .content grid; tabs antigas hidden não contam mais) */
+    #tab-conversas { padding: 0; height: 100%; overflow: hidden; }
     #tab-conversas.active { display: flex; }
     .inbox-layout { display: flex; height: 100%; width: 100%; background: var(--bg-0); }
     .inbox-col { display: flex; flex-direction: column; overflow: hidden; }
