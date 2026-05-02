@@ -25,11 +25,11 @@ Este arquivo é o ponto de entrada do sistema de memória. Leia-o primeiro para 
 ## Contexto rápido
 
 - **Projeto:** SDR de IA pelo WhatsApp pra STRONIX Academia (Av. Edgar Pires de Castro, 9392, Lageado, Porto Alegre/RS)
-- **Status:** SDR em produção 24/7 no Railway. Agendamento + roteamento aluno-vs-lead + buffer de mensagens + Inbox multi-agente com auth completo (login, handoff IA↔humano, métricas, CRUD de usuários). Aguardando migração pro número real STRONIX.
-- **Stack:** Node.js + Express + Claude Sonnet 4.5 + SQLite + Whisper + ElevenLabs + Meta Cloud API
+- **Status:** Plataforma feature-complete em produção via **Baileys** (WhatsApp Web protocol). Inclui IA Sonnet 4.5, multi-agente com handoff, painel completo redesenhado estilo WhatsApp, áudio bidirecional, SSE real-time, knowledge base editável, playground de testes, sistema de notificação. Aguardando trocar do número pessoal de teste pro número da academia.
+- **Stack:** Node.js + Express + Claude Sonnet 4.5 + SQLite + Whisper + ElevenLabs + **Baileys** (com Meta Cloud API ainda disponível como fallback via `WHATSAPP_PROVIDER=meta`)
 - **URL produção:** https://stronix-sdr-production.up.railway.app
 - **Repo:** github.com/johnnychaves/stronix-sdr (privado)
-- **Última atualização:** 2026-05-01
+- **Última atualização:** 2026-05-02
 
 ---
 
@@ -42,6 +42,8 @@ Este arquivo é o ponto de entrada do sistema de memória. Leia-o primeiro para 
 3. **Single-tenant primeiro, refatora quando aparecer 2º cliente.** Engenharia para SaaS é prematura sem 2º cliente. SQLite > Postgres, monolito > microserviços. Migração futura é 1 dia de trabalho quando aparecer demanda real.
 
 4. **Custo do modelo é irrelevante perto do valor do lead.** Sonnet custa R$0,03 a mais por mensagem. Se converter 1 lead extra de R$149/mês, paga 1 ano da diferença em 1 dia.
+
+5. **Replicar o que funciona em vez de adivinhar.** Validado: a saga do áudio (PRs #5-#11) só foi resolvida quando o usuário lembrou que o TTS já mandava áudio com sucesso há semanas. Bastou copiar o pipeline (MP3 + fetch + ordem de campos) em vez de continuar otimizando opus.
 
 ---
 
@@ -61,40 +63,120 @@ Este arquivo é o ponto de entrada do sistema de memória. Leia-o primeiro para 
 
 7. **Hora específica no agendamento é não-negociável.** "Terça de manhã" é vago demais — consultora não consegue confirmar nada. Drill binário até hora exata sempre.
 
+8. **Knowledge base separado do prompt cacheado.** Dados que mudam (preço, promo, horário) ficam em tabela editável `academia_info`, injetados no contexto dinâmico. Mudança aparece na próxima resposta da IA sem invalidar cache de 38k chars.
+
+9. **JID resolution via `onWhatsApp` é obrigatório no Baileys BR.** Brasileiros têm contas com 12 ou 13 dígitos (com/sem 9). Mandar pro JID errado = mensagem vai pro vazio sem erro. Sempre resolva antes de enviar.
+
+10. **Canonicalização de phone no DB unifica conversas duplicadas.** `canonicalizeContactPhone(phone)` faz lookup das 2 variações (com/sem 9) antes de gravar. Lead pode mandar como 12-dig e DB ter 13-dig — sistema unifica.
+
 ---
 
 ## Variáveis de ambiente (Railway)
 
 ```
-WHATSAPP_PHONE_NUMBER_ID=1074052215792735
-WHATSAPP_ACCESS_TOKEN=[60 dias — renovar julho 2026]
+# WhatsApp provider — controla se usa Cloud API oficial ou Baileys
+WHATSAPP_PROVIDER=baileys                       # 'meta' ou 'baileys' (default 'meta')
+
+# Meta Cloud API (obrigatórias só se WHATSAPP_PROVIDER=meta)
+WHATSAPP_PHONE_NUMBER_ID=...
+WHATSAPP_ACCESS_TOKEN=[60 dias]
 WEBHOOK_VERIFY_TOKEN=academia-sdr-2026
+
+# Baileys
+# (sem credenciais — auth state em volume /data/baileys-auth/)
+
+# IA
 ANTHROPIC_API_KEY=sk-ant-api03-...
-OPENAI_API_KEY=sk-proj-...                    # Whisper
-ELEVENLABS_API_KEY=sk_...
+
+# Áudio
+OPENAI_API_KEY=sk-proj-...                      # Whisper transcrição
+ELEVENLABS_API_KEY=sk_...                       # TTS voz clonada
 ELEVENLABS_VOICE_ID=RXzNxMfhaT652VGYeS6o
-DB_PATH=/data/database.sqlite                  # volume Railway
-OWNER_PHONE_NUMBER=5551995304633               # notificação de agendamentos
+
+# Storage
+DB_PATH=/data/database.sqlite                   # volume Railway
+
+# Notificação WhatsApp pro dono
+OWNER_PHONE_NUMBER=5551995304633
+
+# Railway
 PORT=[Railway define automaticamente]
 ```
 
 ---
 
-## Estrutura de arquivos
+## Estrutura de arquivos (atual)
 
 ```
 src/
-├── index.js          ← entry point Express, porta 3000
-├── webhook.js        ← recebe POST do Meta, normaliza, chama agent
-├── agent.js          ← reply() = brain do SDR + parser de tags
-├── prompt.js         ← SYSTEM_PROMPT em 4 camadas (38k chars)
-├── db.js             ← SQLite (contacts, messages, appointments)
-├── whatsapp.js       ← envio de texto/áudio via Meta + notifyOwner
-├── tts.js            ← ElevenLabs voz clonada
-├── transcriber.js    ← Whisper transcrição
-├── admin.js          ← painel HTML em /admin (3 abas)
-└── config.js         ← carrega .env
+├── index.js              ← entry Express, bootstrap Baileys se PROVIDER=baileys
+├── webhook.js            ← HTTP webhook (Meta) + handleIncomingMessage compartilhado
+├── whatsapp.js           ← FACADE — delega pro provider ativo
+├── whatsapp-meta.js      ← Meta Cloud API (sendMessage, sendAudio, uploadMedia, transcode)
+├── whatsapp-baileys.js   ← Baileys (WebSocket, QR, auth state, JID resolve, status updates)
+├── agent.js              ← reply() (produção) + simulateReply() (playground)
+├── prompt.js             ← SYSTEM_PROMPT estático (38k chars, cacheado)
+├── db.js                 ← SQLite (16 tabelas, helpers, canonicalize phone, kb)
+├── auth.js               ← cookie-based session, requireAuth, requireAdmin
+├── events.js             ← EventEmitter singleton pro SSE
+├── tts.js                ← ElevenLabs voz clonada
+├── transcriber.js        ← Whisper (transcribeAudioBuffer provider-agnostic)
+├── admin.js              ← painel HTML completo + endpoints REST + SSE
+└── config.js             ← carrega .env (Meta vars opcionais se Baileys)
 
-memory/               ← este sistema
-data/                 ← SQLite local (gitignored, em prod fica no volume)
+scripts/
+└── import_students.py    ← importação bulk de alunos do xlsx
+
+memory/                   ← este sistema (5 arquivos)
+data/                     ← SQLite local (gitignored, em prod no volume)
+```
+
+---
+
+## Endpoints HTTP principais
+
+```
+GET  /                                       — health check
+POST /webhook                                — Meta Cloud API webhook (incoming msg + status)
+GET  /webhook                                — Meta verification
+
+GET  /admin                                  — painel HTML
+GET  /admin/login                            — tela login
+POST /admin/api/auth/login
+POST /admin/api/auth/logout
+GET  /admin/api/me
+
+# Conversas
+GET  /admin/api/conversations
+DELETE /admin/api/conversations/:phone
+POST /admin/api/conversations/:phone/reply         — texto
+POST /admin/api/conversations/:phone/reply-audio   — áudio (base64)
+POST /admin/api/conversations/:phone/assume
+POST /admin/api/conversations/:phone/release
+POST /admin/api/contacts/init                      — modal "nova conversa"
+
+# Real-time
+GET  /admin/api/events                       — SSE stream
+
+# Knowledge base
+GET  /admin/api/academia-info
+PUT  /admin/api/academia-info/:key           — admin only
+
+# Playground
+POST /admin/api/playground/message
+
+# WhatsApp / Baileys
+GET  /admin/api/whatsapp/status              — { provider, status, qr?, me?, connectedSince? }
+POST /admin/api/baileys/disconnect           — admin only
+GET  /admin/baileys/qr                       — página HTML standalone (alternativa)
+
+# Mídia
+GET  /admin/api/media/:filename              — serve áudio salvo
+
+# Outros
+CRUD /admin/api/users                        — admin only
+CRUD /admin/api/students
+CRUD /admin/api/appointments
+PUT  /admin/api/reviews/:phone
+GET  /admin/api/metrics                      — admin only
 ```

@@ -4,6 +4,192 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-02 — Baileys: JID resolution antes de enviar (bug 9-dígito BR)
+
+**Contexto:** Mensagens enviadas via Baileys não chegavam no destinatário porque o JID gerado tinha o formato errado. WhatsApp BR registra contas em 2 formatos:
+- 12 dígitos (sem 9): contas legadas
+- 13 dígitos (com 9): contas novas
+
+Mandar pro JID errado = msg vai pro vazio, sem erro algum.
+
+**Solução** (`src/whatsapp-baileys.js`):
+```js
+async function resolveJid(to) {
+  const clean = String(to).replace(/\D/g, '');
+  const candidates = [clean];
+  if (clean.startsWith('55') && clean.length === 13) {
+    candidates.push(clean.slice(0, 4) + clean.slice(5)); // sem 9
+  } else if (clean.startsWith('55') && clean.length === 12) {
+    candidates.push(clean.slice(0, 4) + '9' + clean.slice(4)); // com 9
+  }
+  const jids = candidates.map(c => `${c}@s.whatsapp.net`);
+  const results = await sock.onWhatsApp(...jids);
+  const found = results?.find(r => r.exists);
+  return found?.jid || jids[0]; // fallback no input original
+}
+```
+
+`sock.onWhatsApp(...jids)` pergunta pro WhatsApp quais JIDs realmente existem. Sempre chame antes de `sendMessage` / `sendAudio`.
+
+---
+
+## 2026-05-02 — Canonicalização de phone no DB (lookup ±9 dígitos)
+
+**Contexto:** Quando user cria contato `5551997564760` (com 9) no painel, sendMessage resolve pra `555197564760` (sem 9) via `onWhatsApp`. Quando o contato responde, msg chega com `555197564760`. DB tinha contato com 13 dígitos, busca não acha, cria novo contato — fica duplicado.
+
+**Solução** (`src/db.js`):
+```js
+function canonicalizeContactPhone(phone) {
+  if (!phone) return phone;
+  const p = String(phone);
+  if (stmts.getContact.get(p)) return p;
+  if (p.startsWith('55') && p.length === 13 && p[4] === '9') {
+    const without9 = p.slice(0, 4) + p.slice(5);
+    if (stmts.getContact.get(without9)) return without9;
+  } else if (p.startsWith('55') && p.length === 12) {
+    const with9 = p.slice(0, 4) + '9' + p.slice(4);
+    if (stmts.getContact.get(with9)) return with9;
+  }
+  return p; // não existe, retorna original (caller cria novo)
+}
+```
+
+Aplicar em **todas** funções que recebem phone: `getOrCreateContact`, `addMessage`, `addMessageWithSender`, `updateLastContact`, `assumeConversation`, `releaseConversation`, `setLastAssistantMessageMediaPath`. Garante que ambos formatos caem no mesmo contato.
+
+---
+
+## 2026-05-02 — SSE com EventEmitter singleton + coalesce
+
+**Contexto:** Polling 5s tinha latência percebível (3-5s) e gastava bandwidth (a lista inteira de conversas a cada poll).
+
+**Solução** (`src/events.js`):
+```js
+const { EventEmitter } = require('events');
+const bus = new EventEmitter();
+bus.setMaxListeners(100);
+
+const pendingConv = new Map();
+const COALESCE_MS = 250;
+
+function emitConversationChanged(phone) {
+  if (!phone) { bus.emit('conversation.changed', { phone: null }); return; }
+  if (pendingConv.has(phone)) return; // já agendado
+  const t = setTimeout(() => {
+    pendingConv.delete(phone);
+    bus.emit('conversation.changed', { phone });
+  }, COALESCE_MS);
+  pendingConv.set(phone, t);
+}
+```
+
+Coalesce de 250ms é crucial — quando webhook recebe msg, várias writes acontecem em rajada (`addMessage` + `updateLastContact` + `setLastAssistantMessageMediaPath` etc). Sem coalesce, cada write virava 1 evento, frontend recarregava conversations N vezes.
+
+**Endpoint SSE**:
+```js
+res.setHeader('Content-Type', 'text/event-stream');
+res.setHeader('X-Accel-Buffering', 'no'); // proxies não bufferizam
+res.write(': sse-connected\n\n');           // hello inicial
+const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 25000);
+req.on('close', () => clearInterval(heartbeat) /* + remove listeners */);
+```
+
+Heartbeat de 25s é importante — proxies (Cloudflare, nginx) cortam conexão idle após 30-60s.
+
+**Frontend**:
+```js
+const sseSource = new EventSource('/admin/api/events');
+sseSource.addEventListener('conversation.changed', e => loadConversations());
+// EventSource reconecta sozinho — só logamos sseFailures pra debug
+```
+
+Polling fica como fallback (30s quando SSE saudável, 5s se SSE caiu repetidamente).
+
+---
+
+## 2026-05-02 — Knowledge base injetado no dynamicCtx (não invalida cache do prompt estático)
+
+**Contexto:** Dados que mudam (preço de promo, horário) NÃO podem ficar no SYSTEM_PROMPT cacheado, senão cada edição invalida cache de 38k chars (custo pula 10x).
+
+**Solução** (`src/db.js` + `src/agent.js`):
+- Tabela `academia_info(key, value, label, category, ...)` editável
+- `db.buildAcademiaInfoBlock()` monta texto formatado **só com chaves que têm valor** (vazias não vão pro prompt)
+- Em `agent.reply()`:
+```js
+const systemBlocks = [
+  { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+  { type: 'text', text: dynamicCtx },  // inclui buildAcademiaInfoBlock()
+];
+```
+
+Bloco do KB começa com instrução explícita: *"Em caso de conflito com qualquer outra info no prompt, ESTES valem porque são gerenciados pela equipe."*
+
+Resultado: editar 1 célula no painel = próxima resposta da IA usa valor novo. Cache do prompt estático preservado.
+
+---
+
+## 2026-05-02 — Pipeline áudio via Meta Cloud API: replicar o que JÁ funciona
+
+**Contexto:** Saga de 6 PRs tentando configurar opus/ogg "canônico" pro envio de áudio funcionar. Cada tentativa falhava silenciosamente (Meta aceitava upload e `/messages` retornava 200 OK, mas o lead não recebia).
+
+**Lição:** TTS já mandava áudio com sucesso há semanas via pipeline diferente. Em vez de continuar otimizando opus, **copiar o pipeline do TTS inteiro**:
+
+| Item | TTS (funciona) | Manual (falhava) | Manual (depois do fix) |
+|---|---|---|---|
+| Format | audio/mpeg (MP3) | audio/ogg (Opus) | **audio/mpeg (MP3)** |
+| HTTP client | fetch + native FormData | axios + FormData | **fetch + native FormData** |
+| Field order | file → type → messaging_product | inverso | **file → type → messaging_product** |
+
+**Código que funciona** (`src/whatsapp-meta.js` `uploadMedia`):
+```js
+const blob = new Blob([buffer], { type: mimeType });
+const form = new FormData();
+form.append('file', blob, filename);    // PRIMEIRO
+form.append('type', mimeType);          // depois
+form.append('messaging_product', 'whatsapp'); // por último
+const res = await fetch(`.../media`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}` },
+  body: form,
+});
+```
+
+E ffmpeg sempre transcoda pra MP3 64kbps mono:
+```js
+const args = ['-loglevel', 'error', '-i', 'pipe:0',
+  '-c:a', 'libmp3lame', '-b:a', '64k',
+  '-ar', '44100', '-ac', '1', '-f', 'mp3', 'pipe:1'];
+```
+
+**Princípio geral:** quando uma parte do sistema já funciona em produção, **replique o caminho inteiro** antes de variar parâmetros baseado em "o que deveria funcionar segundo docs".
+
+---
+
+## 2026-05-02 — ffmpeg via Dockerfile (Nixpacks ignorava config)
+
+**Contexto:** Tentei `nixpacks.toml` com `aptPkgs` e `nixPkgs` mas Railway boot mostrava `[server] ⚠️ ffmpeg NÃO encontrado no PATH`.
+
+**Solução:** abandonar Nixpacks, usar Dockerfile explícito:
+
+```dockerfile
+FROM node:20-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg build-essential python3 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+COPY . .
+ENV NODE_ENV=production
+EXPOSE 8080
+CMD ["node", "src/index.js"]   # node direto, NÃO npm start (npm engole stack traces)
+```
+
+Adicionar `.dockerignore` excluindo `node_modules`, `.git`, `data/`, `memory/`, `scripts/`, `.env`.
+
+Railway detecta Dockerfile automaticamente e ignora Nixpacks.
+
+---
+
 ## 2026-05-01 — Envio de áudio pra Meta Cloud API: usar MP3, não opus/ogg
 
 **Contexto:** Painel admin precisa permitir consultora gravar e enviar voice message via WhatsApp. MediaRecorder do browser produz webm (Chrome) ou mp4 (Safari).
