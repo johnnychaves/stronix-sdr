@@ -7,44 +7,48 @@ require('dotenv').config({ override: true });
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function transcribeAudio(mediaId) {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+// Transcreve um Buffer de áudio (qualquer formato suportado pelo Whisper).
+// Provider-agnostic: funciona pra Meta (após download) e Baileys (após decrypt).
+async function transcribeAudioBuffer(buffer, mimeType) {
+  // Whisper aceita ogg, mp3, m4a, wav, webm. Detecta extensão pelo mime.
+  const ext = (() => {
+    const m = (mimeType || '').toLowerCase();
+    if (m.includes('ogg')) return '.ogg';
+    if (m.includes('mp4') || m.includes('m4a')) return '.m4a';
+    if (m.includes('mpeg') || m.includes('mp3')) return '.mp3';
+    if (m.includes('webm')) return '.webm';
+    if (m.includes('wav')) return '.wav';
+    return '.ogg'; // default seguro
+  })();
 
-  // 1. Busca a URL real do arquivo de mídia na API do Meta
-  const mediaRes = await axios.get(
-    `https://graph.facebook.com/v19.0/${mediaId}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  const mediaUrl = mediaRes.data.url;
-  const mimeType = mediaRes.data.mime_type || '';
-
-  // 2. Baixa o arquivo de áudio
-  const audioRes = await axios.get(mediaUrl, {
-    headers: { Authorization: `Bearer ${token}` },
-    responseType: 'arraybuffer',
-  });
-
-  // 3. Salva em arquivo temporário
-  // WhatsApp envia áudios como ogg/opus ou mp4
-  const ext = mimeType.includes('ogg') ? '.ogg' : '.mp4';
   const tmpFile = path.join(os.tmpdir(), `wa_audio_${Date.now()}${ext}`);
-  fs.writeFileSync(tmpFile, Buffer.from(audioRes.data));
+  fs.writeFileSync(tmpFile, buffer);
 
-  // 4. Transcreve com Whisper
-  let transcript;
   try {
     const result = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tmpFile),
       model: 'whisper-1',
       language: 'pt',
     });
-    transcript = result.text;
+    return result.text;
   } finally {
-    // 5. Remove o arquivo temporário independente do resultado
     fs.unlink(tmpFile, () => {});
   }
-
-  return transcript;
 }
 
-module.exports = { transcribeAudio };
+// Compat: transcreve a partir de um Meta media_id (legacy path).
+// Quando WHATSAPP_PROVIDER=meta, ainda é chamado por algum código antigo.
+async function transcribeAudio(mediaId) {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const mediaRes = await axios.get(
+    `https://graph.facebook.com/v19.0/${mediaId}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const audioRes = await axios.get(mediaRes.data.url, {
+    headers: { Authorization: `Bearer ${token}` },
+    responseType: 'arraybuffer',
+  });
+  return await transcribeAudioBuffer(Buffer.from(audioRes.data), mediaRes.data.mime_type || '');
+}
+
+module.exports = { transcribeAudio, transcribeAudioBuffer };

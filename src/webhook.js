@@ -1,8 +1,9 @@
 const { Router } = require('express');
 const config    = require('./config');
 const { reply, isAffirmative, isNegative, getContact, setAudioFlags } = require('./agent');
-const { sendMessage, sendAudio, notifyStudent, notifyAssignedConsultor } = require('./whatsapp');
-const { transcribeAudio } = require('./transcriber');
+const wa = require('./whatsapp');
+const { sendMessage, notifyStudent, notifyAssignedConsultor, PROVIDER } = wa;
+const { transcribeAudio, transcribeAudioBuffer } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
 const db = require('./db');
 
@@ -128,8 +129,17 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
   if (shouldSendAudio) {
     console.log(`[webhook] enviando resposta em áudio para ${from}`);
     try {
-      const mediaId = await textToAudioMessage(result.text);
-      await sendAudio(from, mediaId);
+      // textToAudioMessage retorna media_id (Meta) OU buffer (Baileys, novo path).
+      // Pra simplificar e funcionar nos 2 providers, geramos buffer + sendVoice.
+      const audio = await textToAudioMessage(result.text);
+      if (audio && audio.buffer) {
+        await wa.sendVoice(from, audio.buffer, audio.mimeType || 'audio/mpeg', 'voice.mp3');
+      } else if (typeof audio === 'string') {
+        // Compat antigo (mediaId Meta)
+        await wa.sendAudio(from, audio);
+      } else {
+        throw new Error('TTS retornou formato inesperado');
+      }
     } catch (err) {
       console.error('[webhook] erro ao gerar/enviar áudio, enviando como texto:', err.message);
       await sleep(typingDelayMs(result.text));
@@ -139,6 +149,38 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
     await sleep(typingDelayMs(result.text));
     await sendMessage(from, result.text);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// HANDLER UNIFICADO — chamado tanto por HTTP webhook (Meta) quanto por
+// event listener Baileys. Aceita formato parsed { from, type, text?,
+// audioBuffer?, audioMime? }.
+// ─────────────────────────────────────────────────────────────────────
+async function handleIncomingMessage(parsed) {
+  const { from, type } = parsed;
+  let text = parsed.text;
+  let isAudio = type === 'audio';
+
+  if (type === 'audio') {
+    try {
+      // parsed.audioBuffer é o áudio cru pronto pra transcrição
+      text = await transcribeAudioBuffer(parsed.audioBuffer, parsed.audioMime);
+      console.log(`[webhook] transcrição de ${from}: "${text}"`);
+    } catch (err) {
+      console.error('[webhook] erro ao transcrever áudio:', err.message);
+      await sendMessage(from, 'Recebi seu áudio, mas não consegui entender. Pode me mandar por texto?');
+      return;
+    }
+    if (!text || !text.trim()) {
+      await sendMessage(from, 'Não consegui entender o áudio. Pode repetir ou mandar por texto?');
+      return;
+    }
+  } else if (type !== 'text') {
+    console.log(`[webhook] tipo não suportado ignorado: ${type}`);
+    return;
+  }
+
+  enqueueMessage(from, text, isAudio);
 }
 
 // Detecta quando o lead pede explicitamente áudio por texto
@@ -191,39 +233,22 @@ router.post('/', async (req, res) => {
   if (!message) return;
 
   const from = message.from;
-  let text;
-  let isAudio = false;
-
   if (message.type === 'text') {
-    text = message.text.body;
-    console.log(`[webhook] texto de ${from}: "${text}"`);
-
+    console.log(`[webhook] texto de ${from}: "${message.text.body}"`);
+    await handleIncomingMessage({ from, type: 'text', text: message.text.body });
   } else if (message.type === 'audio') {
-    isAudio = true;
-    console.log(`[webhook] áudio recebido de ${from}, transcrevendo...`);
+    console.log(`[webhook] áudio recebido de ${from}, baixando + transcrevendo...`);
     try {
-      text = await transcribeAudio(message.audio.id);
-      console.log(`[webhook] transcrição de ${from}: "${text}"`);
+      const { buffer, mimeType } = await wa.downloadMediaBuffer(message.audio.id);
+      await handleIncomingMessage({ from, type: 'audio', audioBuffer: buffer, audioMime: mimeType });
     } catch (err) {
-      console.error('[webhook] erro ao transcrever áudio:', err.message);
-      await sendMessage(from, 'Recebi seu áudio, mas não consegui entender. Pode me mandar por texto?');
-      return;
+      console.error('[webhook] erro ao baixar áudio:', err.message);
+      await sendMessage(from, 'Recebi seu áudio, mas não consegui processar. Pode me mandar por texto?');
     }
-
-    if (!text || !text.trim()) {
-      await sendMessage(from, 'Não consegui entender o áudio. Pode repetir ou mandar por texto?');
-      return;
-    }
-
   } else {
-    // Sticker, imagem, vídeo, localização, etc — ignora silenciosamente
     console.log(`[webhook] tipo não suportado ignorado: ${message.type}`);
-    return;
   }
-
-  // Acumula no buffer; processamento real (IA + envio) acontece quando o
-  // timer do buffer expira (15s sem nova msg do mesmo phone).
-  enqueueMessage(from, text, isAudio);
 });
 
 module.exports = router;
+module.exports.handleIncomingMessage = handleIncomingMessage;

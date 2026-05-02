@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
-const { sendMessage, sendAudio, uploadMedia, transcodeAudio } = require('./whatsapp');
+const wa = require('./whatsapp');
+const { sendMessage, sendVoice, transcodeAudio } = wa;
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -454,6 +455,74 @@ router.get('/api/me', (req, res) => {
   res.json({ user: req.user });
 });
 
+// Status do provider WhatsApp (Meta sempre OK; Baileys precisa de QR/conexão)
+router.get('/api/whatsapp/status', (req, res) => {
+  const wa = require('./whatsapp');
+  const provider = wa.PROVIDER;
+  if (provider !== 'baileys') {
+    return res.json({ provider, status: 'open', qr: null });
+  }
+  const baileys = wa.getBaileys();
+  if (!baileys) return res.json({ provider, status: 'unavailable', qr: null });
+  res.json({ provider, ...baileys.getStatus() });
+});
+
+// Página HTML simples mostrando o QR code do Baileys (pra escanear com WhatsApp)
+router.get('/baileys/qr', (req, res) => {
+  const wa = require('./whatsapp');
+  if (wa.PROVIDER !== 'baileys') {
+    return res.status(400).send('<h1>WHATSAPP_PROVIDER não é baileys</h1>');
+  }
+  const baileys = wa.getBaileys();
+  res.send(`<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><title>STRONIX SDR — Conectar WhatsApp</title>
+<meta http-equiv="refresh" content="3">
+<style>
+  body { background:#0a1014; color:#e9edef; font-family:system-ui,-apple-system,sans-serif; min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .card { background:#111b21; border:1px solid #222d34; border-radius:14px; padding:32px; max-width:420px; text-align:center; box-shadow:0 30px 80px rgba(0,0,0,.5); }
+  h1 { font-size:18px; margin:0 0 8px; }
+  p { color:#aebac1; font-size:13px; line-height:1.5; margin:0 0 18px; }
+  img.qr { width:280px; height:280px; background:#fff; padding:12px; border-radius:10px; }
+  .status { padding:8px 14px; border-radius:999px; display:inline-block; font-size:12px; font-weight:600; margin-top:16px; }
+  .open { background:rgba(0,168,132,.15); color:#06cf9c; }
+  .qr   { background:rgba(251,191,36,.15); color:#fbbf24; }
+  .close{ background:rgba(248,113,113,.15); color:#f87171; }
+  ol { text-align:left; font-size:12.5px; color:#aebac1; line-height:1.7; padding-left:20px; margin-top:18px; }
+</style></head><body>
+<div class="card">
+  <h1>📱 Conectar WhatsApp da STRONIX</h1>
+  <p id="status-text">Aguardando QR…</p>
+  <div id="qr-area"></div>
+  <ol>
+    <li>Abre o WhatsApp no celular do número STRONIX</li>
+    <li>Vai em <strong>Configurações → Aparelhos conectados</strong></li>
+    <li>Toca em <strong>Conectar um aparelho</strong></li>
+    <li>Aponta a câmera pro QR acima</li>
+  </ol>
+  <p style="margin-top:18px; font-size:11px; opacity:.7;">Página recarrega a cada 3s automaticamente.</p>
+</div>
+<script>
+fetch('/admin/api/whatsapp/status').then(r => r.json()).then(s => {
+  const txt = document.getElementById('status-text');
+  const area = document.getElementById('qr-area');
+  if (s.status === 'open') {
+    txt.innerHTML = '<span class="status open">✓ Conectado</span><br><br>Tudo pronto. WhatsApp da STRONIX (' + (s.me || '?') + ') está online.';
+    area.innerHTML = '';
+  } else if (s.status === 'qr' && s.qr) {
+    txt.innerHTML = '<span class="status qr">⏳ Aguardando você escanear</span>';
+    area.innerHTML = '<img class="qr" src="' + s.qr + '" alt="QR Code">';
+  } else if (s.status === 'connecting') {
+    txt.innerHTML = '<span class="status qr">🔄 Iniciando conexão…</span>';
+    area.innerHTML = '';
+  } else {
+    txt.innerHTML = '<span class="status close">⚠ ' + s.status + '</span>';
+    area.innerHTML = '';
+  }
+});
+</script></body></html>`);
+});
+
 // Lista enxuta dos users ativos pra renderizar nomes em mensagens enviadas por humanos
 router.get('/api/users-public', (req, res) => {
   res.json(db.getAllUsers().filter(u => u.active).map(u => ({
@@ -752,8 +821,8 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
       return res.status(500).json({ error: 'Falha ao processar áudio (ffmpeg). ' + e.message });
     }
 
-    const mediaId = await uploadMedia(finalBuffer, finalMime, `voice.${finalExt}`);
-    const sendResp = await sendAudio(phone, mediaId);
+    // sendVoice abstrai upload+send (Meta) ou send direto (Baileys)
+    const sendResp = await sendVoice(phone, finalBuffer, finalMime, `voice.${finalExt}`);
     const wamid = sendResp?.messages?.[0]?.id || null;
 
     // Salva o MP3 localmente pro player no painel
