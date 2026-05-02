@@ -62,6 +62,7 @@ async function start() {
         lastQRDataUrl = await QRCode.toDataURL(qr, { width: 320, margin: 2 });
         connectionStatus = 'qr';
         console.log('[baileys] 📱 QR code disponível em /admin/api/baileys/qr — escaneia com o WhatsApp');
+        try { require('./events').emitConnectionsChanged(); } catch {}
       } catch (e) {
         console.error('[baileys] erro ao gerar QR:', e.message);
       }
@@ -73,6 +74,7 @@ async function start() {
       connectedSince = Date.now();
       const me = sock.user?.id?.split(':')[0] || sock.user?.id || 'desconhecido';
       console.log(`[baileys] ✓ conectado como ${me}`);
+      try { require('./events').emitConnectionsChanged(); } catch {}
     }
 
     if (connection === 'close') {
@@ -84,6 +86,7 @@ async function start() {
       console.log(`[baileys] desconectou (reason=${reason}). reconectar=${shouldReconnect}`);
       connectionStatus = 'close';
       connectedSince = null;
+      try { require('./events').emitConnectionsChanged(); } catch {}
       if (shouldReconnect) {
         setTimeout(() => start().catch(e => console.error('[baileys] reconexão falhou:', e.message)), 3000);
       } else {

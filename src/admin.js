@@ -455,6 +455,55 @@ router.get('/api/me', (req, res) => {
   res.json({ user: req.user });
 });
 
+// SSE — stream de eventos pro painel atualizar em tempo real (sem polling)
+// Eventos: conversation.changed, connections.changed, appointments.changed
+// Frontend escuta via EventSource e chama o load* correspondente.
+router.get('/api/events', (req, res) => {
+  const events = require('./events');
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // proxies não bufferizam
+  // Express 5 não tem flushHeaders por padrão em alguns contextos — força:
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  // Hello inicial (comentário SSE — não dispara onmessage no client)
+  res.write(': sse-connected\n\n');
+  // Evento de boas-vindas pro client saber que tá ok
+  res.write('event: hello\ndata: {"ok":true}\n\n');
+
+  function send(eventName, data) {
+    try {
+      res.write(`event: ${eventName}\n`);
+      res.write(`data: ${JSON.stringify(data || {})}\n\n`);
+    } catch (e) { /* ignora — conexão pode ter caído */ }
+  }
+
+  const onConv = (data) => send('conversation.changed', data);
+  const onConn = () => send('connections.changed', {});
+  const onAppt = () => send('appointments.changed', {});
+  const onStud = () => send('students.changed', {});
+  events.bus.on('conversation.changed', onConv);
+  events.bus.on('connections.changed', onConn);
+  events.bus.on('appointments.changed', onAppt);
+  events.bus.on('students.changed', onStud);
+
+  // Heartbeat a cada 25s — alguns proxies cortam conexão idle após 30-60s
+  const heartbeat = setInterval(() => {
+    try { res.write(': heartbeat\n\n'); } catch {}
+  }, 25000);
+
+  // Limpeza ao desconectar (browser fechou aba, refresh, etc)
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    events.bus.off('conversation.changed', onConv);
+    events.bus.off('connections.changed', onConn);
+    events.bus.off('appointments.changed', onAppt);
+    events.bus.off('students.changed', onStud);
+  });
+});
+
 // Status do provider WhatsApp (Meta sempre OK; Baileys precisa de QR/conexão)
 router.get('/api/whatsapp/status', (req, res) => {
   const wa = require('./whatsapp');
@@ -923,6 +972,7 @@ router.patch('/api/appointments/:id', (req, res) => {
   const validStatuses = ['pending', 'confirmed', 'cancelled', 'no_show'];
   if (!validStatuses.includes(status)) return res.status(400).json({ error: 'Status inválido' });
   db.updateAppointmentStatus(req.params.id, status);
+  try { require('./events').emitAppointmentsChanged(); } catch {}
   res.json({ ok: true });
 });
 
@@ -958,12 +1008,14 @@ router.put('/api/students/:phone', (req, res) => {
   const phone = (req.params.phone || '').replace(/\D/g, '');
   if (!phone || phone.length < 10) return res.status(400).json({ error: 'Phone inválido' });
   db.upsertStudent(phone, name, notes);
+  try { require('./events').emitStudentsChanged(); } catch {}
   res.json({ ok: true });
 });
 
 // API — remove aluno
 router.delete('/api/students/:phone', (req, res) => {
   db.deleteStudent(req.params.phone);
+  try { require('./events').emitStudentsChanged(); } catch {}
   res.json({ ok: true });
 });
 
@@ -2715,7 +2767,10 @@ router.get('/', (req, res) => {
 
   function startPolling() {
     if (pollTimer) return;
-    pollTimer = setInterval(loadConversations, 5000);
+    // Quando SSE está saudável, polling roda em frequência baixa (30s)
+    // como safety-net. Sem SSE, mantém os 5s originais.
+    const pollInterval = (typeof sseHealthy !== 'undefined' && sseHealthy) ? 30000 : 5000;
+    pollTimer = setInterval(loadConversations, pollInterval);
   }
   function stopPolling() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -4420,6 +4475,66 @@ router.get('/', (req, res) => {
     } catch {}
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // SSE — atualização em tempo real (substitui polling 5s)
+  // EventSource reconecta sozinho se cair. Polling existente fica de
+  // fallback: rodando em freq mais baixa quando SSE tá saudável.
+  // ─────────────────────────────────────────────────────────────────
+  let sseSource = null;
+  let sseHealthy = false;
+  let sseFailures = 0;
+
+  // Throttle do load — se vários eventos vêm em rajada, só recarrega 1x
+  let convReloadTimer = null;
+  function scheduleConversationsReload() {
+    if (convReloadTimer) return;
+    convReloadTimer = setTimeout(() => {
+      convReloadTimer = null;
+      // Só recarrega se a aba conversas tá ativa OU pra atualizar badges
+      const onConvTab = document.getElementById('tab-conversas')?.classList.contains('active');
+      if (onConvTab) loadConversations();
+      else loadConversations(); // sempre atualiza pra badge nav refletir
+    }, 200);
+  }
+
+  function startSSE() {
+    if (sseSource) return;
+    try {
+      sseSource = new EventSource('/admin/api/events');
+      sseSource.addEventListener('hello', () => {
+        sseHealthy = true;
+        sseFailures = 0;
+        console.log('[sse] conectado — atualização em tempo real ativa');
+      });
+      sseSource.addEventListener('conversation.changed', (e) => {
+        scheduleConversationsReload();
+      });
+      sseSource.addEventListener('connections.changed', () => {
+        const onConexoesTab = document.getElementById('tab-conexoes')?.classList.contains('active');
+        if (onConexoesTab) loadConnections();
+      });
+      sseSource.addEventListener('appointments.changed', () => {
+        const onApptTab = document.getElementById('tab-agendamentos')?.classList.contains('active');
+        if (onApptTab) loadAppointments();
+      });
+      sseSource.addEventListener('students.changed', () => {
+        const onAlunosTab = document.getElementById('tab-alunos')?.classList.contains('active');
+        if (onAlunosTab) loadStudents();
+      });
+      sseSource.onerror = () => {
+        sseFailures++;
+        sseHealthy = false;
+        // EventSource já reconecta sozinho. Só logamos.
+        if (sseFailures === 1) console.warn('[sse] conexão caiu — reconectando…');
+        if (sseFailures > 5) {
+          console.warn('[sse] falhou muitas vezes, polling continua de backup');
+        }
+      };
+    } catch (e) {
+      console.error('[sse] falha ao iniciar:', e);
+    }
+  }
+
   (async () => {
     setupRailPin();
     await loadMe();
@@ -4431,6 +4546,9 @@ router.get('/', (req, res) => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
+
+    // SSE depois do loadMe (precisa cookie de auth setado)
+    startSSE();
   })();
 </script>
 </body>
