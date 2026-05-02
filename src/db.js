@@ -103,7 +103,57 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
   CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at DESC);
+
+  -- Knowledge base estruturado da academia (planos, horários, modalidades, etc).
+  -- Editável via painel sem precisar mexer no system prompt. Injetado no
+  -- contexto da IA dinamicamente pra cada conversa.
+  CREATE TABLE IF NOT EXISTS academia_info (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '',
+    label TEXT,
+    description TEXT,
+    category TEXT,
+    display_order INTEGER DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    updated_by INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_academia_info_category ON academia_info(category, display_order);
 `);
+
+// Seed inicial do academia_info — só insere se ainda não existir.
+// Chaves cobrem o que aparece com mais frequência em conversas de lead.
+const ACADEMIA_INFO_SEED = [
+  // Planos
+  { key: 'plano_mensal_valor',      label: 'Plano Mensal — valor',      category: 'planos',      order: 1, description: 'Ex: R$ 149,90/mês' },
+  { key: 'plano_trimestral_valor',  label: 'Plano Trimestral — valor',  category: 'planos',      order: 2, description: 'Ex: R$ 119,90/mês' },
+  { key: 'plano_anual_valor',       label: 'Plano Anual — valor',       category: 'planos',      order: 3, description: 'Ex: R$ 99,90/mês' },
+  { key: 'plano_observacoes',       label: 'Observações sobre planos',  category: 'planos',      order: 4, description: 'Cancelamento, fidelidade, etc.' },
+  // Modalidades & estrutura
+  { key: 'modalidades',             label: 'Modalidades oferecidas',    category: 'estrutura',   order: 1, description: 'Ex: Musculação, Cross Functional, Pilates, Spinning' },
+  { key: 'professores_destaque',    label: 'Professores em destaque',   category: 'estrutura',   order: 2, description: 'Nomes que vale mencionar quando lead pergunta' },
+  { key: 'equipamentos_destaque',   label: 'Equipamentos diferenciais', category: 'estrutura',   order: 3, description: 'Ex: Smith customizado, plataformas, halteres até X kg' },
+  // Horários
+  { key: 'horario_seg_sex',         label: 'Horário seg-sex',           category: 'horarios',    order: 1, description: 'Ex: 06:00-22:00' },
+  { key: 'horario_sab',             label: 'Horário sábado',            category: 'horarios',    order: 2, description: 'Ex: 08:00-14:00' },
+  { key: 'horario_dom',             label: 'Horário domingo',           category: 'horarios',    order: 3, description: 'Ex: Fechado / 08:00-12:00' },
+  // Localização & contato
+  { key: 'endereco',                label: 'Endereço completo',         category: 'contato',     order: 1, description: 'Rua, número, bairro' },
+  { key: 'instagram',               label: 'Instagram',                 category: 'contato',     order: 2, description: 'Ex: @stronixacademia' },
+  // Promo do mês (vazio = sem promo ativa)
+  { key: 'promo_atual_titulo',      label: 'Promo atual — título',      category: 'promo',       order: 1, description: 'Ex: "Plano anual com 30% off". Deixa vazio se não há promo.' },
+  { key: 'promo_atual_descricao',   label: 'Promo atual — detalhes',    category: 'promo',       order: 2, description: 'Condições, valor promocional, etc.' },
+  { key: 'promo_atual_validade',    label: 'Promo atual — validade',    category: 'promo',       order: 3, description: 'Ex: "Até 15/12" ou "Enquanto durarem as vagas"' },
+  // Diferenciais
+  { key: 'diferenciais',            label: 'Diferenciais da STRONIX',   category: 'institucional', order: 1, description: 'Por que escolher aqui? Use bullets ou frases curtas.' },
+];
+const seedStmt = db.prepare(`
+  INSERT OR IGNORE INTO academia_info (key, value, label, description, category, display_order, updated_at)
+  VALUES (?, '', ?, ?, ?, ?, ?)
+`);
+const seedNow = Date.now();
+for (const r of ACADEMIA_INFO_SEED) {
+  seedStmt.run(r.key, r.label, r.description, r.category, r.order, seedNow);
+}
 
 // Migração: adiciona scheduled_hour em bancos que já existiam antes dessa coluna
 const apptCols = db.prepare('PRAGMA table_info(appointments)').all();
@@ -836,6 +886,64 @@ function bulkUpsertStudents(items) {
   return { inserted, updated, skipped };
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// KNOWLEDGE BASE — academia_info (planos, horários, modalidades, promo)
+// ─────────────────────────────────────────────────────────────────────
+
+function getAllAcademiaInfo() {
+  return db.prepare(`
+    SELECT key, value, label, description, category, display_order, updated_at, updated_by
+    FROM academia_info
+    ORDER BY category, display_order, key
+  `).all();
+}
+
+function getAcademiaInfoMap() {
+  const rows = getAllAcademiaInfo();
+  const map = {};
+  for (const r of rows) map[r.key] = r.value || '';
+  return map;
+}
+
+function setAcademiaInfo(key, value, userId = null) {
+  // Atualiza valor (não permite criar chave nova via essa função; usa upsert se quiser)
+  const r = db.prepare(`
+    UPDATE academia_info SET value = ?, updated_at = ?, updated_by = ? WHERE key = ?
+  `).run(String(value || ''), Date.now(), userId || null, key);
+  return r.changes > 0;
+}
+
+// Monta o bloco de texto que vai injetado no prompt da IA com as infos atuais
+// da academia. Só inclui categorias que têm pelo menos 1 valor preenchido,
+// pra não poluir o prompt com seções vazias.
+function buildAcademiaInfoBlock() {
+  const rows = getAllAcademiaInfo().filter(r => r.value && r.value.trim());
+  if (!rows.length) return '';
+  const byCategory = {};
+  for (const r of rows) {
+    if (!byCategory[r.category]) byCategory[r.category] = [];
+    byCategory[r.category].push(r);
+  }
+  const CAT_LABEL = {
+    planos: 'PLANOS E VALORES',
+    estrutura: 'ESTRUTURA / MODALIDADES',
+    horarios: 'HORÁRIOS DE FUNCIONAMENTO',
+    contato: 'LOCALIZAÇÃO E CONTATO',
+    promo: 'PROMO ATUAL',
+    institucional: 'DIFERENCIAIS',
+  };
+  let out = '\n\n═══ INFORMAÇÕES ATUAIS DA STRONIX (atualizadas pela equipe) ═══\n';
+  out += 'Use estes valores em conversas com leads. Em caso de conflito com qualquer outra info no prompt, ESTES valem porque são gerenciados pela equipe.\n';
+  for (const cat of ['promo','planos','estrutura','horarios','contato','institucional']) {
+    if (!byCategory[cat]) continue;
+    out += '\n' + (CAT_LABEL[cat] || cat.toUpperCase()) + ':\n';
+    for (const r of byCategory[cat]) {
+      out += '- ' + (r.label || r.key) + ': ' + r.value + '\n';
+    }
+  }
+  return out;
+}
+
 module.exports = {
   getContact,
   getOrCreateContact,
@@ -890,6 +998,11 @@ module.exports = {
   addMessageWithSender,
   setLastAssistantMessageMediaPath,
   updateMessageDeliveryStatus,
+  // Knowledge base
+  getAllAcademiaInfo,
+  getAcademiaInfoMap,
+  setAcademiaInfo,
+  buildAcademiaInfoBlock,
   // metrics
   getMetrics,
 };

@@ -1,5 +1,6 @@
 const { Router } = require('express');
-const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = require('./agent');
+const agent = require('./agent');
+const { getSystemPrompt, updateSystemPrompt, getConversations, clearConversation } = agent;
 const wa = require('./whatsapp');
 const { sendMessage, sendVoice, transcodeAudio } = wa;
 const fs = require('fs');
@@ -632,6 +633,50 @@ router.get('/api/users-public', (req, res) => {
     display_name: u.display_name,
     role: u.role,
   })));
+});
+
+// Knowledge base (academia_info) — qualquer user logado pode ler, só admin escreve
+router.get('/api/academia-info', (req, res) => {
+  res.json(db.getAllAcademiaInfo());
+});
+
+router.put('/api/academia-info/:key', auth.requireAdmin, (req, res) => {
+  const ok = db.setAcademiaInfo(req.params.key, req.body?.value || '', req.user.id);
+  if (!ok) return res.status(404).json({ error: 'Chave não encontrada' });
+  res.json({ ok: true });
+});
+
+// Playground — simulação de conversa sem efeitos colaterais (não toca DB de
+// conversas, não envia WhatsApp). Usa system prompt + knowledge base atuais.
+router.post('/api/playground/message', async (req, res) => {
+  const { history, message } = req.body || {};
+  if (!message || typeof message !== 'string') return res.status(400).json({ error: 'message obrigatória' });
+  if (history && !Array.isArray(history)) return res.status(400).json({ error: 'history deve ser array' });
+  if (message.length > 2000) return res.status(400).json({ error: 'message muito longa (máx 2000 chars)' });
+  if (Array.isArray(history) && history.length > 50) return res.status(400).json({ error: 'history muito longo (máx 50 msgs)' });
+
+  try {
+    const t0 = Date.now();
+    const result = await agent.simulateReply(history || [], message);
+    const latencyMs = Date.now() - t0;
+    res.json({
+      text: result.text,
+      tokensInput: result.tokensInput,
+      tokensOutput: result.tokensOutput,
+      cacheReadTokens: result.cacheReadTokens,
+      cacheCreationTokens: result.cacheCreationTokens,
+      latencyMs,
+      // Estimativa de custo (Sonnet 4.5: $3/M input, $15/M output, $0.30/M cache read)
+      estimatedCostUSD: (
+        (result.tokensInput - (result.cacheReadTokens || 0)) * 3 / 1_000_000 +
+        (result.cacheReadTokens || 0) * 0.30 / 1_000_000 +
+        (result.tokensOutput) * 15 / 1_000_000
+      ),
+    });
+  } catch (err) {
+    console.error('[playground] erro:', err.message);
+    res.status(500).json({ error: err.message || 'falha ao simular' });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2391,6 +2436,107 @@ router.get('/', (req, res) => {
     .student-row .btn-clear { font-size: 12px; }
 
     /* ════════════════════════════════════════════════
+       KNOWLEDGE BASE (academia_info)
+       ════════════════════════════════════════════════ */
+    .kb-category {
+      margin-bottom: 18px;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: var(--r-lg); overflow: hidden;
+    }
+    .kb-category-title {
+      padding: 10px 16px;
+      background: var(--bg-3); color: var(--text-secondary);
+      font: 600 12px var(--font-sans);
+      text-transform: uppercase; letter-spacing: .06em;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .kb-item {
+      display: grid; grid-template-columns: 220px 1fr;
+      gap: 14px; padding: 12px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      align-items: start;
+    }
+    .kb-item:last-child { border-bottom: none; }
+    .kb-label {
+      font: 500 13px var(--font-sans); color: var(--text-primary);
+    }
+    .kb-desc {
+      font-size: 11.5px; color: var(--text-muted); margin-top: 3px;
+      line-height: 1.4;
+    }
+    .kb-input {
+      width: 100%; box-sizing: border-box;
+      background: var(--bg-1); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: var(--r-md);
+      padding: 9px 12px; font: 14px var(--font-sans);
+      font-family: inherit; outline: none; resize: vertical;
+      min-height: 38px; transition: border-color var(--t-fast);
+    }
+    .kb-input:focus { border-color: var(--brand); }
+    .kb-saving { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+    .kb-saving.ok { color: var(--brand-light); }
+    .kb-saving.err { color: var(--danger); }
+
+    /* ════════════════════════════════════════════════
+       PLAYGROUND (testar agente)
+       ════════════════════════════════════════════════ */
+    .playground-wrap {
+      display: flex; flex-direction: column;
+      height: calc(100vh - 200px);
+      background: var(--bg-1); border: 1px solid var(--border);
+      border-radius: var(--r-lg); overflow: hidden;
+    }
+    .playground-thread {
+      flex: 1; overflow-y: auto; padding: 18px 22px;
+      background: var(--bg-0);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .playground-hint {
+      align-self: center; padding: 32px 18px;
+      color: var(--text-muted); font-size: 13px;
+      text-align: center; max-width: 400px;
+    }
+    .pg-bubble {
+      max-width: 70%; padding: 9px 12px; border-radius: 12px;
+      font-size: 14px; line-height: 1.4;
+      white-space: pre-wrap; overflow-wrap: anywhere;
+      box-shadow: 0 1px 1.5px rgba(0,0,0,.18);
+    }
+    .pg-bubble.user {
+      align-self: flex-end;
+      background: linear-gradient(180deg, var(--bubble-out) 0%, #00513e 100%);
+      color: var(--text-primary);
+      border-top-right-radius: 4px;
+    }
+    .pg-bubble.assistant {
+      align-self: flex-start;
+      background: var(--bubble-in); color: var(--text-primary);
+      border-top-left-radius: 4px;
+    }
+    .pg-bubble.thinking {
+      align-self: flex-start; opacity: .6; font-style: italic;
+      color: var(--text-muted);
+    }
+    .playground-stats {
+      display: flex; gap: 14px; padding: 8px 16px;
+      background: var(--bg-2); border-top: 1px solid var(--border-subtle);
+      font-size: 11px; color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+    .playground-stats span { white-space: nowrap; }
+    .playground-input-bar {
+      display: flex; gap: 10px; padding: 12px 16px;
+      background: var(--bg-2); border-top: 1px solid var(--border);
+    }
+    .playground-input-bar textarea {
+      flex: 1; background: var(--bg-1); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: var(--r-md);
+      padding: 10px 14px; font: 14px var(--font-sans);
+      resize: none; outline: none; min-height: 40px; max-height: 140px;
+    }
+    .playground-input-bar textarea:focus { border-color: var(--brand); }
+
+    /* ════════════════════════════════════════════════
        CONEXÕES (cards de WhatsApp conectado)
        ════════════════════════════════════════════════ */
     .connection-card {
@@ -2575,6 +2721,14 @@ router.get('/', (req, res) => {
             <span class="si"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></svg></span>
             <span>Prompt do agente</span>
           </div>
+          <div class="sub-item" data-nav="conhecimento" onclick="event.stopPropagation();switchTab('conhecimento', this)">
+            <span class="si"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
+            <span>Conhecimento</span>
+          </div>
+          <div class="sub-item" data-nav="playground" onclick="event.stopPropagation();switchTab('playground', this)">
+            <span class="si"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+            <span>Testar agente</span>
+          </div>
           <div class="sub-item admin-only" data-nav="users" onclick="event.stopPropagation();switchTab('users', this)" style="display:none">
             <span class="si"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
             <span>Usuários &amp; permissões</span>
@@ -2726,6 +2880,44 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadMetrics()">↻ Atualizar</button>
   </div>
   <div id="metrics-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px"></div>
+</div>
+
+<div id="tab-conhecimento" class="panel">
+  <div class="conv-header">
+    <h2>Conhecimento da academia</h2>
+    <button class="refresh-btn" onclick="loadKnowledge()">↻ Atualizar</button>
+  </div>
+  <div class="student-help">
+    Edite aqui os <strong>dados que a IA usa</strong> nas conversas (planos, horários, modalidades, promo do mês). Mudança aqui aparece <strong>na próxima resposta da IA</strong> sem precisar mexer no prompt. Salva automático ao sair do campo.
+    <br>Deixa o campo <strong>vazio</strong> pra a IA não mencionar aquela informação.
+  </div>
+  <div id="kb-list">
+    <div class="empty">Carregando...</div>
+  </div>
+</div>
+
+<div id="tab-playground" class="panel">
+  <div class="conv-header">
+    <h2>Testar agente</h2>
+    <button class="refresh-btn" onclick="resetPlayground()">↻ Resetar conversa</button>
+  </div>
+  <div class="student-help">
+    Simule uma conversa com a IA <strong>sem afetar produção</strong>. Útil pra testar mudanças no prompt ou no conhecimento antes de soltar pra leads reais. Cada msg consome ~R$ 0,01-0,03 da cota Anthropic.
+  </div>
+  <div class="playground-wrap">
+    <div class="playground-thread" id="playground-thread">
+      <div class="playground-hint">Comece digitando uma mensagem que um lead enviaria. Ex: "oi, quanto custa?"</div>
+    </div>
+    <div class="playground-stats" id="playground-stats" style="display:none">
+      <span id="pg-tokens">—</span>
+      <span id="pg-latency">—</span>
+      <span id="pg-cost">—</span>
+    </div>
+    <div class="playground-input-bar">
+      <textarea id="playground-input" placeholder="Digite como se fosse o lead..." rows="2" onkeydown="onPlaygroundKey(event)"></textarea>
+      <button class="btn-add" id="playground-send-btn" onclick="sendPlayground()">Enviar</button>
+    </div>
+  </div>
 </div>
 
 <div id="tab-conexoes" class="panel">
@@ -4092,6 +4284,8 @@ router.get('/', (req, res) => {
     users:         { label: 'Usuários & permissões', tag: '' },
     metrics:       { label: 'Métricas',          tag: 'últimos 30d' },
     conexoes:      { label: 'Conexões WhatsApp', tag: '' },
+    conhecimento:  { label: 'Conhecimento',      tag: '' },
+    playground:    { label: 'Testar agente',     tag: '' },
   };
 
   function updateCrumb(tab) {
@@ -4112,7 +4306,7 @@ router.get('/', (req, res) => {
     document.querySelectorAll('.nav-item[data-nav], .sub-item[data-nav]').forEach(el => {
       el.classList.toggle('active', el.dataset.nav === tab);
     });
-    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes') {
+    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes' || tab === 'conhecimento' || tab === 'playground') {
       const cfg = document.getElementById('cfg-group');
       if (cfg) cfg.classList.add('open');
     }
@@ -4146,6 +4340,8 @@ router.get('/', (req, res) => {
     } else {
       stopConexoesPolling();
     }
+    if (tab === 'conhecimento') loadKnowledge();
+    if (tab === 'playground') initPlayground();
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -4254,6 +4450,179 @@ router.get('/', (req, res) => {
         '</div>' +
       '</div>' +
     '</div>';
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Aba Conhecimento (academia_info — knowledge base editável)
+  // ─────────────────────────────────────────────────────────────────
+  const CAT_LABELS_KB = {
+    promo:         '🔥 Promo atual',
+    planos:        '💰 Planos & valores',
+    estrutura:     '🏋️ Modalidades & estrutura',
+    horarios:      '⏰ Horários',
+    contato:       '📍 Localização & contato',
+    institucional: '⭐ Diferenciais',
+  };
+  async function loadKnowledge() {
+    const list = document.getElementById('kb-list');
+    if (!list) return;
+    try {
+      const r = await fetch('/admin/api/academia-info');
+      const items = await r.json();
+      const byCat = {};
+      for (const it of items) {
+        const c = it.category || 'outros';
+        (byCat[c] = byCat[c] || []).push(it);
+      }
+      const order = ['promo','planos','estrutura','horarios','contato','institucional'];
+      let html = '';
+      for (const cat of order) {
+        if (!byCat[cat]) continue;
+        html += '<div class="kb-category">';
+        html += '<div class="kb-category-title">' + (CAT_LABELS_KB[cat] || cat) + '</div>';
+        for (const it of byCat[cat]) {
+          html += '<div class="kb-item">';
+          html += '<div>';
+          html += '<div class="kb-label">' + escapeHtml(it.label || it.key) + '</div>';
+          if (it.description) html += '<div class="kb-desc">' + escapeHtml(it.description) + '</div>';
+          html += '</div>';
+          html += '<div>';
+          const isMulti = it.key === 'modalidades' || it.key === 'diferenciais' || it.key === 'plano_observacoes' || it.key === 'promo_atual_descricao';
+          if (isMulti) {
+            html += '<textarea class="kb-input" data-key="' + escapeHtml(it.key) + '" rows="3" onblur="saveKnowledge(this)">' + escapeHtml(it.value || '') + '</textarea>';
+          } else {
+            html += '<input class="kb-input" type="text" data-key="' + escapeHtml(it.key) + '" value="' + escapeHtml(it.value || '') + '" onblur="saveKnowledge(this)">';
+          }
+          html += '<div class="kb-saving" id="kb-saving-' + escapeHtml(it.key) + '"></div>';
+          html += '</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+      list.innerHTML = html || '<div class="empty">Nenhum item de conhecimento.</div>';
+    } catch (e) {
+      list.innerHTML = '<div class="empty">Erro: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  async function saveKnowledge(el) {
+    const key = el.dataset.key;
+    const value = el.value;
+    const status = document.getElementById('kb-saving-' + key);
+    if (status) { status.textContent = 'Salvando...'; status.className = 'kb-saving'; }
+    try {
+      const r = await fetch('/admin/api/academia-info/' + encodeURIComponent(key), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || 'falha');
+      }
+      if (status) { status.textContent = '✓ Salvo'; status.className = 'kb-saving ok'; }
+      setTimeout(() => { if (status) status.textContent = ''; }, 1500);
+    } catch (e) {
+      if (status) { status.textContent = 'Erro: ' + e.message; status.className = 'kb-saving err'; }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Aba Playground (testar agente)
+  // ─────────────────────────────────────────────────────────────────
+  let playgroundHistory = [];
+
+  function initPlayground() {
+    // Foca no input ao abrir
+    setTimeout(() => document.getElementById('playground-input')?.focus(), 100);
+  }
+
+  function resetPlayground() {
+    playgroundHistory = [];
+    const t = document.getElementById('playground-thread');
+    if (t) t.innerHTML = '<div class="playground-hint">Comece digitando uma mensagem que um lead enviaria. Ex: "oi, quanto custa?"</div>';
+    const stats = document.getElementById('playground-stats');
+    if (stats) stats.style.display = 'none';
+  }
+
+  function onPlaygroundKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendPlayground();
+    }
+  }
+
+  async function sendPlayground() {
+    const inp = document.getElementById('playground-input');
+    const btn = document.getElementById('playground-send-btn');
+    const thread = document.getElementById('playground-thread');
+    if (!inp || !thread) return;
+    const text = inp.value.trim();
+    if (!text) return;
+    // Remove hint inicial
+    const hint = thread.querySelector('.playground-hint');
+    if (hint) hint.remove();
+    // Push msg do user
+    const userBubble = document.createElement('div');
+    userBubble.className = 'pg-bubble user';
+    userBubble.textContent = text;
+    thread.appendChild(userBubble);
+    inp.value = '';
+    inp.disabled = true;
+    if (btn) btn.disabled = true;
+    // "Pensando…" placeholder
+    const thinking = document.createElement('div');
+    thinking.className = 'pg-bubble thinking';
+    thinking.textContent = 'pensando…';
+    thread.appendChild(thinking);
+    thread.scrollTop = thread.scrollHeight;
+
+    try {
+      const r = await fetch('/admin/api/playground/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history: playgroundHistory, message: text }),
+      });
+      const data = await r.json();
+      thinking.remove();
+      if (!r.ok) {
+        const err = document.createElement('div');
+        err.className = 'pg-bubble assistant';
+        err.style.color = 'var(--danger)';
+        err.textContent = 'Erro: ' + (data.error || 'falhou');
+        thread.appendChild(err);
+        return;
+      }
+      const aiBubble = document.createElement('div');
+      aiBubble.className = 'pg-bubble assistant';
+      aiBubble.textContent = data.text;
+      thread.appendChild(aiBubble);
+      // Atualiza histórico interno (pra próxima chamada)
+      playgroundHistory.push({ role: 'user', content: text });
+      playgroundHistory.push({ role: 'assistant', content: data.text });
+      // Stats
+      const stats = document.getElementById('playground-stats');
+      if (stats) {
+        stats.style.display = 'flex';
+        document.getElementById('pg-tokens').textContent =
+          'in: ' + data.tokensInput + ' (cache: ' + (data.cacheReadTokens || 0) + ') · out: ' + data.tokensOutput;
+        document.getElementById('pg-latency').textContent = data.latencyMs + ' ms';
+        const brl = (data.estimatedCostUSD * 5.5).toFixed(4); // USD → BRL aprox
+        document.getElementById('pg-cost').textContent = '~R$ ' + brl;
+      }
+      thread.scrollTop = thread.scrollHeight;
+    } catch (e) {
+      thinking.remove();
+      const err = document.createElement('div');
+      err.className = 'pg-bubble assistant';
+      err.style.color = 'var(--danger)';
+      err.textContent = 'Falha de conexão: ' + e.message;
+      thread.appendChild(err);
+    } finally {
+      inp.disabled = false;
+      if (btn) btn.disabled = false;
+      inp.focus();
+    }
   }
 
   async function disconnectConnection() {
