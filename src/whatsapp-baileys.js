@@ -99,6 +99,28 @@ async function start() {
     }
   });
 
+  // Status updates (sent/delivered/read) — mapeia pra checkmarks no painel
+  sock.ev.on('messages.update', async (updates) => {
+    const db = require('./db');
+    for (const u of updates) {
+      const wamid = u.key?.id;
+      if (!wamid) continue;
+      // WAMessageStatus: 1=pending, 2=server_ack(sent), 3=delivery_ack(delivered), 4=read, 5=played
+      const s = u.update?.status;
+      let status = null;
+      if (s === 2) status = 'sent';
+      else if (s === 3) status = 'delivered';
+      else if (s === 4 || s === 5) status = 'read';
+      if (status) {
+        try {
+          db.updateMessageDeliveryStatus(wamid, status, Math.floor(Date.now() / 1000));
+        } catch (e) {
+          console.error('[baileys] erro update status:', e.message);
+        }
+      }
+    }
+  });
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
@@ -141,20 +163,61 @@ async function ensureConnected() {
   }
 }
 
+// Resolve o JID canônico no servidor WhatsApp. Lida com o bug do 9º dígito BR:
+// número pode estar registrado como 12 dígitos (sem o 9) ou 13 dígitos (com o 9),
+// e mandar pro errado faz a msg ser silenciosamente descartada.
+//
+// Estratégia: tenta o input bruto, depois variações com/sem 9. Pega o primeiro
+// que o WhatsApp confirmar que existe.
+async function resolveJid(to) {
+  const clean = String(to).replace(/\D/g, '');
+  const candidates = [clean];
+  // BR mobile: gera variação com/sem 9
+  if (clean.startsWith('55') && clean.length === 13) {
+    // Tem o 9 — adiciona variação sem o 9
+    candidates.push(clean.slice(0, 4) + clean.slice(5));
+  } else if (clean.startsWith('55') && clean.length === 12) {
+    // Não tem o 9 — adiciona variação com o 9
+    candidates.push(clean.slice(0, 4) + '9' + clean.slice(4));
+  }
+  const jids = candidates.map(c => `${c}@s.whatsapp.net`);
+
+  try {
+    const results = await sock.onWhatsApp(...jids);
+    if (Array.isArray(results) && results.length) {
+      const found = results.find(r => r.exists);
+      if (found) {
+        if (found.jid !== jids[0]) {
+          console.log(`[baileys] JID resolvido ${jids[0]} → ${found.jid} (variação BR 9-dígito)`);
+        }
+        return found.jid;
+      }
+      console.warn(`[baileys] ⚠️ ${to} não tem WhatsApp ativo (testou ${candidates.length} formatos)`);
+    }
+  } catch (e) {
+    console.warn('[baileys] erro em onWhatsApp, vai tentar enviar sem validar:', e.message);
+  }
+  return jids[0]; // fallback — tenta o input original
+}
+
 async function sendMessage(to, text) {
   await ensureConnected();
-  const result = await sock.sendMessage(jidOf(to), { text });
+  const targetJid = await resolveJid(to);
+  const result = await sock.sendMessage(targetJid, { text });
+  console.log(`[baileys] sendMessage → ${targetJid} (id=${result?.key?.id || 'sem-id'}, ${text.length} chars)`);
   return { messages: [{ id: result?.key?.id || null }] };
 }
 
 // Envia áudio como voz (PTT — push-to-talk, aparece como "voice message")
 async function sendAudio(to, audioBuffer, mimeType = 'audio/ogg; codecs=opus') {
   await ensureConnected();
-  const result = await sock.sendMessage(jidOf(to), {
+  const targetJid = await resolveJid(to);
+  const result = await sock.sendMessage(targetJid, {
     audio: audioBuffer,
     mimetype: mimeType,
     ptt: true,
   });
+  console.log(`[baileys] sendAudio → ${targetJid} (id=${result?.key?.id || 'sem-id'}, ${audioBuffer.length} bytes)`);
   return { messages: [{ id: result?.key?.id || null }] };
 }
 
