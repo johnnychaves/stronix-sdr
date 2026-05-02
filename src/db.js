@@ -340,7 +340,30 @@ function getContact(phone) {
   return stmts.getContact.get(phone) || null;
 }
 
+// Canonicaliza um phone tentando variações BR antes de criar duplicata.
+// Cenário: user cria contato '5551997564760' (com 9). Quando o lead responde,
+// WhatsApp manda como '555197564760' (sem 9 — JID canônico). Sem este lookup,
+// criaríamos 2 contatos pra mesma pessoa.
+//
+// Estratégia: tenta phone exato; se não existe, tenta variação ±9; se uma
+// dessas existe, retorna a forma já cadastrada.
+function canonicalizeContactPhone(phone) {
+  if (!phone) return phone;
+  const p = String(phone);
+  if (stmts.getContact.get(p)) return p;
+  if (p.startsWith('55') && p.length === 13 && p[4] === '9') {
+    const without9 = p.slice(0, 4) + p.slice(5);
+    if (stmts.getContact.get(without9)) return without9;
+  } else if (p.startsWith('55') && p.length === 12) {
+    const with9 = p.slice(0, 4) + '9' + p.slice(4);
+    if (stmts.getContact.get(with9)) return with9;
+  }
+  return p; // nenhuma variação existe — caller decide criar
+}
+
 function getOrCreateContact(phone) {
+  // Sempre passa pelo canonicalize antes — se variação ±9 já existe, usa ela
+  phone = canonicalizeContactPhone(phone);
   let contact = getContact(phone);
   if (!contact) {
     const now = Date.now();
@@ -352,6 +375,7 @@ function getOrCreateContact(phone) {
 }
 
 function updateLastContact(phone) {
+  phone = canonicalizeContactPhone(phone);
   stmts.updateLastContact.run(Date.now(), phone);
 }
 
@@ -370,6 +394,8 @@ function updateAudioFlags(phone, { audioPermission, awaitingAudioConfirm, askedF
 }
 
 function addMessage(phone, role, content, wasAudio = false, mediaPath = null) {
+  // Canonicaliza phone pra unificar com contato existente (variação ±9 BR)
+  phone = canonicalizeContactPhone(phone);
   // Mantém schema antigo (5 colunas) por compat — wamid sempre NULL aqui
   // (mensagens entrantes do lead não têm wamid próprio relevante)
   if (mediaPath) {
@@ -689,6 +715,7 @@ function getContactAssignment(phone) {
 // Mensagem com sender (NULL = IA, ou user_id da consultora)
 // Retorna o lastInsertRowid pra quem precisar atualizar wamid/status depois.
 function addMessageWithSender(phone, role, content, wasAudio, sentByUserId, mediaPath = null, wamid = null) {
+  phone = canonicalizeContactPhone(phone);
   const r = stmts.insertMessageWithSender.run(
     phone, role, content, wasAudio ? 1 : 0,
     sentByUserId || null, Date.now(),
@@ -786,6 +813,7 @@ function bulkUpsertStudents(items) {
 module.exports = {
   getContact,
   getOrCreateContact,
+  canonicalizeContactPhone,
   setContactName,
   updateLastContact,
   updateAudioFlags,
