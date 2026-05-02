@@ -63,15 +63,16 @@ async function uploadAudioToMeta(filePath) {
   return data.id;
 }
 
-// Pipeline completo: texto → ElevenLabs → upload Meta → media_id
+// Pipeline: texto → ElevenLabs → buffer (mp3). Retorna { buffer, mimeType }.
+// O facade whatsapp.sendVoice cuida de upload (Meta) ou envio direto (Baileys).
 async function textToAudioMessage(text) {
   const filePath = await generateSpeech(text);
   try {
-    const mediaId = await uploadAudioToMeta(filePath);
-    return mediaId;
+    const buffer = fs.readFileSync(filePath);
+    return { buffer, mimeType: 'audio/mpeg' };
   } finally {
     fs.unlink(filePath, () => {});
   }
 }
 
-module.exports = { textToAudioMessage };
+module.exports = { textToAudioMessage, generateSpeech, uploadAudioToMeta };

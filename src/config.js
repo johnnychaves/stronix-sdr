@@ -1,10 +1,12 @@
 require('dotenv').config({ override: true });
 
-const required = [
-  'WHATSAPP_PHONE_NUMBER_ID',
-  'WHATSAPP_ACCESS_TOKEN',
-  'WEBHOOK_VERIFY_TOKEN',
-];
+const PROVIDER = (process.env.WHATSAPP_PROVIDER || 'meta').toLowerCase();
+
+// Vars obrigatórias só quando o provider é Meta Cloud API.
+// Quando WHATSAPP_PROVIDER=baileys, não precisa de credencial Meta.
+const required = PROVIDER === 'baileys'
+  ? []
+  : ['WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_ACCESS_TOKEN', 'WEBHOOK_VERIFY_TOKEN'];
 
 for (const key of required) {
   if (!process.env[key]) {
