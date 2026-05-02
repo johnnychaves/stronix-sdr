@@ -189,10 +189,14 @@ Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda
 | Item | Prioridade | Detalhe |
 |---|---|---|
 | **Trocar pro número real da academia** | 🔴 Alta (próximo passo) | Hoje rodando no celular pessoal do Johnny pra teste. Quando estável: para o JetSales, abre Conexões → Desconectar → escaneia QR com número da academia. Tudo pronto. |
+| **AGENT_VERSION fica em v1 até Fase 2 completa** | 🔴 Política firme | Mesmo após merge do PR33 (fixes pré-Fase 2), `AGENT_VERSION=v1` continua default. Sistema sem Roteador é incompleto e cai em fallback genérico em conversas com objeção/contexto fora do roteiro principal. |
+| **Fase 2 — Roteador de módulos** | 🟡 Próximo PR (PR34?) | Construir lógica que decide DINAMICAMENTE quais módulos carregar baseado em estado + contexto. Hoje só carrega `modulo_pendente` do turno anterior. Ver comentário em [agent-v2.js:11](src/agent-v2.js:11). |
+| **Medição rollout 5% — tag esquecida** | 🟡 Pré-rollout v2 | Após Fase 2 + ligar `AGENT_VERSION=v2` em 5% das conversas: contar quantas vezes `[ESTADO:]` não foi emitido em 50 conversas reais. Critérios: <10% aceita como known issue, 10-20% prioriza Fase 6, >20% abre re-arquitetura com tool use estruturado como Fase 6 prioritária. Known issue aberto no PR33. |
 | Templates Meta (fallback opcional) | 🟢 Baixa | Se precisar mandar pra contato fora da janela 24h em modo Meta. Não necessário em Baileys. |
 | Fase 3 — Version history do prompt | 🟡 Média | Snapshot a cada save + diff + revert. Ainda não implementado. |
 | Fase 4 — Coaching loop | 🟡 Média | Quando 👎 conversa, abrir form "como deveria ter respondido?" → vira few-shot example. |
 | Fase 5 — Tone settings (sliders) | 🟢 Baixa | Formal/casual, curto/extenso. Adiciona modificadores no prompt. |
+| Fase 6 (potencial) — tool use estruturado | 🟢 Condicional | Migrar tag `[ESTADO:]` no texto pra tool use da Anthropic SDK, eliminando o problema do LLM esquecer tag em respostas longas. Só prioriza se medição do rollout 5% mostrar >10% de tag esquecida. |
 | Multi-número | 🟢 Baixa | Hoje 1 número por instalação. Refactor pra rodar academia + marketing em números separados — só se tiver demanda. |
 | Google Calendar | 🟡 Média | Criar evento automático no calendar da academia. Hoje a notificação WhatsApp resolve. |
 | Renovação do token Meta | 🟡 Média (só relevante se voltar pra Meta) | Token de 60 dias. Em Baileys não é usado. |
