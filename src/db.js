@@ -355,6 +355,11 @@ function updateLastContact(phone) {
   stmts.updateLastContact.run(Date.now(), phone);
 }
 
+// Atualiza nome de um contato (NULL pra limpar)
+function setContactName(phone, name) {
+  stmts.updateName.run(name && name.trim() ? name.trim() : null, phone);
+}
+
 function updateAudioFlags(phone, { audioPermission, awaitingAudioConfirm, askedForAudio }) {
   stmts.updateAudioFlags.run(
     audioPermission ? 1 : 0,
@@ -781,6 +786,7 @@ function bulkUpsertStudents(items) {
 module.exports = {
   getContact,
   getOrCreateContact,
+  setContactName,
   updateLastContact,
   updateAudioFlags,
   addMessage,
