@@ -156,6 +156,56 @@ function phoneOf(jid) {
   return String(jid).split('@')[0].split(':')[0];
 }
 
+// Cache de LID → phone (preenchido conforme descobrimos mappings)
+const lidToPhone = new Map();
+
+// Extrai o phone "canônico" da chave de uma mensagem.
+// Trata o caso de privacidade do WhatsApp Multi-Device onde remoteJid pode ser
+// '<lid>@lid' em vez de '<phone>@s.whatsapp.net'. Tenta vários campos
+// fallback que o Baileys popula em versões recentes:
+//   - key.remoteJidAlt (PN alternativo)
+//   - key.senderPn / key.participantPn
+//   - cache lidToPhone (preenchido em encontros anteriores)
+function extractPhoneFromKey(key) {
+  if (!key) return null;
+  const r = key.remoteJid || '';
+
+  // Caso 1: JID padrão com phone
+  if (r.endsWith('@s.whatsapp.net')) {
+    return r.split('@')[0].split(':')[0];
+  }
+
+  // Caso 2: LID (privacy) — tenta resolver
+  if (r.endsWith('@lid')) {
+    const lid = r.split('@')[0];
+
+    // Cache hit?
+    if (lidToPhone.has(lid)) return lidToPhone.get(lid);
+
+    // remoteJidAlt costuma ser o PN equivalente
+    if (key.remoteJidAlt && /@s\.whatsapp\.net$/.test(key.remoteJidAlt)) {
+      const pn = key.remoteJidAlt.split('@')[0].split(':')[0];
+      lidToPhone.set(lid, pn);
+      return pn;
+    }
+    if (key.senderPn) {
+      const pn = String(key.senderPn).replace(/[^0-9]/g, '');
+      if (pn) { lidToPhone.set(lid, pn); return pn; }
+    }
+    if (key.participantPn) {
+      const pn = String(key.participantPn).replace(/[^0-9]/g, '');
+      if (pn) { lidToPhone.set(lid, pn); return pn; }
+    }
+
+    // Não conseguiu resolver — loga estrutura completa da key pra diagnóstico
+    console.warn('[baileys] LID não resolvido:', JSON.stringify(key));
+    return lid; // fallback (vai criar contato separado pelo LID)
+  }
+
+  // Caso 3: outros (group @g.us, broadcast etc) — extrai o que dá
+  return r.split('@')[0].split(':')[0];
+}
+
 async function ensureConnected() {
   if (!sock) throw new Error('Baileys ainda não foi inicializado');
   if (connectionStatus !== 'open') {
@@ -285,6 +335,7 @@ module.exports = {
   getStatus,
   setMessageHandler,
   extractMessageBody,
+  extractPhoneFromKey,
   phoneOf,
   jidOf,
   disconnect,

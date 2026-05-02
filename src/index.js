@@ -47,7 +47,8 @@ app.listen(config.port, async () => {
       const { handleIncomingMessage } = webhook;
 
       baileys.setMessageHandler(async (msg, sock) => {
-        const from = baileys.phoneOf(msg.key.remoteJid);
+        // Usa extractor robusto que trata LID (privacy mode WhatsApp Multi-Device)
+        const from = baileys.extractPhoneFromKey(msg.key);
         const body = baileys.extractMessageBody(msg);
         if (body.type === 'text') {
           console.log(`[baileys] texto de ${from}: "${body.text}"`);
