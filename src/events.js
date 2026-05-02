@@ -44,10 +44,17 @@ function emitStudentsChanged() {
   bus.emit('students.changed');
 }
 
+// Alerta operacional — toast no painel + browser notification.
+// severity: 'info' | 'warn' | 'error'
+function emitAlert({ severity = 'warn', title, message, code = null }) {
+  bus.emit('alert', { severity, title, message, code, ts: Date.now() });
+}
+
 module.exports = {
   bus,
   emitConversationChanged,
   emitConnectionsChanged,
   emitAppointmentsChanged,
   emitStudentsChanged,
+  emitAlert,
 };

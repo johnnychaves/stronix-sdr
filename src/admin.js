@@ -484,10 +484,12 @@ router.get('/api/events', (req, res) => {
   const onConn = () => send('connections.changed', {});
   const onAppt = () => send('appointments.changed', {});
   const onStud = () => send('students.changed', {});
+  const onAlert = (data) => send('alert', data);
   events.bus.on('conversation.changed', onConv);
   events.bus.on('connections.changed', onConn);
   events.bus.on('appointments.changed', onAppt);
   events.bus.on('students.changed', onStud);
+  events.bus.on('alert', onAlert);
 
   // Heartbeat a cada 25s — alguns proxies cortam conexão idle após 30-60s
   const heartbeat = setInterval(() => {
@@ -501,6 +503,7 @@ router.get('/api/events', (req, res) => {
     events.bus.off('connections.changed', onConn);
     events.bus.off('appointments.changed', onAppt);
     events.bus.off('students.changed', onStud);
+    events.bus.off('alert', onAlert);
   });
 });
 
@@ -825,20 +828,38 @@ router.post('/api/conversations/:phone/reply', async (req, res) => {
   } catch (err) {
     const meta = err.response?.data?.error;
     console.error('[admin] erro ao enviar reply humano:', meta || err.message);
-    // Erros típicos da Meta — traduzir pra mensagem amigável
+    const ev = require('./events');
     if (meta && (meta.code === 131047 || /re-engagement|24-hour/i.test(meta.message || ''))) {
+      ev.emitAlert({
+        severity: 'warn',
+        title: 'Mensagem não enviada (janela 24h)',
+        message: `${phone} não respondeu nas últimas 24h. Use template ou aguarde resposta.`,
+        code: 'window_24h_closed',
+      });
       return res.status(400).json({
         error: 'Esse contato não respondeu nas últimas 24h. Pra reativar, peça pra ele te mandar uma mensagem primeiro (ou use template aprovada — em breve).',
         code: 'window_24h_closed',
       });
     }
     if (meta && meta.code === 131026) {
+      ev.emitAlert({
+        severity: 'warn',
+        title: 'Número inválido',
+        message: `${phone} não tem WhatsApp ativo.`,
+        code: 'invalid_recipient',
+      });
       return res.status(400).json({
         error: 'Número inválido ou não tem WhatsApp. Confere o telefone.',
         code: 'invalid_recipient',
       });
     }
-    res.status(500).json({ error: meta?.message || 'Falha ao enviar mensagem' });
+    ev.emitAlert({
+      severity: 'error',
+      title: 'Falha ao enviar mensagem',
+      message: `Erro mandando pra ${phone}: ${meta?.message || err.message || 'desconhecido'}`,
+      code: 'send_failed',
+    });
+    res.status(500).json({ error: meta?.message || err.message || 'Falha ao enviar mensagem' });
   }
 });
 
@@ -945,19 +966,38 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
   } catch (err) {
     const meta = err.response?.data?.error;
     console.error('[admin] erro ao enviar audio:', meta || err.message);
+    const ev = require('./events');
     if (meta && (meta.code === 131047 || /re-engagement|24-hour/i.test(meta.message || ''))) {
+      ev.emitAlert({
+        severity: 'warn',
+        title: 'Áudio não enviado (janela 24h)',
+        message: `${phone} não respondeu nas últimas 24h.`,
+        code: 'window_24h_closed',
+      });
       return res.status(400).json({
         error: 'Esse contato não respondeu nas últimas 24h. Pra mandar áudio, peça pra ele te mandar uma mensagem primeiro.',
         code: 'window_24h_closed',
       });
     }
     if (meta && meta.code === 131026) {
+      ev.emitAlert({
+        severity: 'warn',
+        title: 'Número inválido',
+        message: `${phone} não tem WhatsApp ativo.`,
+        code: 'invalid_recipient',
+      });
       return res.status(400).json({
         error: 'Número inválido ou não tem WhatsApp.',
         code: 'invalid_recipient',
       });
     }
-    res.status(500).json({ error: meta?.message || 'Falha ao enviar áudio. Verifique se o número aceita áudio e tente novamente.' });
+    ev.emitAlert({
+      severity: 'error',
+      title: 'Falha ao enviar áudio',
+      message: `Erro mandando áudio pra ${phone}: ${meta?.message || err.message || 'desconhecido'}`,
+      code: 'send_audio_failed',
+    });
+    res.status(500).json({ error: meta?.message || err.message || 'Falha ao enviar áudio. Verifique se o número aceita áudio e tente novamente.' });
   }
 });
 
@@ -1435,6 +1475,90 @@ router.get('/', (req, res) => {
       font-size: 11.5px; color: var(--text-muted);
       line-height: 1.5;
     }
+
+    /* ════════════════════════════════════════════════
+       BANNER + TOAST — sistema de notificação operacional
+       ════════════════════════════════════════════════ */
+    /* Banner persistente no topo (WhatsApp desconectado, etc) */
+    .conn-banner {
+      position: fixed; top: 0; left: 64px; right: 0;
+      z-index: 150;
+      background: linear-gradient(90deg, rgba(248,113,113,.18) 0%, rgba(248,113,113,.10) 100%);
+      border-bottom: 1px solid rgba(248,113,113,.4);
+      color: #fecaca;
+      font: 600 13px var(--font-sans);
+      padding: 9px 18px;
+      display: flex; align-items: center; gap: 10px;
+      cursor: pointer;
+      animation: bannerSlideDown .25s ease-out;
+      transition: filter var(--t-fast);
+    }
+    .conn-banner:hover { filter: brightness(1.15); }
+    .conn-banner.hidden { display: none; }
+    @keyframes bannerSlideDown {
+      from { transform: translateY(-100%); }
+      to   { transform: translateY(0); }
+    }
+    .app.pinned .conn-banner { left: 240px; }
+    .conn-banner-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #f87171;
+      box-shadow: 0 0 0 0 rgba(248,113,113,.7);
+      animation: bannerPulse 1.5s ease-in-out infinite;
+    }
+    @keyframes bannerPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,.7); }
+      50%      { box-shadow: 0 0 0 7px rgba(248,113,113,0); }
+    }
+    .conn-banner-text { flex: 1; }
+    .conn-banner-cta { font-weight: 700; opacity: .9; }
+
+    /* Toast stack — notificações transitórias */
+    .toast-stack {
+      position: fixed; top: 18px; right: 18px;
+      display: flex; flex-direction: column; gap: 10px;
+      z-index: 250;
+      max-width: 360px; pointer-events: none;
+    }
+    .toast {
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-left: 3px solid var(--brand);
+      border-radius: 10px;
+      padding: 11px 14px;
+      box-shadow: var(--shadow-lg);
+      pointer-events: auto;
+      cursor: pointer;
+      animation: toastIn .25s cubic-bezier(.22, 1, .36, 1);
+      transition: transform var(--t-fast), opacity var(--t-fast);
+    }
+    .toast:hover { transform: translateX(-3px); }
+    .toast.fading { opacity: 0; transform: translateX(40px); }
+    .toast.warn  { border-left-color: var(--warn); }
+    .toast.error { border-left-color: var(--danger); }
+    .toast.info  { border-left-color: #818cf8; }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(40px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .toast-title {
+      font: 600 13px var(--font-sans);
+      color: var(--text-primary);
+      margin-bottom: 3px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .toast-icon { font-size: 16px; line-height: 1; }
+    .toast-msg {
+      font-size: 12.5px; color: var(--text-secondary);
+      line-height: 1.45;
+    }
+    .toast-close {
+      position: absolute; top: 6px; right: 8px;
+      background: none; border: none; cursor: pointer;
+      color: var(--text-faint); font-size: 16px; line-height: 1;
+      padding: 2px 6px;
+    }
+    .toast-close:hover { color: var(--text-primary); }
+    .toast { position: relative; padding-right: 28px; }
 
     /* Hint do rail (primeira vez) */
     .rail-hint {
@@ -2641,6 +2765,16 @@ router.get('/', (req, res) => {
 </div><!-- /.app -->
 
 <div class="rail-hint" id="rail-hint">Passe o mouse no rail para expandir · <kbd>⌘</kbd> <kbd>B</kbd> para fixar</div>
+
+<!-- Banner persistente — aparece quando WhatsApp tá fora -->
+<div class="conn-banner hidden" id="conn-banner" onclick="switchTab('conexoes')">
+  <span class="conn-banner-dot"></span>
+  <span class="conn-banner-text" id="conn-banner-text">WhatsApp desconectado</span>
+  <span class="conn-banner-cta">Resolver →</span>
+</div>
+
+<!-- Stack de toasts (canto sup direito) -->
+<div class="toast-stack" id="toast-stack"></div>
 
 <!-- Modal: Nova conversa -->
 <div class="modal-backdrop hidden" id="new-chat-backdrop" onclick="if(event.target===this)closeNewChat()">
@@ -4501,6 +4635,8 @@ router.get('/', (req, res) => {
       sseSource.addEventListener('connections.changed', () => {
         const onConexoesTab = document.getElementById('tab-conexoes')?.classList.contains('active');
         if (onConexoesTab) loadConnections();
+        // Sempre re-checa o banner (status pode ter mudado pra qualquer aba)
+        refreshConnectionBanner();
       });
       sseSource.addEventListener('appointments.changed', () => {
         const onApptTab = document.getElementById('tab-agendamentos')?.classList.contains('active');
@@ -4510,18 +4646,91 @@ router.get('/', (req, res) => {
         const onAlunosTab = document.getElementById('tab-alunos')?.classList.contains('active');
         if (onAlunosTab) loadStudents();
       });
+      sseSource.addEventListener('alert', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          showToast(data);
+        } catch (err) { console.error('[sse] alert parse fail:', err); }
+      });
       sseSource.onerror = () => {
         sseFailures++;
         sseHealthy = false;
-        // EventSource já reconecta sozinho. Só logamos.
         if (sseFailures === 1) console.warn('[sse] conexão caiu — reconectando…');
-        if (sseFailures > 5) {
-          console.warn('[sse] falhou muitas vezes, polling continua de backup');
-        }
+        if (sseFailures > 5) console.warn('[sse] falhou muitas vezes, polling continua de backup');
       };
     } catch (e) {
       console.error('[sse] falha ao iniciar:', e);
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Sistema de notificações: banner persistente + toasts
+  // ─────────────────────────────────────────────────────────────────
+  async function refreshConnectionBanner() {
+    try {
+      const r = await fetch('/admin/api/whatsapp/status');
+      const s = await r.json();
+      const banner = document.getElementById('conn-banner');
+      const txt = document.getElementById('conn-banner-text');
+      if (!banner || !txt) return;
+      // Mostra banner quando WhatsApp NÃO tá 'open' E provider é Baileys
+      // (Meta sempre considera 'open' do nosso lado — erros viram toasts)
+      if (s.provider === 'baileys' && s.status !== 'open') {
+        const map = {
+          qr:         'WhatsApp aguardando você escanear o QR.',
+          connecting: 'WhatsApp conectando…',
+          close:      'WhatsApp desconectado. Mensagens não chegam.',
+          unavailable:'Sistema WhatsApp indisponível.',
+        };
+        txt.textContent = map[s.status] || ('WhatsApp em estado: ' + s.status);
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+    } catch {}
+  }
+
+  let toastSeq = 0;
+  function showToast({ severity = 'warn', title, message, code }) {
+    const stack = document.getElementById('toast-stack');
+    if (!stack) return;
+    const id = 'toast-' + (++toastSeq);
+    const icon = severity === 'error' ? '❌' : severity === 'info' ? 'ℹ️' : '⚠️';
+    const el = document.createElement('div');
+    el.className = 'toast ' + severity;
+    el.id = id;
+    el.innerHTML =
+      '<button class="toast-close" onclick="dismissToast(\\'' + id + '\\')">×</button>' +
+      '<div class="toast-title"><span class="toast-icon">' + icon + '</span>' + escapeHtml(title || '') + '</div>' +
+      '<div class="toast-msg">' + escapeHtml(message || '') + '</div>';
+    el.onclick = (e) => {
+      if (e.target.closest('.toast-close')) return;
+      // Click no toast → vai pra Conexões se for relacionado a conexão
+      if (code === 'whatsapp_disconnected' || code === 'whatsapp_reconnected') {
+        switchTab('conexoes');
+      }
+      dismissToast(id);
+    };
+    stack.appendChild(el);
+    // Auto-dismiss após 6s (info), 8s (warn), 12s (error)
+    const ttl = severity === 'error' ? 12000 : severity === 'info' ? 6000 : 8000;
+    setTimeout(() => dismissToast(id), ttl);
+
+    // Browser notification (se tiver permissão)
+    if (severity !== 'info' && 'Notification' in window && Notification.permission === 'granted' && document.hidden) {
+      try {
+        const n = new Notification(title || 'STRONIX SDR', { body: message || '', tag: code || id, silent: false });
+        n.onclick = () => { window.focus(); n.close(); };
+        setTimeout(() => n.close(), 8000);
+      } catch {}
+    }
+  }
+
+  function dismissToast(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add('fading');
+    setTimeout(() => el.remove(), 250);
   }
 
   (async () => {
@@ -4538,6 +4747,8 @@ router.get('/', (req, res) => {
 
     // SSE depois do loadMe (precisa cookie de auth setado)
     startSSE();
+    // Banner de conexão (visível enquanto WhatsApp tá fora)
+    refreshConnectionBanner();
   })();
 </script>
 </body>
