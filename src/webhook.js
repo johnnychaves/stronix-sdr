@@ -6,6 +6,19 @@ const { sendMessage, notifyStudent, notifyAssignedConsultor, PROVIDER } = wa;
 const { transcribeAudio, transcribeAudioBuffer } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
 const db = require('./db');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// Mesmo MEDIA_DIR usado pelo painel pra salvar áudio enviado por humano.
+// Aqui vamos salvar áudio gerado pela IA (TTS) também, pra player no painel.
+const MEDIA_DIR = process.env.MEDIA_DIR || (() => {
+  const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'database.sqlite');
+  return path.join(path.dirname(dbPath), 'media');
+})();
+if (!fs.existsSync(MEDIA_DIR)) {
+  try { fs.mkdirSync(MEDIA_DIR, { recursive: true }); } catch {}
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -129,10 +142,19 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
   if (shouldSendAudio) {
     console.log(`[webhook] enviando resposta em áudio para ${from}`);
     try {
-      // textToAudioMessage retorna media_id (Meta) OU buffer (Baileys, novo path).
-      // Pra simplificar e funcionar nos 2 providers, geramos buffer + sendVoice.
       const audio = await textToAudioMessage(result.text);
       if (audio && audio.buffer) {
+        // Salva o MP3 em disco pra player no painel
+        const filename = `${crypto.randomUUID()}.mp3`;
+        try {
+          fs.writeFileSync(path.join(MEDIA_DIR, filename), audio.buffer);
+          // Atualiza a última msg assistant deste phone com o media_path
+          // (agent.reply já salvou ela como was_audio=true mas sem o path)
+          db.setLastAssistantMessageMediaPath(from, filename);
+        } catch (e) {
+          console.error('[webhook] erro ao salvar áudio em disco:', e.message);
+          // não falha o envio
+        }
         await wa.sendVoice(from, audio.buffer, audio.mimeType || 'audio/mpeg', 'voice.mp3');
       } else if (typeof audio === 'string') {
         // Compat antigo (mediaId Meta)
