@@ -1332,56 +1332,136 @@ router.get('/', (req, res) => {
     .bubble-row { display: flex; padding: 1px 0; }
     .bubble-row.in  { justify-content: flex-start; }
     .bubble-row.out { justify-content: flex-end; }
+    /* Espaço extra entre grupos de remetentes diferentes (separação visual) */
+    .bubble-row:not(.grouped) { margin-top: 8px; }
+    .bubble-row:not(.grouped):first-child { margin-top: 0; }
+    /* Bubbles agrupadas (mesmo sender consecutivo) — sem tail, cantos
+       arredondados uniformes pra visual de "thread" coesa */
+    .bubble.grouped::before { display: none !important; }
+    .bubble.in.grouped { border-top-left-radius: 12px; }
+    .bubble.out.grouped { border-top-right-radius: 12px; }
 
+    /* ════════════════════════════════════════════════
+       BUBBLES — design upgrade (WhatsApp-style)
+       ════════════════════════════════════════════════ */
     .bubble {
       max-width: 65%;
-      padding: 7px 10px 8px;
-      border-radius: 8px;
-      font-size: 14.2px; line-height: 1.45;
+      min-width: 80px;
+      padding: 8px 11px 9px;
+      border-radius: 12px;
+      font-size: 14.5px; line-height: 1.42;
       color: var(--text-primary);
-      word-wrap: break-word; white-space: pre-wrap;
+      overflow-wrap: anywhere; word-break: break-word;
+      white-space: pre-wrap;
       position: relative;
-      box-shadow: 0 1px 1px rgba(0,0,0,.13);
-      animation: bubbleIn .18s ease-out;
+      box-shadow: 0 1px 1.5px rgba(0,0,0,.18);
+      animation: bubbleIn .2s ease-out;
+      transition: box-shadow .2s ease;
     }
-    @keyframes bubbleIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-    .bubble.in  { background: var(--bubble-in);  border-top-left-radius: 0; }
-    .bubble.out { background: var(--bubble-out); border-top-right-radius: 0; }
-    .bubble.out.human { background: var(--bubble-out-human); }
+    .bubble:hover { box-shadow: 0 2px 6px rgba(0,0,0,.28); }
+    @keyframes bubbleIn {
+      from { opacity: 0; transform: translateY(4px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* IN (recebida do lead) — verde-cinza, tail no canto top-left */
+    .bubble.in {
+      background: var(--bubble-in);
+      border-top-left-radius: 4px;
+    }
+    .bubble.in::before {
+      content: ''; position: absolute;
+      top: 0; left: -7px; width: 0; height: 0;
+      border-style: solid;
+      border-width: 0 7px 10px 0;
+      border-color: transparent var(--bubble-in) transparent transparent;
+      filter: drop-shadow(-1px 1px 0 rgba(0,0,0,.05));
+    }
+
+    /* OUT (enviada — IA) — verde brand, tail no canto top-right */
+    .bubble.out {
+      background: linear-gradient(180deg, var(--bubble-out) 0%, #00513e 100%);
+      border-top-right-radius: 4px;
+    }
+    .bubble.out::before {
+      content: ''; position: absolute;
+      top: 0; right: -7px; width: 0; height: 0;
+      border-style: solid;
+      border-width: 0 0 10px 7px;
+      border-color: transparent transparent transparent var(--bubble-out);
+      filter: drop-shadow(1px 1px 0 rgba(0,0,0,.05));
+    }
+
+    /* OUT humano (consultora) — verde-azulado pra distinguir da IA */
+    .bubble.out.human {
+      background: linear-gradient(180deg, #0d6f60 0%, #0a5a4e 100%);
+    }
+    .bubble.out.human::before {
+      border-color: transparent transparent transparent #0d6f60;
+    }
+
+    /* Footer (timestamp + checks) — float pra direita, fica inline em msgs
+       curtas e empurra pra próxima linha em msgs longas (técnica WhatsApp Web) */
     .bubble-meta {
-      font-size: 10.5px; color: rgba(255,255,255,.5);
-      margin-top: 4px; display: flex;
-      align-items: center; gap: 4px; justify-content: flex-end;
+      float: right;
+      font-size: 10.5px;
+      color: rgba(255,255,255,.55);
+      margin: 6px 0 -2px 8px;
+      padding: 2px 0 0 0;
+      display: inline-flex;
+      align-items: center; gap: 3px;
       font-variant-numeric: tabular-nums;
+      user-select: none;
+      line-height: 1;
     }
     .bubble.in .bubble-meta { color: var(--text-faint); }
+    /* Quebra de linha invisível depois do meta pra garantir clearfix */
+    .bubble::after {
+      content: ''; display: block; clear: both;
+    }
 
     /* Checkmarks de status (✓ enviado / ✓✓ entregue / ✓✓ azul = lido) */
     .msg-check {
-      display: inline-block; font-size: 12px; line-height: 1;
-      margin-left: 2px; letter-spacing: -2px;
+      display: inline-block; font-size: 13px; line-height: 1;
+      margin-left: 2px; letter-spacing: -3px;
       color: rgba(255,255,255,.55);
+      transition: color .25s ease;
     }
-    .msg-check.delivered { color: rgba(255,255,255,.7); }
-    .msg-check.read { color: #53bdeb; }       /* azul WhatsApp pra "lido" */
+    .msg-check.delivered { color: rgba(255,255,255,.75); }
+    .msg-check.read { color: #53bdeb; }
     .msg-check.failed { color: var(--danger); letter-spacing: 0; }
+
+    /* Links auto-detectados dentro do balão */
+    .bubble a {
+      color: #8ad4ff;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      word-break: break-all;
+    }
+    .bubble a:hover { color: #b3e2ff; }
+    .bubble.in a { color: #66b8ec; }
 
     /* Player de áudio dentro da bubble */
     .bubble-audio {
       display: block; width: 280px; max-width: 100%;
       height: 36px; outline: none;
       margin: 2px 0 4px;
+      border-radius: 8px;
     }
-    .bubble.out .bubble-audio,
-    .bubble.in .bubble-audio { filter: none; }
-    /* Tema escuro do controle nativo (Chrome/Edge) */
     .bubble-audio::-webkit-media-controls-panel {
-      background: rgba(255,255,255,.1);
+      background: rgba(255,255,255,.08);
     }
+
+    /* Nome de quem mandou (consultora) */
     .bubble-sender {
-      font-size: 12px; color: #58e8c9; font-weight: 600;
-      margin-bottom: 2px; letter-spacing: -.005em;
+      font-size: 12.5px;
+      color: #6ee7b7;
+      font-weight: 600;
+      margin-bottom: 3px;
+      letter-spacing: -.005em;
+      display: block;
     }
+    .bubble.out.human .bubble-sender { color: #93dffe; }
 
     .day-divider { display: flex; justify-content: center; margin: var(--sp-4) 0 var(--sp-3); }
     .day-divider span {
@@ -2147,6 +2227,13 @@ router.get('/', (req, res) => {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  // Auto-linka URLs em texto JÁ ESCAPADO (HTML-safe). Use após escapeHtml.
+  function linkify(escaped) {
+    return escaped.replace(/(https?:\\/\\/[^\\s<]+|www\\.[^\\s<]+)/g, url => {
+      const href = url.startsWith('www.') ? 'https://' + url : url;
+      return '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
+    });
+  }
   function getInitials(c) {
     const name = c.name || c.assignedUserName;
     if (name && name.trim()) {
@@ -2463,30 +2550,39 @@ router.get('/', (req, res) => {
       return '<div class="chat-empty"><div style="opacity:.5;font-size:13px">Sem mensagens ainda</div></div>';
     }
     let lastDay = '';
+    let lastGroupKey = '';
     return c.history.map(m => {
       const day = fmtDayDivider(m.createdAt || c.firstContactAt);
       let dayHtml = '';
+      let dayChanged = false;
       if (day !== lastDay) {
         dayHtml = '<div class="day-divider"><span>' + day + '</span></div>';
         lastDay = day;
+        dayChanged = true;
       }
       const isOut = m.role === 'assistant';
       const fromHuman = m.sentByUserId;
       const senderName = fromHuman ? (getUserDisplay(fromHuman) || 'Atendente') : '';
-      const senderHtml = (isOut && fromHuman) ? '<div class="bubble-sender">' + escapeHtml(senderName) + '</div>' : '';
       const inOrOut = isOut ? 'out' : 'in';
       const humanCls = fromHuman ? ' human' : '';
+
+      // Group consecutive messages from same sender (role + user id)
+      const groupKey = m.role + ':' + (m.sentByUserId || '');
+      const isGrouped = !dayChanged && groupKey === lastGroupKey;
+      lastGroupKey = groupKey;
+
+      // Sender label só na PRIMEIRA msg do grupo (não repete em cada bubble)
+      const senderHtml = (isOut && fromHuman && !isGrouped)
+        ? '<div class="bubble-sender">' + escapeHtml(senderName) + '</div>'
+        : '';
 
       // Player de áudio inline (se a msg tem mediaPath salvo)
       let bodyHtml;
       if (m.wasAudio && m.mediaPath) {
         bodyHtml = senderHtml +
           '<audio class="bubble-audio" controls preload="metadata" src="/admin/api/media/' + encodeURIComponent(m.mediaPath) + '"></audio>';
-      } else if (m.wasAudio) {
-        // Áudio antigo (sem mediaPath salvo) — mostra só o texto descritivo
-        bodyHtml = senderHtml + escapeHtml(m.content);
       } else {
-        bodyHtml = senderHtml + escapeHtml(m.content);
+        bodyHtml = senderHtml + linkify(escapeHtml(m.content));
       }
 
       // Checkmarks de status (só pra msgs OUTgoing — IA ou consultora)
@@ -2504,9 +2600,10 @@ router.get('/', (req, res) => {
         }
       }
 
+      const groupCls = isGrouped ? ' grouped' : '';
       return dayHtml +
-        '<div class="bubble-row ' + inOrOut + '" data-mid="' + (m.id || '') + '">' +
-          '<div class="bubble ' + inOrOut + humanCls + '">' +
+        '<div class="bubble-row ' + inOrOut + groupCls + '" data-mid="' + (m.id || '') + '">' +
+          '<div class="bubble ' + inOrOut + humanCls + groupCls + '">' +
             bodyHtml +
             '<div class="bubble-meta">' + fmtMessageTime(m.createdAt) + statusHtml + '</div>' +
           '</div>' +
