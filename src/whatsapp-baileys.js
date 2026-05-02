@@ -69,12 +69,24 @@ async function start() {
     }
 
     if (connection === 'open') {
+      const wasReconnecting = connectionStatus === 'close';
       lastQRDataUrl = null;
       connectionStatus = 'open';
       connectedSince = Date.now();
       const me = sock.user?.id?.split(':')[0] || sock.user?.id || 'desconhecido';
       console.log(`[baileys] ✓ conectado como ${me}`);
-      try { require('./events').emitConnectionsChanged(); } catch {}
+      try {
+        const ev = require('./events');
+        ev.emitConnectionsChanged();
+        if (wasReconnecting) {
+          ev.emitAlert({
+            severity: 'info',
+            title: 'WhatsApp reconectado',
+            message: 'Conexão restaurada. Tudo voltou ao normal.',
+            code: 'whatsapp_reconnected',
+          });
+        }
+      } catch {}
     }
 
     if (connection === 'close') {
@@ -84,9 +96,25 @@ async function start() {
       lastDisconnectReason = reason;
       const shouldReconnect = reason !== DisconnectReason.loggedOut;
       console.log(`[baileys] desconectou (reason=${reason}). reconectar=${shouldReconnect}`);
+      const wasOpen = connectionStatus === 'open';
       connectionStatus = 'close';
       connectedSince = null;
-      try { require('./events').emitConnectionsChanged(); } catch {}
+      try {
+        const ev = require('./events');
+        ev.emitConnectionsChanged();
+        // Só emite alerta se ESTAVA conectado (transição relevante).
+        // Reconexões em sequência não criam toast novo.
+        if (wasOpen) {
+          ev.emitAlert({
+            severity: 'error',
+            title: 'WhatsApp desconectado',
+            message: shouldReconnect
+              ? 'Conexão caiu. Reconectando automaticamente — mensagens podem atrasar.'
+              : 'Sessão terminada. Acesse Conexões e escaneie o QR.',
+            code: 'whatsapp_disconnected',
+          });
+        }
+      } catch {}
       if (shouldReconnect) {
         setTimeout(() => start().catch(e => console.error('[baileys] reconexão falhou:', e.message)), 3000);
       } else {
@@ -102,16 +130,18 @@ async function start() {
     }
   });
 
-  // Status updates (sent/delivered/read) — mapeia pra checkmarks no painel
+  // Status updates (sent/delivered/read/failed) — mapeia pra checkmarks no painel
   sock.ev.on('messages.update', async (updates) => {
     const db = require('./db');
+    const ev = require('./events');
     for (const u of updates) {
       const wamid = u.key?.id;
       if (!wamid) continue;
-      // WAMessageStatus: 1=pending, 2=server_ack(sent), 3=delivery_ack(delivered), 4=read, 5=played
+      // WAMessageStatus: 0=ERROR, 1=pending, 2=server_ack(sent), 3=delivery_ack(delivered), 4=read, 5=played
       const s = u.update?.status;
       let status = null;
-      if (s === 2) status = 'sent';
+      if (s === 0) status = 'failed';
+      else if (s === 2) status = 'sent';
       else if (s === 3) status = 'delivered';
       else if (s === 4 || s === 5) status = 'read';
       if (status) {
@@ -119,6 +149,20 @@ async function start() {
           db.updateMessageDeliveryStatus(wamid, status, Math.floor(Date.now() / 1000));
         } catch (e) {
           console.error('[baileys] erro update status:', e.message);
+        }
+        if (status === 'failed') {
+          // Tenta achar contato pra dar contexto
+          let contactName = 'lead';
+          try {
+            const m = require('./db').getMessageByWamid?.(wamid);
+            if (m?.phone) contactName = m.phone;
+          } catch {}
+          ev.emitAlert({
+            severity: 'error',
+            title: 'Mensagem não entregue',
+            message: `Mensagem pra ${contactName} falhou. Verifique a conexão WhatsApp e tente novamente.`,
+            code: 'message_failed',
+          });
         }
       }
     }
