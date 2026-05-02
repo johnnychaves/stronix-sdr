@@ -646,6 +646,79 @@ router.put('/api/academia-info/:key', auth.requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// Prompt modules (28 módulos do Johnny v2) — leitura pública pra usuários
+// logados, escrita só admin
+router.get('/api/prompt-modules', (req, res) => {
+  res.json(db.getAllPromptModules());
+});
+
+router.get('/api/prompt-modules/:name', (req, res) => {
+  const m = db.getPromptModule(req.params.name);
+  if (!m) return res.status(404).json({ error: 'Módulo não encontrado' });
+  res.json(m);
+});
+
+router.put('/api/prompt-modules/:name', auth.requireAdmin, (req, res) => {
+  const { content, title, category } = req.body || {};
+  if (!content) return res.status(400).json({ error: 'content obrigatório' });
+  try {
+    db.upsertPromptModule({ name: req.params.name, content, title, category }, req.user.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.patch('/api/prompt-modules/:name/active', auth.requireAdmin, (req, res) => {
+  const { active } = req.body || {};
+  db.setPromptModuleActive(req.params.name, !!active, req.user.id);
+  res.json({ ok: true });
+});
+
+// Lead state (debug — playground e admin podem ver/resetar)
+router.get('/api/lead-state/:phone', (req, res) => {
+  const s = db.getLeadState(req.params.phone);
+  if (!s) return res.status(404).json({ error: 'Lead sem estado' });
+  res.json(s);
+});
+
+router.delete('/api/lead-state/:phone', auth.requireAdmin, (req, res) => {
+  db.resetLeadState(req.params.phone);
+  res.json({ ok: true });
+});
+
+// Playground v2 — usa replyV2 isolado (não persiste lead_state). State
+// simulado vive na request: cliente manda state atual, recebe state novo.
+router.post('/api/playground/v2/message', async (req, res) => {
+  const { history, message, state } = req.body || {};
+  if (!message || typeof message !== 'string') return res.status(400).json({ error: 'message obrigatória' });
+  if (history && !Array.isArray(history)) return res.status(400).json({ error: 'history deve ser array' });
+  if (message.length > 2000) return res.status(400).json({ error: 'message muito longa' });
+  if (Array.isArray(history) && history.length > 50) return res.status(400).json({ error: 'history muito longo' });
+  try {
+    const { simulateReplyV2 } = require('./agent-v2');
+    const result = await simulateReplyV2(history || [], message, state || null);
+    res.json({
+      text: result.text,
+      state: result.state,
+      parsed: result.parsed,
+      tokensInput: result.tokensInput,
+      tokensOutput: result.tokensOutput,
+      cacheReadTokens: result.cacheReadTokens,
+      cacheCreationTokens: result.cacheCreationTokens,
+      latencyMs: result.latencyMs,
+      estimatedCostUSD: (
+        (result.tokensInput - (result.cacheReadTokens || 0)) * 3 / 1_000_000 +
+        (result.cacheReadTokens || 0) * 0.30 / 1_000_000 +
+        (result.tokensOutput) * 15 / 1_000_000
+      ),
+    });
+  } catch (err) {
+    console.error('[playground v2] erro:', err.message);
+    res.status(500).json({ error: err.message || 'falha ao simular' });
+  }
+});
+
 // Playground — simulação de conversa sem efeitos colaterais (não toca DB de
 // conversas, não envia WhatsApp). Usa system prompt + knowledge base atuais.
 router.post('/api/playground/message', async (req, res) => {
@@ -2478,6 +2551,40 @@ router.get('/', (req, res) => {
     .kb-saving.err { color: var(--danger); }
 
     /* ════════════════════════════════════════════════
+       MÓDULOS DO PROMPT (28 cards expansíveis)
+       ════════════════════════════════════════════════ */
+    .modulo-item {
+      border-bottom: 1px solid var(--border-subtle);
+      transition: opacity var(--t-fast);
+    }
+    .modulo-item:last-child { border-bottom: none; }
+    .modulo-item.inactive { opacity: .5; }
+    .modulo-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; cursor: pointer;
+      transition: background var(--t-fast);
+    }
+    .modulo-head:hover { background: var(--bg-3); }
+    .modulo-title { font: 600 14px var(--font-sans); color: var(--text-primary); margin-bottom: 2px; }
+    .modulo-meta { font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); }
+    .modulo-chev { color: var(--text-muted); flex-shrink: 0; transition: transform var(--t-fast); }
+    .modulo-body { padding: 0 16px 16px; }
+    .modulo-textarea {
+      width: 100%; box-sizing: border-box;
+      min-height: 240px; max-height: 600px;
+      background: var(--bg-1); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: var(--r-md);
+      padding: 12px;
+      font: 13px var(--font-mono);
+      resize: vertical; outline: none;
+      transition: border-color var(--t-fast);
+    }
+    .modulo-textarea:focus { border-color: var(--brand); }
+    .modulo-actions {
+      display: flex; gap: 10px; align-items: center; margin-top: 10px;
+    }
+
+    /* ════════════════════════════════════════════════
        PLAYGROUND (testar agente)
        ════════════════════════════════════════════════ */
     .playground-wrap {
@@ -2535,6 +2642,40 @@ router.get('/', (req, res) => {
       resize: none; outline: none; min-height: 40px; max-height: 140px;
     }
     .playground-input-bar textarea:focus { border-color: var(--brand); }
+
+    /* Layout do playground com painel debug à direita (v2) */
+    .pg-layout {
+      display: grid; grid-template-columns: 1fr 280px; gap: 14px;
+      height: calc(100vh - 200px);
+    }
+    .pg-layout .playground-wrap { height: 100%; }
+    .pg-debug {
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: var(--r-lg); padding: 14px; overflow-y: auto;
+    }
+    .pg-debug.hidden { display: none; }
+    .pg-debug + * { display: none; }
+    .pg-layout:has(.pg-debug.hidden) { grid-template-columns: 1fr; }
+    .pg-debug h3 {
+      font: 600 12px var(--font-sans); color: var(--text-secondary);
+      text-transform: uppercase; letter-spacing: .06em;
+      margin: 0 0 12px;
+      padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .pg-state-content { font-size: 12px; color: var(--text-primary); }
+    .pg-state-row {
+      display: flex; flex-direction: column; gap: 2px;
+      padding: 8px 0; border-bottom: 1px solid var(--border-subtle);
+    }
+    .pg-state-row:last-child { border-bottom: none; }
+    .pg-state-row .k {
+      font-size: 10.5px; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+    }
+    .pg-state-row .v {
+      font-size: 12.5px; color: var(--text-primary); font-weight: 500;
+      font-family: var(--font-mono);
+    }
 
     /* ════════════════════════════════════════════════
        CONEXÕES (cards de WhatsApp conectado)
@@ -2725,6 +2866,10 @@ router.get('/', (req, res) => {
             <span class="si"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
             <span>Conhecimento</span>
           </div>
+          <div class="sub-item admin-only" data-nav="modulos" onclick="event.stopPropagation();switchTab('modulos', this)" style="display:none">
+            <span class="si"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>
+            <span>Módulos do prompt</span>
+          </div>
           <div class="sub-item" data-nav="playground" onclick="event.stopPropagation();switchTab('playground', this)">
             <span class="si"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
             <span>Testar agente</span>
@@ -2882,6 +3027,20 @@ router.get('/', (req, res) => {
   <div id="metrics-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px"></div>
 </div>
 
+<div id="tab-modulos" class="panel">
+  <div class="conv-header">
+    <h2>Módulos do prompt</h2>
+    <button class="refresh-btn" onclick="loadModulos()">↻ Atualizar</button>
+  </div>
+  <div class="student-help">
+    Cada módulo é um pedaço do conhecimento do Johnny carregado <strong>sob demanda</strong> (Roteador decide quando entram no contexto). Editar aqui muda comportamento da IA <strong>na próxima resposta</strong>, sem redeploy.
+    <br>Total: <strong>28 módulos</strong> divididos em conhecimento, objeções, situações e sistema.
+  </div>
+  <div id="modulos-list">
+    <div class="empty">Carregando...</div>
+  </div>
+</div>
+
 <div id="tab-conhecimento" class="panel">
   <div class="conv-header">
     <h2>Conhecimento da academia</h2>
@@ -2899,24 +3058,39 @@ router.get('/', (req, res) => {
 <div id="tab-playground" class="panel">
   <div class="conv-header">
     <h2>Testar agente</h2>
-    <button class="refresh-btn" onclick="resetPlayground()">↻ Resetar conversa</button>
+    <div style="display:flex;gap:10px;align-items:center">
+      <select id="pg-version" onchange="onPlaygroundVersionChange()" style="background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
+        <option value="v1">v1 (prompt monolítico, em produção)</option>
+        <option value="v2">v2 (núcleo + módulos, BATERIA E)</option>
+      </select>
+      <select id="pg-cenario" onchange="loadCenario()" style="background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;display:none">
+        <option value="">— Carregar cenário —</option>
+      </select>
+      <button class="refresh-btn" onclick="resetPlayground()">↻ Resetar</button>
+    </div>
   </div>
   <div class="student-help">
-    Simule uma conversa com a IA <strong>sem afetar produção</strong>. Útil pra testar mudanças no prompt ou no conhecimento antes de soltar pra leads reais. Cada msg consome ~R$ 0,01-0,03 da cota Anthropic.
+    Simule conversa com a IA <strong>sem afetar produção</strong>. Útil pra testar mudanças antes de soltar pra leads reais. Cada msg consome ~R$ 0,01-0,03 da cota Anthropic. <strong>v2:</strong> ativa máquina de estado + módulos sob demanda + parser de tags (Bateria E).
   </div>
-  <div class="playground-wrap">
-    <div class="playground-thread" id="playground-thread">
-      <div class="playground-hint">Comece digitando uma mensagem que um lead enviaria. Ex: "oi, quanto custa?"</div>
+  <div class="pg-layout">
+    <div class="playground-wrap">
+      <div class="playground-thread" id="playground-thread">
+        <div class="playground-hint">Comece digitando uma mensagem que um lead enviaria. Ex: "oi, quanto custa?"</div>
+      </div>
+      <div class="playground-stats" id="playground-stats" style="display:none">
+        <span id="pg-tokens">—</span>
+        <span id="pg-latency">—</span>
+        <span id="pg-cost">—</span>
+      </div>
+      <div class="playground-input-bar">
+        <textarea id="playground-input" placeholder="Digite como se fosse o lead..." rows="2" onkeydown="onPlaygroundKey(event)"></textarea>
+        <button class="btn-add" id="playground-send-btn" onclick="sendPlayground()">Enviar</button>
+      </div>
     </div>
-    <div class="playground-stats" id="playground-stats" style="display:none">
-      <span id="pg-tokens">—</span>
-      <span id="pg-latency">—</span>
-      <span id="pg-cost">—</span>
-    </div>
-    <div class="playground-input-bar">
-      <textarea id="playground-input" placeholder="Digite como se fosse o lead..." rows="2" onkeydown="onPlaygroundKey(event)"></textarea>
-      <button class="btn-add" id="playground-send-btn" onclick="sendPlayground()">Enviar</button>
-    </div>
+    <aside class="pg-debug hidden" id="pg-debug">
+      <h3>Estado simulado</h3>
+      <div id="pg-state-content" class="pg-state-content">—</div>
+    </aside>
   </div>
 </div>
 
@@ -4285,6 +4459,7 @@ router.get('/', (req, res) => {
     metrics:       { label: 'Métricas',          tag: 'últimos 30d' },
     conexoes:      { label: 'Conexões WhatsApp', tag: '' },
     conhecimento:  { label: 'Conhecimento',      tag: '' },
+    modulos:       { label: 'Módulos do prompt', tag: '' },
     playground:    { label: 'Testar agente',     tag: '' },
   };
 
@@ -4306,7 +4481,7 @@ router.get('/', (req, res) => {
     document.querySelectorAll('.nav-item[data-nav], .sub-item[data-nav]').forEach(el => {
       el.classList.toggle('active', el.dataset.nav === tab);
     });
-    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes' || tab === 'conhecimento' || tab === 'playground') {
+    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes' || tab === 'conhecimento' || tab === 'modulos' || tab === 'playground') {
       const cfg = document.getElementById('cfg-group');
       if (cfg) cfg.classList.add('open');
     }
@@ -4341,6 +4516,7 @@ router.get('/', (req, res) => {
       stopConexoesPolling();
     }
     if (tab === 'conhecimento') loadKnowledge();
+    if (tab === 'modulos') loadModulos();
     if (tab === 'playground') initPlayground();
   }
 
@@ -4528,21 +4704,199 @@ router.get('/', (req, res) => {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // Aba Playground (testar agente)
+  // Aba Módulos do prompt (28 módulos editáveis do Johnny v2)
+  // ─────────────────────────────────────────────────────────────────
+  const CAT_LABELS_MOD = {
+    conhecimento: '📚 Conhecimento factual',
+    objecoes:     '🛡️ Objeções',
+    situacionais: '🎯 Situacionais',
+    sistema:      '⚙️ Sistema',
+  };
+  let modulosCache = [];
+  async function loadModulos() {
+    const list = document.getElementById('modulos-list');
+    if (!list) return;
+    try {
+      const r = await fetch('/admin/api/prompt-modules');
+      const items = await r.json();
+      modulosCache = items;
+      const byCat = {};
+      for (const it of items) {
+        const c = it.category || 'outros';
+        (byCat[c] = byCat[c] || []).push(it);
+      }
+      const order = ['conhecimento','objecoes','situacionais','sistema'];
+      let html = '';
+      for (const cat of order) {
+        if (!byCat[cat]) continue;
+        const catItems = byCat[cat];
+        html += '<div class="kb-category">';
+        html += '<div class="kb-category-title">' + (CAT_LABELS_MOD[cat] || cat) + ' <span style="opacity:.5;font-weight:400">(' + catItems.length + ')</span></div>';
+        for (const m of catItems) {
+          const safeName = escapeHtml(m.name);
+          const safeTitle = escapeHtml(m.title || m.name);
+          const charCount = (m.content || '').length;
+          const activeCls = m.active ? '' : ' inactive';
+          html += '<div class="modulo-item' + activeCls + '">';
+          html += '<div class="modulo-head" onclick="toggleModulo(this)">';
+          html += '<div>';
+          html += '<div class="modulo-title">' + safeTitle + '</div>';
+          html += '<div class="modulo-meta">' + safeName + ' · ' + charCount + ' chars · ' + (m.active ? 'ativo' : 'desativado') + '</div>';
+          html += '</div>';
+          html += '<svg class="modulo-chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>';
+          html += '</div>';
+          html += '<div class="modulo-body" style="display:none">';
+          html += '<textarea class="modulo-textarea" data-name="' + safeName + '" oninput="onModuloEdit(this)">' + escapeHtml(m.content) + '</textarea>';
+          html += '<div class="modulo-actions">';
+          html += '<button class="btn-add" onclick="saveModulo(\\'' + safeName + '\\')">💾 Salvar</button>';
+          html += '<button class="btn-clear" onclick="toggleModuloActive(\\'' + safeName + '\\', ' + (m.active ? 'false' : 'true') + ')">' + (m.active ? '🚫 Desativar' : '✓ Ativar') + '</button>';
+          html += '<span class="kb-saving" id="mod-saving-' + safeName + '"></span>';
+          html += '</div>';
+          html += '</div>';
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+      list.innerHTML = html || '<div class="empty">Nenhum módulo cadastrado.</div>';
+    } catch (e) {
+      list.innerHTML = '<div class="empty">Erro: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function toggleModulo(headEl) {
+    const body = headEl.parentElement.querySelector('.modulo-body');
+    if (!body) return;
+    body.style.display = body.style.display === 'none' ? 'block' : 'none';
+  }
+
+  function onModuloEdit(el) {
+    const status = document.getElementById('mod-saving-' + el.dataset.name);
+    if (status) { status.textContent = 'Não salvo'; status.className = 'kb-saving err'; }
+  }
+
+  async function saveModulo(name) {
+    const ta = document.querySelector('.modulo-textarea[data-name="' + name + '"]');
+    const status = document.getElementById('mod-saving-' + name);
+    if (!ta) return;
+    if (status) { status.textContent = 'Salvando...'; status.className = 'kb-saving'; }
+    try {
+      const cached = modulosCache.find(m => m.name === name);
+      const r = await fetch('/admin/api/prompt-modules/' + encodeURIComponent(name), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: ta.value,
+          title: cached?.title || name,
+          category: cached?.category || null,
+        }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || 'falha');
+      }
+      if (status) { status.textContent = '✓ Salvo'; status.className = 'kb-saving ok'; }
+      setTimeout(() => { if (status) status.textContent = ''; }, 2000);
+    } catch (e) {
+      if (status) { status.textContent = 'Erro: ' + e.message; status.className = 'kb-saving err'; }
+    }
+  }
+
+  async function toggleModuloActive(name, makeActive) {
+    try {
+      await fetch('/admin/api/prompt-modules/' + encodeURIComponent(name) + '/active', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: !!makeActive }),
+      });
+      loadModulos();
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Aba Playground (testar agente — v1 e v2 com debug)
   // ─────────────────────────────────────────────────────────────────
   let playgroundHistory = [];
+  let playgroundState = null;  // só usado em v2 (state simulado)
+  let playgroundVersion = 'v1';
+
+  // Cenários pré-carregados pras Baterias A-E (Anexo 5 do plano de refatoração)
+  const PG_CENARIOS = {
+    'A.1 — Lead novo padrão': ['oi, queria saber sobre a academia'],
+    'A.2 — Lead pula pra valor': ['oi, qual o valor?'],
+    'A.3 — Insiste em valor (3x)': ['qual o valor?', 'quanto custa?', 'me passa os valores aí'],
+    'A.4 — Qualificação completa': ['oi', 'tô parado faz tempo', 'quero emagrecer', 'Maria', 'manhã', 'terça', '9h'],
+    'B.1 — Tá caro': ['oi quanto custa', 'qual o valor', 'me passa os valores', 'tá caro pra mim'],
+    'B.2 — Vou pensar': ['oi tudo bem? me conta sobre os planos', 'ah vou pensar e te falo'],
+    'B.3 — Mês que vem': ['oi quero treinar', 'vou começar no próximo mês, tô me organizando'],
+    'B.4 — Gympass': ['vocês atendem Gympass?'],
+    'B.5 — Mensal': ['oi quero treinar', 'tô parado', 'emagrecer', 'João', 'manhã', 'quero só o plano mensal'],
+    'C.1 — Gestante': ['oi tô grávida, posso treinar?'],
+    'C.2 — Idoso': ['tenho 67 anos, vocês atendem idoso?'],
+    'C.3 — Lesão': ['fiz cirurgia no joelho ano passado, posso treinar?'],
+    'D.1 — É IA?': ['oi, você é robô?'],
+    'D.2 — Lead aluno (financeiro)': ['oi minha mensalidade não foi descontada'],
+    'D.3 — Grosseria': ['isso é uma porcaria, vocês são uns ladrões'],
+    'D.4 — Errou número': ['oi mãe, tô chegando'],
+    'E.1 — Mudança de objeção (reset contador)': ['oi quero saber valores', 'qual o valor', 'qual o valor', 'tá caro', 'mas eu preciso falar com minha esposa'],
+    'E.2 — 3 tentativas mesma objeção (handoff)': ['oi', 'tá caro', 'tá muito caro', 'sério mesmo, tá caro pra mim'],
+    'E.3 — Conversa longa (>15 msgs)': ['oi', 'tô parado', 'quero saúde', 'João', 'tarde', 'quarta', '14h', 'beleza confirmado', 'aliás, tem estacionamento?', 'e vestiário?', 'qual o horário?', 'aceita Pix?', 'tem aula de zumba?', 'meu joelho dói às vezes', 'preciso adiar pra outra semana'],
+    'E.4 — Tag malformada (resiliência)': ['oi qual valor'],
+  };
 
   function initPlayground() {
-    // Foca no input ao abrir
+    // Popula select de cenários
+    const sel = document.getElementById('pg-cenario');
+    if (sel && sel.options.length === 1) {
+      for (const name of Object.keys(PG_CENARIOS)) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      }
+    }
+    onPlaygroundVersionChange();
     setTimeout(() => document.getElementById('playground-input')?.focus(), 100);
+  }
+
+  function onPlaygroundVersionChange() {
+    const sel = document.getElementById('pg-version');
+    playgroundVersion = sel ? sel.value : 'v1';
+    const cenarioSel = document.getElementById('pg-cenario');
+    const debug = document.getElementById('pg-debug');
+    if (playgroundVersion === 'v2') {
+      if (cenarioSel) cenarioSel.style.display = '';
+      if (debug) debug.classList.remove('hidden');
+    } else {
+      if (cenarioSel) cenarioSel.style.display = 'none';
+      if (debug) debug.classList.add('hidden');
+    }
+    resetPlayground();
   }
 
   function resetPlayground() {
     playgroundHistory = [];
+    playgroundState = null;
     const t = document.getElementById('playground-thread');
-    if (t) t.innerHTML = '<div class="playground-hint">Comece digitando uma mensagem que um lead enviaria. Ex: "oi, quanto custa?"</div>';
+    if (t) t.innerHTML = '<div class="playground-hint">Comece digitando ou carregue um cenário pré-definido.</div>';
     const stats = document.getElementById('playground-stats');
     if (stats) stats.style.display = 'none';
+    const sel = document.getElementById('pg-cenario');
+    if (sel) sel.value = '';
+    renderPlaygroundDebug();
+  }
+
+  async function loadCenario() {
+    const sel = document.getElementById('pg-cenario');
+    const name = sel?.value;
+    if (!name || !PG_CENARIOS[name]) return;
+    resetPlayground();
+    const msgs = PG_CENARIOS[name];
+    const inp = document.getElementById('playground-input');
+    for (const m of msgs) {
+      if (inp) inp.value = m;
+      await sendPlayground();
+      await new Promise(r => setTimeout(r, 200));
+    }
   }
 
   function onPlaygroundKey(e) {
@@ -4552,6 +4906,31 @@ router.get('/', (req, res) => {
     }
   }
 
+  function renderPlaygroundDebug() {
+    const el = document.getElementById('pg-state-content');
+    if (!el) return;
+    if (!playgroundState) { el.textContent = '—'; return; }
+    const s = playgroundState;
+    let html = '';
+    html += '<div class="pg-state-row"><span class="k">Estágio</span><span class="v">' + (s.estagio_atual || '—') + '</span></div>';
+    if (s.proxima_acao) html += '<div class="pg-state-row"><span class="k">Próx. ação</span><span class="v">' + escapeHtml(s.proxima_acao) + '</span></div>';
+    html += '<div class="pg-state-row"><span class="k">Insistências valor</span><span class="v">' + (s.insistencias_valor || 0) + '/3</span></div>';
+    if (s.objetivo) html += '<div class="pg-state-row"><span class="k">Objetivo</span><span class="v">' + s.objetivo + '</span></div>';
+    if (s.modalidade_recomendada) html += '<div class="pg-state-row"><span class="k">Modalidade</span><span class="v">' + s.modalidade_recomendada + '</span></div>';
+    if (s.disponibilidade) html += '<div class="pg-state-row"><span class="k">Disponibilidade</span><span class="v">' + s.disponibilidade + '</span></div>';
+    if (s.objecao_ativa) {
+      html += '<div class="pg-state-row"><span class="k">Objeção ativa</span><span class="v">' + s.objecao_ativa + '</span></div>';
+      html += '<div class="pg-state-row"><span class="k">Tentativas</span><span class="v">' + (s.tentativas_objecao_atual || 0) + '/3</span></div>';
+    }
+    if (Array.isArray(s.objecoes_levantadas) && s.objecoes_levantadas.length) {
+      html += '<div class="pg-state-row"><span class="k">Histórico objeções</span><span class="v">' + s.objecoes_levantadas.join(', ') + '</span></div>';
+    }
+    if (s.modulo_pendente) {
+      html += '<div class="pg-state-row"><span class="k">Módulo pendente</span><span class="v" style="color:var(--brand-light)">' + s.modulo_pendente + '</span></div>';
+    }
+    el.innerHTML = html;
+  }
+
   async function sendPlayground() {
     const inp = document.getElementById('playground-input');
     const btn = document.getElementById('playground-send-btn');
@@ -4559,10 +4938,8 @@ router.get('/', (req, res) => {
     if (!inp || !thread) return;
     const text = inp.value.trim();
     if (!text) return;
-    // Remove hint inicial
     const hint = thread.querySelector('.playground-hint');
     if (hint) hint.remove();
-    // Push msg do user
     const userBubble = document.createElement('div');
     userBubble.className = 'pg-bubble user';
     userBubble.textContent = text;
@@ -4570,7 +4947,6 @@ router.get('/', (req, res) => {
     inp.value = '';
     inp.disabled = true;
     if (btn) btn.disabled = true;
-    // "Pensando…" placeholder
     const thinking = document.createElement('div');
     thinking.className = 'pg-bubble thinking';
     thinking.textContent = 'pensando…';
@@ -4578,10 +4954,14 @@ router.get('/', (req, res) => {
     thread.scrollTop = thread.scrollHeight;
 
     try {
-      const r = await fetch('/admin/api/playground/message', {
+      const endpoint = playgroundVersion === 'v2' ? '/admin/api/playground/v2/message' : '/admin/api/playground/message';
+      const body = playgroundVersion === 'v2'
+        ? { history: playgroundHistory, message: text, state: playgroundState }
+        : { history: playgroundHistory, message: text };
+      const r = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ history: playgroundHistory, message: text }),
+        body: JSON.stringify(body),
       });
       const data = await r.json();
       thinking.remove();
@@ -4597,17 +4977,20 @@ router.get('/', (req, res) => {
       aiBubble.className = 'pg-bubble assistant';
       aiBubble.textContent = data.text;
       thread.appendChild(aiBubble);
-      // Atualiza histórico interno (pra próxima chamada)
       playgroundHistory.push({ role: 'user', content: text });
       playgroundHistory.push({ role: 'assistant', content: data.text });
-      // Stats
+      // v2 retorna estado novo
+      if (playgroundVersion === 'v2' && data.state) {
+        playgroundState = data.state;
+        renderPlaygroundDebug();
+      }
       const stats = document.getElementById('playground-stats');
       if (stats) {
         stats.style.display = 'flex';
         document.getElementById('pg-tokens').textContent =
           'in: ' + data.tokensInput + ' (cache: ' + (data.cacheReadTokens || 0) + ') · out: ' + data.tokensOutput;
         document.getElementById('pg-latency').textContent = data.latencyMs + ' ms';
-        const brl = (data.estimatedCostUSD * 5.5).toFixed(4); // USD → BRL aprox
+        const brl = (data.estimatedCostUSD * 5.5).toFixed(4);
         document.getElementById('pg-cost').textContent = '~R$ ' + brl;
       }
       thread.scrollTop = thread.scrollHeight;

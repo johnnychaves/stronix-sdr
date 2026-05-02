@@ -1,7 +1,13 @@
 const { Router } = require('express');
 const config    = require('./config');
 const { reply, isAffirmative, isNegative, getContact, setAudioFlags } = require('./agent');
+const { replyV2 } = require('./agent-v2');
 const wa = require('./whatsapp');
+
+// Toggle entre Johnny v1 (prompt monolítico) e v2 (núcleo + módulos).
+// Default v1 — só ativa v2 quando AGENT_VERSION=v2 explícito.
+const AGENT_VERSION = (process.env.AGENT_VERSION || 'v1').toLowerCase();
+console.log(`[webhook] agent version: ${AGENT_VERSION}`);
 const { sendMessage, notifyStudent, notifyAssignedConsultor, PROVIDER } = wa;
 const { transcribeAudio, transcribeAudioBuffer } = require('./transcriber');
 const { textToAudioMessage } = require('./tts');
@@ -136,7 +142,11 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
     }
   }
 
-  const result = await reply(from, text, { isAudio: anyAudio, forceAudio });
+  // Roteamento por versão do agente. v2 usa núcleo + lead_state; v1 é o
+  // prompt monolítico antigo. Default v1 (rollout controlado por env var).
+  const result = AGENT_VERSION === 'v2'
+    ? await replyV2(from, text, { isAudio: anyAudio })
+    : await reply(from, text, { isAudio: anyAudio, forceAudio });
   const shouldSendAudio = forceAudio || result.useAudio;
 
   if (shouldSendAudio) {
