@@ -932,10 +932,14 @@ router.post('/api/conversations/:phone/reply', async (req, res) => {
   db.getOrCreateContact(phone);
 
   // Se ninguém assumiu ainda, o ato de mandar mensagem implica assumir.
-  // Pool aberto: o primeiro a mandar pega.
+  // Pool aberto: o primeiro a mandar pega. Flag autoAssumed avisa o frontend
+  // pra mostrar toast claro "IA desligada — você assumiu".
+  let autoAssumed = false;
   const assignment = db.getContactAssignment(phone);
   if (!assignment.assignedUserId) {
     db.assumeConversation(phone, req.user.id);
+    autoAssumed = true;
+    try { require('./events').emitConversationChanged(phone); } catch {}
   } else if (assignment.assignedUserId !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Conversa já assumida por outra consultora' });
   }
@@ -945,7 +949,7 @@ router.post('/api/conversations/:phone/reply', async (req, res) => {
     const wamid = sendResp?.messages?.[0]?.id || null;
     db.addMessageWithSender(phone, 'assistant', text, false, req.user.id, null, wamid);
     db.updateLastContact(phone);
-    res.json({ ok: true });
+    res.json({ ok: true, autoAssumed });
   } catch (err) {
     const meta = err.response?.data?.error;
     console.error('[admin] erro ao enviar reply humano:', meta || err.message);
@@ -1032,9 +1036,12 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
 
   db.getOrCreateContact(phone);
 
+  let autoAssumed = false;
   const assignment = db.getContactAssignment(phone);
   if (!assignment.assignedUserId) {
     db.assumeConversation(phone, req.user.id);
+    autoAssumed = true;
+    try { require('./events').emitConversationChanged(phone); } catch {}
   } else if (assignment.assignedUserId !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Conversa já assumida por outra consultora' });
   }
@@ -1083,7 +1090,7 @@ router.post('/api/conversations/:phone/reply-audio', async (req, res) => {
     db.addMessageWithSender(phone, 'assistant', label, true, req.user.id, filename, wamid);
     db.updateLastContact(phone);
     console.log(`[admin] ${req.user.username} enviou áudio para ${phone} (${finalBuffer.length} bytes, ${finalMime}, wamid=${wamid})`);
-    res.json({ ok: true });
+    res.json({ ok: true, autoAssumed });
   } catch (err) {
     const meta = err.response?.data?.error;
     console.error('[admin] erro ao enviar audio:', meta || err.message);
@@ -2322,19 +2329,70 @@ router.get('/', (req, res) => {
       margin: var(--sp-3) 0;
     }
 
-    /* Handoff banner — acima do composer quando você assumiu */
+    /* Handoff banner — acima do composer quando você assumiu o atendimento */
     .handoff-banner {
-      background: rgba(0,168,132,.10); border-top: 1px solid rgba(0,168,132,.25);
-      color: var(--brand-light); font: 500 12px var(--font-sans);
-      padding: 8px 18px;
+      background: linear-gradient(90deg, rgba(0,168,132,.18) 0%, rgba(0,168,132,.10) 100%);
+      border-top: 1px solid rgba(0,168,132,.35);
+      border-left: 3px solid var(--brand);
+      color: var(--brand-light); font: 500 12.5px var(--font-sans);
+      padding: 10px 18px;
       display: flex; align-items: center; justify-content: space-between; gap: 10px;
       flex-shrink: 0;
+      animation: handoffSlideIn .25s ease;
+    }
+    @keyframes handoffSlideIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .handoff-banner > div { display: flex; align-items: center; gap: 8px; }
+    .handoff-banner .hb-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--brand);
+      box-shadow: 0 0 0 0 rgba(0,168,132,.45);
+      animation: hbPulse 2s ease-in-out infinite;
+    }
+    @keyframes hbPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(0,168,132,.45); }
+      50% { box-shadow: 0 0 0 6px rgba(0,168,132,0); }
     }
     .handoff-banner button {
-      background: none; border: none; color: var(--brand-light);
-      font: 600 11.5px var(--font-sans); cursor: pointer; text-decoration: underline;
+      background: rgba(0,168,132,.18); border: 1px solid rgba(0,168,132,.4);
+      color: var(--brand-light);
+      font: 600 11.5px var(--font-sans); cursor: pointer;
+      padding: 4px 12px; border-radius: 6px;
+      transition: all var(--t-fast);
     }
-    .handoff-banner button:hover { color: var(--brand); }
+    .handoff-banner button:hover {
+      background: rgba(0,168,132,.32);
+      color: #fff;
+    }
+
+    /* Hint sutil acima do composer quando IA tá atendendo —
+       avisa que a próxima msg vai assumir o atendimento */
+    .ai-active-hint {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px;
+      background: rgba(70, 130, 180, .08);
+      border-top: 1px solid rgba(70, 130, 180, .2);
+      color: var(--text-secondary);
+      font: 500 11.5px var(--font-sans);
+      flex-shrink: 0;
+    }
+    .ai-active-hint .aih-icon {
+      font-size: 14px; opacity: .85;
+    }
+    .ai-active-hint strong { color: var(--text-primary); }
+
+    /* Toast especial pro auto-assume — mais nítido que toast genérico */
+    .toast.auto-assumed {
+      background: linear-gradient(135deg, rgba(0,168,132,.95) 0%, rgba(0,140,110,.95) 100%);
+      color: #fff; border: 1px solid rgba(0,168,132,.6);
+      box-shadow: 0 8px 24px rgba(0,168,132,.25);
+    }
+    .toast.auto-assumed .toast-title { color: #fff; }
+    .toast.auto-assumed .toast-msg { color: rgba(255,255,255,.9); }
+    .toast.auto-assumed .toast-close { color: rgba(255,255,255,.7); }
+    .toast.auto-assumed .toast-close:hover { color: #fff; }
 
     /* ─── Right detail panel (ficha do lead) ─── */
     .detail {
@@ -4762,14 +4820,23 @@ router.get('/', (req, res) => {
   function buildInputBar(c) {
     const isHuman = !!c.assignedUserId;
     const isMine  = isHuman && me && c.assignedUserId === me.id;
-    const canReply = isMine || (me && me.role === 'admin');
+    const isOtherHuman = isHuman && !isMine && me && me.role !== 'admin';
+    // Auto-assume: se IA tá atendendo (ninguém assumiu), qualquer pessoa pode
+    // digitar — a 1ª mensagem assume automaticamente.
+    const canReply = !isOtherHuman;
     if (canReply) {
-      const banner = isMine
-        ? \`<div class="handoff-banner">
-             <div>⚡ Você assumiu este atendimento. A IA não responde até você devolver.</div>
+      let banner = '';
+      if (isMine) {
+        banner = \`<div class="handoff-banner">
+             <div><span class="hb-dot"></span><strong>Você está atendendo</strong> · IA pausada</div>
              <button onclick="releaseConv(event, '\${c.from}')">Devolver pra IA</button>
-           </div>\`
-        : '';
+           </div>\`;
+      } else if (!isHuman) {
+        banner = \`<div class="ai-active-hint">
+             <span class="aih-icon">🤖</span>
+             <span>IA atendendo · <strong>sua próxima mensagem pausa a IA</strong> e assume o atendimento</span>
+           </div>\`;
+      }
       const replyPreview = (replyingTo && replyingTo.phone === c.from)
         ? \`<div class="composer-reply-preview" id="composer-reply-preview">
              <div class="crp-body">
@@ -4808,14 +4875,9 @@ router.get('/', (req, res) => {
         </div>
       \`;
     }
-    if (isHuman) {
-      return \`<div class="chat-input-disabled">
-        <span class="chat-input-disabled-text">Conversa em atendimento por <strong>\${escapeHtml(c.assignedUserName)}</strong></span>
-      </div>\`;
-    }
+    // Cai aqui se canReply === false → outra consultora tá atendendo
     return \`<div class="chat-input-disabled">
-      <span class="chat-input-disabled-text">🤖 A IA está atendendo essa conversa</span>
-      <button class="btn-primary-small" onclick="assumeConv(event, '\${c.from}')">Assumir agora</button>
+      <span class="chat-input-disabled-text">Conversa em atendimento por <strong>\${escapeHtml(c.assignedUserName)}</strong></span>
     </div>\`;
   }
 
@@ -5255,6 +5317,11 @@ router.get('/', (req, res) => {
         markPendingFailed(phone, tid, data.error || 'falha ao enviar');
         return;
       }
+      const data = await r.json().catch(() => ({}));
+      // Auto-assume: 1ª mensagem em conversa que era da IA → toast claro
+      if (data && data.autoAssumed) {
+        showAutoAssumedToast();
+      }
       // Sucesso: remove a pending (servidor vai mandar via SSE/loadConversations o real)
       clearPendingByTempId(phone, tid);
       await loadConversations();
@@ -5263,6 +5330,22 @@ router.get('/', (req, res) => {
     } catch (e2) {
       markPendingFailed(phone, tid, 'sem conexão');
     }
+  }
+
+  // Toast nítido pro auto-assume da IA (1ª msg da consultora desliga IA)
+  function showAutoAssumedToast() {
+    const stack = document.getElementById('toast-stack');
+    if (!stack) return;
+    const id = 'toast-auto-' + Date.now();
+    const el = document.createElement('div');
+    el.className = 'toast auto-assumed';
+    el.id = id;
+    el.innerHTML =
+      '<button class="toast-close" onclick="dismissToast(\\'' + id + '\\')" type="button">×</button>' +
+      '<div class="toast-title"><span class="toast-icon">✋</span>Você assumiu o atendimento</div>' +
+      '<div class="toast-msg">A IA pausou. Pra ela voltar, clica em "Devolver pra IA" no topo do chat.</div>';
+    stack.appendChild(el);
+    setTimeout(() => dismissToast(id), 6000);
   }
 
   function markPendingFailed(phone, tid, reason) {
@@ -5597,6 +5680,9 @@ router.get('/', (req, res) => {
         return;
       }
       // sucesso — limpa estado, recarrega
+      if (data && data.autoAssumed) {
+        showAutoAssumedToast();
+      }
       if (recAudioUrl) { try { URL.revokeObjectURL(recAudioUrl); } catch {} recAudioUrl = null; }
       recState = null;
       const wrap = document.getElementById('chat-input-wrap');
