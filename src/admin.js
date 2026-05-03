@@ -652,6 +652,62 @@ router.put('/api/academia-info/:key', auth.requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// ─────────────────────────────────────────────────────────────────
+// Agent config (núcleo v2 + timing + buffer) — admin only
+// ─────────────────────────────────────────────────────────────────
+
+const NUCLEO_V2_DEFAULT = require('./prompt-nucleo-v2');
+const TIMING_DEFAULTS = {
+  typing_delay_min_ms: 60 * 1000,
+  typing_delay_max_ms: 180 * 1000,
+  buffer_window_ms: 15 * 1000,
+};
+
+// GET retorna config atual + valores default pra UI mostrar diff e oferecer "Restaurar"
+router.get('/api/agent-config', auth.requireAdmin, (req, res) => {
+  const nucleoCustom = db.getAgentConfig('nucleo_v2', null);
+  res.json({
+    nucleo_v2: {
+      current: nucleoCustom !== null ? nucleoCustom : NUCLEO_V2_DEFAULT,
+      isCustom: nucleoCustom !== null,
+      defaultLength: NUCLEO_V2_DEFAULT.length,
+    },
+    typing_delay_min_ms: db.getAgentConfigNumber('typing_delay_min_ms', TIMING_DEFAULTS.typing_delay_min_ms, 0, 600 * 1000),
+    typing_delay_max_ms: db.getAgentConfigNumber('typing_delay_max_ms', TIMING_DEFAULTS.typing_delay_max_ms, 0, 600 * 1000),
+    buffer_window_ms: db.getAgentConfigNumber('buffer_window_ms', TIMING_DEFAULTS.buffer_window_ms, 1000, 120 * 1000),
+    defaults: TIMING_DEFAULTS,
+  });
+});
+
+// PUT salva uma chave do agent_config
+router.put('/api/agent-config/:key', auth.requireAdmin, (req, res) => {
+  const key = req.params.key;
+  const allowed = ['nucleo_v2', 'typing_delay_min_ms', 'typing_delay_max_ms', 'buffer_window_ms'];
+  if (!allowed.includes(key)) return res.status(400).json({ error: 'Chave não permitida' });
+  const value = req.body?.value;
+  if (key === 'nucleo_v2') {
+    if (typeof value !== 'string') return res.status(400).json({ error: 'value deve ser string' });
+    if (value.length > 50000) return res.status(400).json({ error: 'Núcleo muito longo (máx 50000 chars)' });
+    db.setAgentConfig(key, value, req.user.id);
+  } else {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'value deve ser número >= 0' });
+    db.setAgentConfig(key, String(n), req.user.id);
+  }
+  console.log(`[admin] agent_config[${key}] atualizado por ${req.user.username}`);
+  res.json({ ok: true });
+});
+
+// DELETE restaura ao default (apaga override do DB)
+router.delete('/api/agent-config/:key', auth.requireAdmin, (req, res) => {
+  const key = req.params.key;
+  const allowed = ['nucleo_v2', 'typing_delay_min_ms', 'typing_delay_max_ms', 'buffer_window_ms'];
+  if (!allowed.includes(key)) return res.status(400).json({ error: 'Chave não permitida' });
+  db.setAgentConfig(key, null, req.user.id);
+  console.log(`[admin] agent_config[${key}] restaurado ao default por ${req.user.username}`);
+  res.json({ ok: true });
+});
+
 // Prompt modules (28 módulos do Johnny v2) — leitura pública pra usuários
 // logados, escrita só admin
 router.get('/api/prompt-modules', (req, res) => {
@@ -3601,6 +3657,137 @@ router.get('/', (req, res) => {
       border-color: transparent transparent transparent #6b2222 !important;
     }
 
+    /* Aba Agente — config v2 (núcleo + timing + buffer) */
+    .agente-section {
+      margin-top: 18px;
+      padding: 16px 18px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .agente-section-title {
+      font-size: 14px; font-weight: 600;
+      color: var(--text-primary);
+      margin: 0 0 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .agente-config-row {
+      display: flex; gap: 16px;
+      align-items: flex-start;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .agente-config-row:last-child { border-bottom: none; }
+    .agente-config-label {
+      flex: 1; min-width: 0;
+      font-size: 13px; color: var(--text-secondary);
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .agente-config-hint {
+      font-size: 11.5px; color: var(--text-muted);
+      font-style: italic;
+    }
+    .agente-config-input {
+      display: flex; align-items: center; gap: 8px;
+      flex-shrink: 0;
+    }
+    .agente-config-input input[type="number"] {
+      width: 80px; padding: 7px 10px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 14px; font-weight: 600;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .agente-config-input input[type="number"]:focus {
+      border-color: var(--brand); outline: none;
+    }
+    .agente-config-suffix {
+      font-size: 12px; color: var(--text-muted);
+      min-width: 60px;
+    }
+    .agente-restore {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--text-muted);
+      width: 28px; height: 28px;
+      border-radius: 50%; cursor: pointer;
+      font-size: 14px;
+      transition: all var(--t-fast);
+    }
+    .agente-restore:hover {
+      color: var(--brand);
+      border-color: var(--brand);
+      background: var(--brand-soft);
+    }
+    .agente-help-warn {
+      padding: 10px 12px;
+      background: rgba(243, 156, 18, .08);
+      border-left: 3px solid #f39c12;
+      border-radius: 6px;
+      font-size: 12.5px; color: #f9c869;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    #ac-nucleo {
+      width: 100%; min-height: 360px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: var(--text-primary);
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 12.5px; line-height: 1.5;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+    #ac-nucleo:focus { border-color: var(--brand); outline: none; }
+    .agente-actions {
+      display: flex; align-items: center; gap: 10px;
+      margin-top: 10px;
+    }
+    .agente-char-count {
+      flex: 1;
+      font-size: 12px; color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .agente-btn-primary, .agente-btn-secondary {
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 12.5px; font-weight: 600;
+      cursor: pointer;
+      transition: all var(--t-fast);
+    }
+    .agente-btn-primary {
+      background: var(--brand); color: #001f17;
+      border: none;
+    }
+    .agente-btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+    .agente-btn-primary:disabled {
+      background: var(--bg-3); color: var(--text-muted);
+      cursor: not-allowed;
+    }
+    .agente-btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+    .agente-btn-secondary:hover {
+      border-color: var(--text-muted); color: var(--text-primary);
+    }
+    .agente-status {
+      font-size: 11px; font-weight: 500;
+      padding: 2px 8px; border-radius: 4px;
+      letter-spacing: .03em;
+    }
+    .agente-status.custom {
+      background: rgba(243, 156, 18, .15);
+      color: #f9c869;
+    }
+    .agente-status.default {
+      background: rgba(0, 168, 132, .12);
+      color: var(--brand-light);
+    }
+
     /* Skeleton loaders — substituem "Carregando..." textuais */
     .skeleton-list {
       padding: 8px;
@@ -3714,9 +3901,13 @@ router.get('/', (req, res) => {
           <svg class="chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
         </div>
         <div class="submenu">
+          <div class="sub-item admin-only" data-nav="agente" onclick="event.stopPropagation();switchTab('agente', this)" style="display:none">
+            <span class="si"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h4"/><circle cx="12" cy="6" r="1"/></svg></span>
+            <span>Agente</span>
+          </div>
           <div class="sub-item" data-nav="prompt" onclick="event.stopPropagation();switchTab('prompt', this)">
             <span class="si"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></svg></span>
-            <span>Prompt do agente</span>
+            <span>Prompt do agente <span style="font-size:10px;opacity:.6">(v1 fallback)</span></span>
           </div>
           <div class="sub-item" data-nav="conhecimento" onclick="event.stopPropagation();switchTab('conhecimento', this)">
             <span class="si"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
@@ -3772,6 +3963,76 @@ router.get('/', (req, res) => {
       <div class="tab admin-only" onclick="switchTab('users')">Usuários</div>
       <div class="tab admin-only" onclick="switchTab('metrics')">Métricas</div>
     </div>
+
+<div id="tab-agente" class="panel">
+  <div class="conv-header">
+    <h2>🤖 Agente v2 — configurações</h2>
+    <button class="refresh-btn" onclick="loadAgentConfig()">↻ Atualizar</button>
+  </div>
+  <div class="student-help">
+    Personaliza o agente v2 sem precisar redeploy. Mudanças aplicam <strong>na próxima resposta</strong> da IA.<br>
+    <strong>Núcleo do prompt</strong> = identidade, regras, máquina de estado. Editar errado pode quebrar a IA — usa "Restaurar padrão" se precisar voltar atrás.<br>
+    <strong>Tempo de digitação</strong> = quanto a IA "leva pra digitar" antes de mandar a resposta (simula humano).<br>
+    <strong>Janela de buffer</strong> = quanto tempo aguarda o lead parar de digitar antes de processar batch de mensagens.
+  </div>
+
+  <!-- Section: timing -->
+  <div class="agente-section">
+    <h3 class="agente-section-title">⏱️ Tempo de resposta</h3>
+    <div class="agente-config-row">
+      <div class="agente-config-label">
+        Delay mínimo (resposta curta)
+        <span class="agente-config-hint">Quanto tempo a IA "demora" pra responder mensagens curtas</span>
+      </div>
+      <div class="agente-config-input">
+        <input type="number" id="ac-typing-min" min="0" max="600" step="1" oninput="onAgenteConfigChange('typing_delay_min_ms', this, 1000)">
+        <span class="agente-config-suffix">segundos</span>
+        <button class="agente-restore" onclick="restoreAgenteConfig('typing_delay_min_ms')" title="Restaurar default (60s)">↺</button>
+      </div>
+    </div>
+    <div class="agente-config-row">
+      <div class="agente-config-label">
+        Delay máximo (resposta longa, 300+ chars)
+        <span class="agente-config-hint">Resposta longa demora mais — proporcional ao tamanho</span>
+      </div>
+      <div class="agente-config-input">
+        <input type="number" id="ac-typing-max" min="0" max="600" step="1" oninput="onAgenteConfigChange('typing_delay_max_ms', this, 1000)">
+        <span class="agente-config-suffix">segundos</span>
+        <button class="agente-restore" onclick="restoreAgenteConfig('typing_delay_max_ms')" title="Restaurar default (180s)">↺</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section: buffer -->
+  <div class="agente-section">
+    <h3 class="agente-section-title">📥 Janela de buffer (debounce)</h3>
+    <div class="agente-config-row">
+      <div class="agente-config-label">
+        Tempo de espera antes de processar batch
+        <span class="agente-config-hint">Lead manda "oi" → "tem aula?" → "qual valor?" em poucos segundos. Buffer agrupa antes de chamar a IA. 5-30s é razoável.</span>
+      </div>
+      <div class="agente-config-input">
+        <input type="number" id="ac-buffer" min="1" max="120" step="1" oninput="onAgenteConfigChange('buffer_window_ms', this, 1000)">
+        <span class="agente-config-suffix">segundos</span>
+        <button class="agente-restore" onclick="restoreAgenteConfig('buffer_window_ms')" title="Restaurar default (15s)">↺</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section: núcleo -->
+  <div class="agente-section">
+    <h3 class="agente-section-title">📜 Núcleo do prompt v2 <span id="ac-nucleo-status" class="agente-status"></span></h3>
+    <div class="agente-help-warn">
+      ⚠️ Esse texto é a <strong>identidade base</strong> do agente — define quem ele é, regras de ouro, máquina de estado, formato das tags. Edição errada pode quebrar respostas. Usa "Restaurar padrão" pra voltar ao texto original do código.
+    </div>
+    <textarea id="ac-nucleo" spellcheck="false" placeholder="Carregando..." onchange="saveAgenteNucleo()"></textarea>
+    <div class="agente-actions">
+      <span class="agente-char-count" id="ac-nucleo-count">— chars</span>
+      <button class="agente-btn-secondary" onclick="restoreAgenteConfig('nucleo_v2')">↺ Restaurar padrão</button>
+      <button class="agente-btn-primary" id="ac-nucleo-save" onclick="saveAgenteNucleo()" disabled>Salvar núcleo</button>
+    </div>
+  </div>
+</div>
 
 <div id="tab-prompt" class="panel active">
   <div class="prompt-header">
@@ -6159,7 +6420,7 @@ router.get('/', (req, res) => {
     document.querySelectorAll('.nav-item[data-nav], .sub-item[data-nav]').forEach(el => {
       el.classList.toggle('active', el.dataset.nav === tab);
     });
-    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes' || tab === 'conhecimento' || tab === 'modulos' || tab === 'playground' || tab === 'atalhos') {
+    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes' || tab === 'conhecimento' || tab === 'modulos' || tab === 'playground' || tab === 'atalhos' || tab === 'agente') {
       const cfg = document.getElementById('cfg-group');
       if (cfg) cfg.classList.add('open');
     }
@@ -6200,6 +6461,7 @@ router.get('/', (req, res) => {
     if (tab === 'modulos') loadModulos();
     if (tab === 'playground') initPlayground();
     if (tab === 'atalhos') qrMgmtRender();
+    if (tab === 'agente') { bindNucleoTextarea(); loadAgentConfig(); }
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -6321,6 +6583,149 @@ router.get('/', (req, res) => {
     contato:       '📍 Localização & contato',
     institucional: '⭐ Diferenciais',
   };
+  // ─────────────────────────────────────────────────────────────────
+  // Aba Agente — config v2 (núcleo + timing + buffer)
+  // ─────────────────────────────────────────────────────────────────
+  let agenteNucleoOriginal = '';
+  const agenteSaveTimers = {};
+
+  async function loadAgentConfig() {
+    try {
+      const r = await fetch('/admin/api/agent-config');
+      if (!r.ok) {
+        if (r.status === 403) {
+          document.getElementById('tab-agente').innerHTML =
+            '<div class="empty-state"><div class="es-icon">🔒</div><div class="es-title">Acesso restrito</div><div class="es-sub">Só admins podem editar configs do agente.</div></div>';
+        }
+        return;
+      }
+      const cfg = await r.json();
+
+      // Timing — mostra em segundos
+      const minS = Math.round((cfg.typing_delay_min_ms || 0) / 1000);
+      const maxS = Math.round((cfg.typing_delay_max_ms || 0) / 1000);
+      const bufS = Math.round((cfg.buffer_window_ms || 0) / 1000);
+      const elMin = document.getElementById('ac-typing-min');
+      const elMax = document.getElementById('ac-typing-max');
+      const elBuf = document.getElementById('ac-buffer');
+      if (elMin) elMin.value = minS;
+      if (elMax) elMax.value = maxS;
+      if (elBuf) elBuf.value = bufS;
+
+      // Núcleo
+      const nucleo = cfg.nucleo_v2 || {};
+      const ta = document.getElementById('ac-nucleo');
+      if (ta) {
+        ta.value = nucleo.current || '';
+        agenteNucleoOriginal = nucleo.current || '';
+      }
+      updateNucleoCharCount();
+      const status = document.getElementById('ac-nucleo-status');
+      if (status) {
+        status.className = 'agente-status ' + (nucleo.isCustom ? 'custom' : 'default');
+        status.textContent = nucleo.isCustom ? 'Customizado' : 'Default';
+      }
+      const saveBtn = document.getElementById('ac-nucleo-save');
+      if (saveBtn) saveBtn.disabled = true;
+    } catch (e) {
+      console.error('[agent-config] erro ao carregar:', e.message);
+    }
+  }
+
+  // Atualiza contador de chars do núcleo + habilita botão Salvar se mudou
+  function updateNucleoCharCount() {
+    const ta = document.getElementById('ac-nucleo');
+    const count = document.getElementById('ac-nucleo-count');
+    const saveBtn = document.getElementById('ac-nucleo-save');
+    if (!ta || !count) return;
+    const len = (ta.value || '').length;
+    count.textContent = len.toLocaleString('pt-BR') + ' chars';
+    if (saveBtn) saveBtn.disabled = (ta.value === agenteNucleoOriginal);
+  }
+
+  // Listener auto-update no textarea (oninput)
+  function bindNucleoTextarea() {
+    const ta = document.getElementById('ac-nucleo');
+    if (ta && !ta.dataset.boundCount) {
+      ta.addEventListener('input', updateNucleoCharCount);
+      ta.dataset.boundCount = '1';
+    }
+  }
+
+  // onChange dos inputs numéricos (timing/buffer) — debounce 600ms + auto-save
+  function onAgenteConfigChange(key, inputEl, multiplier) {
+    const valSec = Number(inputEl.value);
+    if (!Number.isFinite(valSec) || valSec < 0) return;
+    const valMs = Math.round(valSec * (multiplier || 1));
+    clearTimeout(agenteSaveTimers[key]);
+    agenteSaveTimers[key] = setTimeout(async () => {
+      try {
+        const r = await fetch('/admin/api/agent-config/' + key, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: valMs }),
+        });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          showToast({ severity: 'warn', title: 'Erro ao salvar', message: data.error || 'Tenta de novo' });
+        }
+      } catch (e) {
+        showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
+      }
+    }, 600);
+  }
+
+  async function saveAgenteNucleo() {
+    const ta = document.getElementById('ac-nucleo');
+    if (!ta) return;
+    const value = ta.value;
+    const saveBtn = document.getElementById('ac-nucleo-save');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      const r = await fetch('/admin/api/agent-config/nucleo_v2', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value }),
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        showToast({ severity: 'warn', title: 'Erro ao salvar', message: data.error || 'Tenta de novo' });
+        if (saveBtn) saveBtn.disabled = false;
+        return;
+      }
+      agenteNucleoOriginal = value;
+      const status = document.getElementById('ac-nucleo-status');
+      if (status) { status.className = 'agente-status custom'; status.textContent = 'Customizado'; }
+      showToast({ severity: 'info', title: '✓ Núcleo salvo', message: 'Aplica na próxima resposta da IA.' });
+    } catch (e) {
+      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
+  async function restoreAgenteConfig(key) {
+    const labels = {
+      nucleo_v2: 'núcleo do prompt',
+      typing_delay_min_ms: 'delay mínimo',
+      typing_delay_max_ms: 'delay máximo',
+      buffer_window_ms: 'janela de buffer',
+    };
+    if (!confirm('Restaurar ' + (labels[key] || key) + ' ao default? A customização atual será perdida.')) return;
+    try {
+      const r = await fetch('/admin/api/agent-config/' + key, { method: 'DELETE' });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        showToast({ severity: 'warn', title: 'Erro ao restaurar', message: data.error || 'Tenta de novo' });
+        return;
+      }
+      // Recarrega tudo pra refletir defaults
+      await loadAgentConfig();
+      showToast({ severity: 'info', title: '↺ Restaurado', message: (labels[key] || key) + ' voltou pro default.' });
+    } catch (e) {
+      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
+    }
+  }
+
   async function loadKnowledge() {
     const list = document.getElementById('kb-list');
     if (!list) return;

@@ -324,6 +324,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_internal_notes_phone ON internal_notes(phone, created_at);
 `);
 
+// Agent config — key/value editável pelo painel pra customizar comportamento
+// do agente v2 sem redeploy. Chaves usadas:
+//   nucleo_v2 — texto do prompt núcleo (override do arquivo prompt-nucleo-v2.js)
+//   typing_delay_min_ms — delay mínimo de digitação em ms (default 60000)
+//   typing_delay_max_ms — delay máximo de digitação em ms (default 180000)
+//   buffer_window_ms — janela de debounce do buffer em ms (default 15000)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agent_config (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at INTEGER NOT NULL,
+    updated_by INTEGER
+  );
+`);
+
 // ─────────────────────────────────────────────────────────────────────
 // PREPARED STATEMENTS (otimizadas, reusadas)
 // ─────────────────────────────────────────────────────────────────────
@@ -696,6 +711,53 @@ function getAllConversations() {
 // ─────────────────────────────────────────────────────────────────────
 // INTERNAL NOTES (notas internas do time sobre o lead)
 // ─────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────
+// AGENT CONFIG — overrides editáveis pelo painel sem redeploy
+// ─────────────────────────────────────────────────────────────────────
+
+const _agentConfigGet = db.prepare('SELECT value FROM agent_config WHERE key = ?');
+const _agentConfigUpsert = db.prepare(`
+  INSERT INTO agent_config (key, value, updated_at, updated_by)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = excluded.updated_at,
+    updated_by = excluded.updated_by
+`);
+const _agentConfigDelete = db.prepare('DELETE FROM agent_config WHERE key = ?');
+const _agentConfigGetAll = db.prepare('SELECT key, value, updated_at FROM agent_config');
+
+// Retorna valor da config (string) ou defaultValue se não existir.
+// String vazia também é considerada "não setado" (cai no default).
+function getAgentConfig(key, defaultValue = null) {
+  const row = _agentConfigGet.get(key);
+  if (!row) return defaultValue;
+  if (row.value === null || row.value === '') return defaultValue;
+  return row.value;
+}
+
+// Setta config (passa null/'' pra restaurar ao default).
+function setAgentConfig(key, value, userId = null) {
+  if (value === null || value === undefined || value === '') {
+    _agentConfigDelete.run(key);
+  } else {
+    _agentConfigUpsert.run(key, String(value), Date.now(), userId);
+  }
+}
+
+// Helper pra ler config numérica (com clamp em range válido).
+function getAgentConfigNumber(key, defaultValue, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  const raw = getAgentConfig(key, null);
+  if (raw === null) return defaultValue;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return defaultValue;
+  return Math.max(min, Math.min(max, n));
+}
+
+function getAllAgentConfig() {
+  return _agentConfigGetAll.all();
+}
 
 function addInternalNote(phone, userId, content) {
   const canonPhone = canonicalizeContactPhone(phone);
@@ -1792,4 +1854,9 @@ module.exports = {
   addInternalNote,
   getInternalNotesByPhone,
   deleteInternalNote,
+  // Agent config (núcleo v2 + timing)
+  getAgentConfig,
+  getAgentConfigNumber,
+  setAgentConfig,
+  getAllAgentConfig,
 };
