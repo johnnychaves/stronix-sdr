@@ -978,14 +978,17 @@ function addMessageWithSender(phone, role, content, wasAudio, sentByUserId, medi
 // não tinha o buffer ainda. Esta função adiciona o ponteiro pro arquivo.
 function setLastAssistantMessageMediaPath(phone, mediaPath) {
   phone = canonicalizeContactPhone(phone);
-  // Filtra was_audio=1 + media_path NULL pra evitar race: se uma msg de TEXTO
-  // foi adicionada DEPOIS da msg audio (raro mas possível com batches paralelos),
-  // o "last assistant" seria o text, e o path iria pra msg errada.
+  // Filtra media_path IS NULL pra pegar a msg que acabou de ser salva (sem path
+  // ainda). Marca was_audio=1 ao mesmo tempo: o agent.js salva was_audio=true
+  // só quando Claude põe [AUDIO] no texto, mas o webhook envia TTS sempre que
+  // forceAudio=true (lead mandou audio). Quando isso acontece, was_audio fica
+  // 0 no DB mas mandamos áudio — setando aqui corrige o record pra renderizar
+  // o player no painel.
   db.prepare(`
-    UPDATE messages SET media_path = ?
+    UPDATE messages SET media_path = ?, was_audio = 1
     WHERE id = (
       SELECT id FROM messages
-      WHERE phone = ? AND role = 'assistant' AND was_audio = 1 AND media_path IS NULL
+      WHERE phone = ? AND role = 'assistant' AND media_path IS NULL
       ORDER BY id DESC LIMIT 1
     )
   `).run(mediaPath, phone);
