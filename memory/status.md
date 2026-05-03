@@ -1,6 +1,6 @@
 # Status Atual do Projeto
 
-> Última atualização: 2026-05-02
+> Última atualização: 2026-05-03
 
 ## Estado: Plataforma feature-complete em Baileys, aguardando troca pro número da academia ✅
 
@@ -24,6 +24,13 @@ Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda
 - Picker de emoji com 8 categorias + recentes em localStorage
 - Player de áudio inline na bubble (MP3 salvo em /data/media)
 - Checkmarks ✓ ✓✓ ✓✓ azul (sent/delivered/read via Baileys events)
+
+### ✨ Polish PR (2026-05-03 — frontend-only, sem back-end)
+- **Optimistic UI no envio:** bubble aparece instantâneo com ⏱ pulsante, vira ✓ quando o servidor confirma. Em erro vira ⚠ com botão "Tentar de novo". `pendingMessages` Map por phone, merge com history no render.
+- **Reply / citar mensagem:** hover em bubble revela ↩, click → preview compacto na composer (com X pra cancelar via Esc), prepend `> trecho\n\n` no texto enviado. Quote renderiza estilizado nas bubbles. WhatsApp do lead vê quote nativo.
+- **Quick replies (slash commands):** digita `/` → dropdown abre com snippets, ↑↓ navega, Enter expande, Tab também aceita. 6 defaults seed (`/aula`, `/valores`, `/horario`, `/endereco`, `/agendar`, `/ola`). Aba "Configurações → Atalhos rápidos" pra editar/criar/remover. localStorage por navegador, não sincroniza entre consultoras (aceito como v1).
+- **Notas internas:** seção nova na sidebar direita (ficha do lead) com textarea autosalva via debounce 500ms. localStorage prefixo `internalNote:${phone}`. Não sincroniza entre consultoras (limitação aceita — backend depois se virar pedido).
+- **Skeleton loaders + Empty states:** todos os "Carregando..." textuais substituídos por skeleton-card com shimmer animado. Inbox vazia com filtro mostra "Limpar filtro" como ação. Inbox totalmente vazia mostra "Aguardando primeira conversa".
 
 ### 🔌 Conexão WhatsApp (PRs #20, #21, #22, #23, #24)
 - **Provider toggle** via `WHATSAPP_PROVIDER=meta|baileys`

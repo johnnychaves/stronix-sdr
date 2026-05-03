@@ -3081,6 +3081,256 @@ router.get('/', (req, res) => {
     .v2m-tour-card .step { font-size: 11px; color: var(--text-muted); }
     .v2m-tour-card button { background: var(--brand); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
     .v2m-tour-card .skip { background: transparent; color: var(--text-muted); }
+
+    /* ════════════════════════════════════════════════
+       POLISH PR — Optimistic UI, Reply, Quick Replies, Notes, Skeleton, Empty
+       ════════════════════════════════════════════════ */
+
+    /* Optimistic UI — bubble pendente / falha */
+    .bubble.pending { opacity: .62; }
+    .bubble.failed-send {
+      background: linear-gradient(180deg, #6b2222 0%, #5a1818 100%) !important;
+    }
+    .bubble.failed-send::before {
+      border-color: transparent transparent transparent #6b2222 !important;
+    }
+    .bubble.failed-send .retry-send {
+      display: inline-block;
+      background: rgba(255,255,255,.18); color: #fff;
+      border: none; border-radius: 4px;
+      padding: 2px 8px; font-size: 11px; font-weight: 600;
+      margin-left: 6px; cursor: pointer;
+    }
+    .bubble.failed-send .retry-send:hover { background: rgba(255,255,255,.28); }
+    .msg-check.pending {
+      color: rgba(255,255,255,.5);
+      animation: ckPulse 1.4s ease-in-out infinite;
+    }
+    @keyframes ckPulse {
+      0%, 100% { opacity: .5; }
+      50% { opacity: 1; }
+    }
+
+    /* Reply / quote — botão hover na bubble + preview na composer + render do quote */
+    .bubble-action-reply {
+      position: absolute; top: 4px;
+      background: rgba(0,0,0,.45); color: #fff;
+      border: none; border-radius: 50%;
+      width: 22px; height: 22px;
+      font-size: 12px; cursor: pointer;
+      opacity: 0; transition: opacity .15s ease;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 2;
+    }
+    .bubble-row.in .bubble-action-reply { right: -28px; }
+    .bubble-row.out .bubble-action-reply { left: -28px; }
+    .bubble-row:hover .bubble-action-reply { opacity: 1; }
+    .bubble-action-reply:hover { background: rgba(0,0,0,.7); }
+
+    .bubble-quote {
+      display: block;
+      border-left: 3px solid rgba(255,255,255,.5);
+      padding: 4px 8px;
+      background: rgba(255,255,255,.08);
+      font-size: 12.5px;
+      color: rgba(255,255,255,.78);
+      margin-bottom: 6px;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      overflow: hidden;
+      max-height: 4.4em;
+    }
+    .bubble.in .bubble-quote {
+      border-left-color: rgba(0,0,0,.28);
+      background: rgba(0,0,0,.07);
+      color: rgba(0,0,0,.62);
+    }
+
+    .composer-reply-preview {
+      display: flex; align-items: stretch; gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-3);
+      border-left: 3px solid var(--brand);
+      border-radius: 6px 6px 0 0;
+      animation: crpSlideDown .18s ease;
+    }
+    @keyframes crpSlideDown {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .composer-reply-preview .crp-body { flex: 1; min-width: 0; overflow: hidden; }
+    .composer-reply-preview .crp-label {
+      font-size: 11px; font-weight: 600;
+      color: var(--brand); margin-bottom: 2px;
+    }
+    .composer-reply-preview .crp-text {
+      font-size: 12.5px; color: var(--text-secondary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .composer-reply-preview .crp-close {
+      background: transparent; border: none;
+      color: var(--text-muted); cursor: pointer;
+      font-size: 18px; line-height: 1;
+      padding: 0 6px; border-radius: 4px;
+    }
+    .composer-reply-preview .crp-close:hover {
+      color: var(--text-primary); background: rgba(255,255,255,.08);
+    }
+
+    /* Quick replies — dropdown acima do composer */
+    .chat-input-bar { position: relative; }
+    .quick-reply-dropdown {
+      position: absolute;
+      bottom: calc(100% + 4px);
+      left: 0; right: 0;
+      background: var(--bg-2);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      box-shadow: 0 -8px 24px rgba(0,0,0,.4);
+      max-height: 240px;
+      overflow-y: auto;
+      z-index: 50;
+    }
+    .quick-reply-dropdown.hidden { display: none; }
+    .quick-reply-item {
+      padding: 8px 12px; cursor: pointer;
+      display: flex; flex-direction: column; gap: 2px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .quick-reply-item:last-child { border-bottom: none; }
+    .quick-reply-item.active { background: var(--brand-soft); }
+    .quick-reply-item:hover { background: var(--bg-3); }
+    .quick-reply-item .qr-trigger {
+      font-size: 12px; font-weight: 600; color: var(--brand);
+      font-family: ui-monospace, 'SF Mono', monospace;
+    }
+    .quick-reply-item .qr-text {
+      font-size: 13px; color: var(--text-secondary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .quick-reply-empty {
+      padding: 16px 12px; text-align: center;
+      font-size: 12px; color: var(--text-muted);
+    }
+
+    /* Quick replies — gerenciamento (tab Configurações) */
+    .qr-mgmt-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .qr-mgmt-item {
+      display: flex; gap: 10px; align-items: center;
+      padding: 10px 12px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .qr-mgmt-item input.qr-trigger-input {
+      width: 110px; font-family: ui-monospace, 'SF Mono', monospace;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 10px;
+      color: var(--brand); font-size: 13px; font-weight: 600;
+    }
+    .qr-mgmt-item input.qr-text-input {
+      flex: 1; min-width: 0;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 10px;
+      color: var(--text-primary); font-size: 13px;
+    }
+    .qr-mgmt-item button.qr-del {
+      background: transparent; color: var(--text-muted);
+      border: none; cursor: pointer; padding: 4px 8px;
+      font-size: 16px; border-radius: 4px;
+    }
+    .qr-mgmt-item button.qr-del:hover {
+      color: var(--danger); background: rgba(248,113,113,.1);
+    }
+    .qr-mgmt-add {
+      margin-top: 10px; padding: 8px 14px;
+      background: var(--brand); color: #001f17;
+      border: none; border-radius: 6px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .qr-mgmt-add:hover { filter: brightness(1.1); }
+
+    /* Notas internas — textarea na sidebar direita */
+    .detail-internal-notes { display: flex; flex-direction: column; gap: 6px; }
+    .detail-internal-notes textarea {
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: var(--text-primary);
+      font-size: 13px; line-height: 1.5;
+      font-family: inherit;
+      resize: vertical; min-height: 70px; width: 100%;
+      box-sizing: border-box;
+    }
+    .detail-internal-notes textarea:focus {
+      border-color: var(--brand); outline: none;
+    }
+    .detail-internal-notes .notes-status {
+      font-size: 11px; color: var(--text-muted);
+      text-align: right; font-style: italic;
+      min-height: 14px;
+    }
+    .detail-internal-notes .notes-help {
+      font-size: 11.5px; color: var(--text-muted);
+      font-style: italic; line-height: 1.45;
+    }
+
+    /* Skeleton loaders — substituem "Carregando..." textuais */
+    .skeleton-list {
+      padding: 8px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .skeleton-card {
+      height: 64px;
+      border-radius: 8px;
+      background: linear-gradient(90deg,
+        var(--bg-2) 0%,
+        var(--bg-3) 50%,
+        var(--bg-2) 100%);
+      background-size: 200% 100%;
+      animation: skShimmer 1.4s ease-in-out infinite;
+    }
+    .skeleton-card.compact { height: 44px; }
+    .skeleton-card.tall { height: 80px; }
+    @keyframes skShimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* Empty state — versão melhor com microcopy + ação opcional */
+    .empty-state {
+      text-align: center;
+      padding: 36px 20px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .empty-state .es-icon {
+      font-size: 32px; opacity: .35;
+      margin-bottom: 8px;
+    }
+    .empty-state .es-title {
+      font-size: 14px; font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+    .empty-state .es-sub {
+      font-size: 12.5px; color: var(--text-muted);
+      max-width: 280px; margin: 0 auto 12px;
+      line-height: 1.5;
+    }
+    .empty-state button {
+      background: transparent; color: var(--brand);
+      border: 1px solid var(--brand);
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12.5px; font-weight: 500;
+      cursor: pointer;
+      transition: all .15s ease;
+    }
+    .empty-state button:hover {
+      background: var(--brand-soft);
+    }
   </style>
 </head>
 <body>
@@ -3148,6 +3398,10 @@ router.get('/', (req, res) => {
           <div class="sub-item" data-nav="playground" onclick="event.stopPropagation();switchTab('playground', this)">
             <span class="si"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
             <span>Testar agente</span>
+          </div>
+          <div class="sub-item" data-nav="atalhos" onclick="event.stopPropagation();switchTab('atalhos', this)">
+            <span class="si"><svg viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></span>
+            <span>Atalhos rápidos</span>
           </div>
           <div class="sub-item admin-only" data-nav="users" onclick="event.stopPropagation();switchTab('users', this)" style="display:none">
             <span class="si"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
@@ -3235,7 +3489,7 @@ router.get('/', (req, res) => {
         <button class="filter-btn" data-filter="good" onclick="setFilter('good')">👍</button>
       </div>
       <div class="inbox-list" id="inbox-list">
-        <div class="empty">Carregando...</div>
+        <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
       </div>
     </div>
 
@@ -3265,7 +3519,7 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadAppointments()">↻ Atualizar</button>
   </div>
   <div id="appt-list">
-    <div class="empty">Carregando...</div>
+    <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
   </div>
 </div>
 
@@ -3290,7 +3544,7 @@ router.get('/', (req, res) => {
     <button class="btn-add" onclick="addUser()">Adicionar</button>
   </div>
   <div id="users-list">
-    <div class="empty">Carregando...</div>
+    <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
   </div>
 </div>
 
@@ -3350,7 +3604,7 @@ router.get('/', (req, res) => {
 
       <!-- Lista de conversas v2 -->
       <div id="v2m-list" class="v2m-list">
-        <div class="empty" style="padding:30px;text-align:center;color:var(--text-muted)">Carregando…</div>
+        <div class="skeleton-list"><div class="skeleton-card tall"></div><div class="skeleton-card tall"></div><div class="skeleton-card tall"></div></div>
       </div>
 
       <!-- Controles -->
@@ -3396,7 +3650,7 @@ router.get('/', (req, res) => {
     <br>Total: <strong>28 módulos</strong> divididos em conhecimento, objeções, situações e sistema.
   </div>
   <div id="modulos-list">
-    <div class="empty">Carregando...</div>
+    <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
   </div>
 </div>
 
@@ -3410,7 +3664,7 @@ router.get('/', (req, res) => {
     <br>Deixa o campo <strong>vazio</strong> pra a IA não mencionar aquela informação.
   </div>
   <div id="kb-list">
-    <div class="empty">Carregando...</div>
+    <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
   </div>
 </div>
 
@@ -3462,8 +3716,20 @@ router.get('/', (req, res) => {
     Aqui você gerencia o número de WhatsApp que a plataforma usa pra enviar e receber mensagens. Por enquanto a plataforma suporta <strong>1 número conectado por vez</strong>.
   </div>
   <div id="connections-list">
-    <div class="empty">Carregando...</div>
+    <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
   </div>
+</div>
+
+<div id="tab-atalhos" class="panel">
+  <div class="conv-header">
+    <h2>Atalhos rápidos — snippets pra acelerar respostas</h2>
+  </div>
+  <div class="student-help">
+    Cria snippets que tu usa direto na composer digitando <code>/</code> + nome (ex: <code>/aula</code>, <code>/valores</code>). Aparece dropdown com lista, ↑↓ pra navegar, Enter pra expandir, Esc fecha.<br>
+    Salvos no <strong>seu navegador</strong> (localStorage). Não sincroniza entre consultoras nem entre dispositivos — cada uma configura os seus.
+  </div>
+  <div id="qr-mgmt-list" class="qr-mgmt-list"></div>
+  <button class="qr-mgmt-add" onclick="qrMgmtAdd()">+ Adicionar atalho</button>
 </div>
 
 <div id="tab-alunos" class="panel">
@@ -3482,7 +3748,7 @@ router.get('/', (req, res) => {
     <button class="btn-add" onclick="addStudent()">Adicionar</button>
   </div>
   <div id="students-list">
-    <div class="empty">Carregando...</div>
+    <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
   </div>
 </div>
 
@@ -3606,6 +3872,281 @@ router.get('/', (req, res) => {
   let searchQuery = '';
   let selectedPhone = null;
   let chatScrollPinned = true; // se usuário tá no fim do chat, mantém autoscroll
+
+  // ─── Polish PR — estado das features novas ───
+  // Optimistic UI: msgs do usuário renderizadas instantâneo, antes do servidor confirmar.
+  // Map<phone, [{tempId, text, status: 'pending'|'failed', createdAt, replyTo?}]>
+  const pendingMessages = new Map();
+
+  // Reply/citar: msg sendo citada pelo composer (null = nenhuma).
+  let replyingTo = null; // { phone, text }
+
+  // Quick replies (slash commands): snippets em localStorage.
+  let quickReplies = []; // [{ trigger, text }]
+  const QR_STORAGE_KEY = 'quickReplies';
+  const QR_DEFAULTS = [
+    { trigger: '/aula', text: 'Posso te marcar pra terça às 9h ou quarta às 10h pra fazer a aula experimental?' },
+    { trigger: '/valores', text: 'Os planos vão de R$ 149 (mensal) até R$ 99/mês (anual). Qual encaixa melhor pro teu objetivo?' },
+    { trigger: '/horario', text: 'A academia abre de segunda a sexta das 6h às 22h30, sábado das 9h às 13h.' },
+    { trigger: '/endereco', text: 'Estamos na Av. Edgar Pires de Castro, 9392, Lageado, Porto Alegre/RS. Tem estacionamento gratuito.' },
+    { trigger: '/agendar', text: 'Beleza! Que dia da semana fica melhor pra ti — terça, quarta, quinta ou sexta?' },
+    { trigger: '/ola', text: 'Oi! Aqui é a STRONIX, tudo certo? Como posso te ajudar?' },
+  ];
+  let qrDropdownActive = false;
+  let qrDropdownIndex = 0;
+  let qrDropdownMatches = [];
+
+  // Notas internas: textarea por contato no sidebar direito, salva em localStorage.
+  // Não sincroniza entre consultoras (limitação aceita — backend depois se virar pedido).
+  const NOTES_STORAGE_PREFIX = 'internalNote:';
+  let notesSaveTimer = null;
+
+  // ─── Polish helpers ───
+  function loadQuickReplies() {
+    try {
+      const saved = localStorage.getItem(QR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          quickReplies = parsed.filter(x => x && typeof x.trigger === 'string' && typeof x.text === 'string');
+          return;
+        }
+      }
+    } catch {}
+    // Primeira carga: seed com defaults
+    quickReplies = QR_DEFAULTS.slice();
+    saveQuickReplies();
+  }
+  function saveQuickReplies() {
+    try { localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(quickReplies)); } catch {}
+  }
+  function loadInternalNote(phone) {
+    if (!phone) return '';
+    try { return localStorage.getItem(NOTES_STORAGE_PREFIX + phone) || ''; }
+    catch { return ''; }
+  }
+  function saveInternalNote(phone, value) {
+    if (!phone) return;
+    try {
+      if (value && value.trim()) localStorage.setItem(NOTES_STORAGE_PREFIX + phone, value);
+      else localStorage.removeItem(NOTES_STORAGE_PREFIX + phone);
+    } catch {}
+  }
+  function setReplyTo(phone, mid) {
+    const c = allConversations.find(x => x.from === phone);
+    if (!c) return;
+    const m = c.history.find(x => String(x.id) === String(mid));
+    if (!m || !m.content) return;
+    // Remove qualquer quote prévia da msg citada (não cita citação)
+    const cleanText = stripQuotePrefix(m.content);
+    const trimmed = cleanText.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!trimmed) return;
+    replyingTo = { phone, text: trimmed };
+    // Re-renderiza a barra de input pra mostrar o preview
+    const wrap = document.getElementById('chat-input-wrap');
+    if (wrap) {
+      wrap.dataset.mode = 'fresh'; // força rebuild
+      syncChatInputBar(c);
+    }
+    setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
+  }
+  function clearReplyTo() {
+    replyingTo = null;
+    const c = allConversations.find(x => x.from === selectedPhone);
+    if (c) {
+      const wrap = document.getElementById('chat-input-wrap');
+      if (wrap) { wrap.dataset.mode = 'fresh'; syncChatInputBar(c); }
+    }
+    setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
+  }
+  function stripQuotePrefix(text) {
+    // Remove linhas iniciais que começam com "> " (quote)
+    if (!text) return text;
+    const lines = text.split('\n');
+    let i = 0;
+    while (i < lines.length && /^&gt;\s|^>\s|^>$/.test(lines[i])) i++;
+    // Pula uma linha em branco logo após o quote
+    while (i < lines.length && lines[i].trim() === '') i++;
+    return lines.slice(i).join('\n');
+  }
+  function extractQuoteAndBody(text) {
+    // Para render: separa o bloco de quote (linhas iniciando com "> ") do corpo.
+    if (!text) return { quote: '', body: text };
+    const lines = text.split('\n');
+    const quoteLines = [];
+    let i = 0;
+    while (i < lines.length && /^>\s?/.test(lines[i])) {
+      quoteLines.push(lines[i].replace(/^>\s?/, ''));
+      i++;
+    }
+    if (!quoteLines.length) return { quote: '', body: text };
+    while (i < lines.length && lines[i].trim() === '') i++;
+    return { quote: quoteLines.join('\n'), body: lines.slice(i).join('\n') };
+  }
+  function tempId() {
+    return 'tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  }
+  function getMergedHistory(c) {
+    // Concatena histórico real do servidor + msgs pendentes/falhadas (locais).
+    const pend = pendingMessages.get(c.from) || [];
+    if (!pend.length) return c.history;
+    return c.history.concat(pend.map(p => ({
+      id: p.tempId,
+      role: 'assistant',
+      content: p.text,
+      createdAt: p.createdAt,
+      sentByUserId: (typeof me !== 'undefined' && me) ? me.id : null,
+      _pendingStatus: p.status, // 'pending' | 'failed'
+    })));
+  }
+  function clearPendingForServerMatch(phone, sentText) {
+    // Quando uma msg confirma no servidor, remove a pending equivalente.
+    // Match: mesmo phone + mesmo texto + status pending. Pega a mais antiga.
+    const arr = pendingMessages.get(phone);
+    if (!arr || !arr.length) return;
+    const idx = arr.findIndex(p => p.status === 'pending' && p.text === sentText);
+    if (idx >= 0) {
+      arr.splice(idx, 1);
+      if (!arr.length) pendingMessages.delete(phone);
+    }
+  }
+  // Quick replies — dropdown UI
+  function ensureQRDropdown() {
+    let dd = document.getElementById('qr-dropdown');
+    if (dd) return dd;
+    const bar = document.getElementById('chat-input-bar');
+    if (!bar) return null;
+    dd = document.createElement('div');
+    dd.id = 'qr-dropdown';
+    dd.className = 'quick-reply-dropdown hidden';
+    bar.appendChild(dd);
+    return dd;
+  }
+  function hideQRDropdown() {
+    qrDropdownActive = false;
+    qrDropdownIndex = 0;
+    qrDropdownMatches = [];
+    const dd = document.getElementById('qr-dropdown');
+    if (dd) dd.classList.add('hidden');
+  }
+  function showQRDropdownIfTriggered(textarea) {
+    const v = textarea.value;
+    // Trigger: textarea começa com "/" e ainda não tem espaço/quebra (busca em progresso)
+    if (!v.startsWith('/') || /[\s\n]/.test(v)) {
+      hideQRDropdown();
+      return;
+    }
+    const query = v.toLowerCase();
+    qrDropdownMatches = quickReplies.filter(qr => qr.trigger.toLowerCase().startsWith(query));
+    if (!qrDropdownMatches.length && quickReplies.length) {
+      // Mostra todos se nada bateu (pra descobrir os disponíveis)
+      qrDropdownMatches = quickReplies.slice();
+    }
+    const dd = ensureQRDropdown();
+    if (!dd) return;
+    if (!quickReplies.length) {
+      dd.innerHTML = '<div class="quick-reply-empty">Sem atalhos cadastrados. Configurações → Atalhos rápidos.</div>';
+      dd.classList.remove('hidden');
+      qrDropdownActive = true;
+      qrDropdownIndex = -1;
+      return;
+    }
+    qrDropdownActive = true;
+    if (qrDropdownIndex >= qrDropdownMatches.length) qrDropdownIndex = 0;
+    if (qrDropdownIndex < 0) qrDropdownIndex = 0;
+    dd.innerHTML = qrDropdownMatches.map((qr, i) =>
+      '<div class="quick-reply-item ' + (i === qrDropdownIndex ? 'active' : '') +
+      '" onmousedown="event.preventDefault();qrPick(' + i + ')">' +
+      '<div class="qr-trigger">' + escapeHtml(qr.trigger) + '</div>' +
+      '<div class="qr-text">' + escapeHtml(qr.text.slice(0, 90)) + '</div>' +
+      '</div>'
+    ).join('');
+    dd.classList.remove('hidden');
+  }
+  function qrMoveActive(delta) {
+    if (!qrDropdownMatches.length) return;
+    qrDropdownIndex = (qrDropdownIndex + delta + qrDropdownMatches.length) % qrDropdownMatches.length;
+    const dd = document.getElementById('qr-dropdown');
+    if (!dd) return;
+    [...dd.querySelectorAll('.quick-reply-item')].forEach((el, i) => {
+      el.classList.toggle('active', i === qrDropdownIndex);
+    });
+  }
+  function qrPick(idx) {
+    const qr = qrDropdownMatches[idx];
+    if (!qr) return;
+    const ta = document.getElementById('chat-input');
+    if (!ta) return;
+    ta.value = qr.text;
+    ta.focus();
+    // Coloca cursor no fim
+    ta.selectionStart = ta.selectionEnd = qr.text.length;
+    autoGrowChat(ta);
+    hideQRDropdown();
+  }
+  // Notas internas — onChange handler com debounce
+  function onInternalNoteChange(phone) {
+    const ta = document.getElementById('internal-note-input');
+    if (!ta) return;
+    const status = document.getElementById('internal-note-status');
+    if (status) status.textContent = 'Digitando…';
+    clearTimeout(notesSaveTimer);
+    notesSaveTimer = setTimeout(() => {
+      saveInternalNote(phone, ta.value);
+      if (status) {
+        status.textContent = ta.value.trim() ? 'Salvo no seu navegador' : 'Vazio';
+        setTimeout(() => { if (status) status.textContent = ''; }, 1800);
+      }
+    }, 500);
+  }
+  // Quick replies management — aba Configurações
+  function qrMgmtRender() {
+    const list = document.getElementById('qr-mgmt-list');
+    if (!list) return;
+    if (!quickReplies.length) {
+      list.innerHTML = '<div class="empty-state"><div class="es-title">Nenhum atalho ainda</div><div class="es-sub">Clica em "Adicionar atalho" pra criar o primeiro.</div></div>';
+      return;
+    }
+    list.innerHTML = quickReplies.map((qr, i) =>
+      '<div class="qr-mgmt-item">' +
+        '<input class="qr-trigger-input" value="' + escapeHtml(qr.trigger) + '" placeholder="/atalho" onchange="qrMgmtUpdateTrigger(' + i + ', this.value)">' +
+        '<input class="qr-text-input" value="' + escapeHtml(qr.text) + '" placeholder="Texto que vai expandir" onchange="qrMgmtUpdateText(' + i + ', this.value)">' +
+        '<button class="qr-del" onclick="qrMgmtDelete(' + i + ')" title="Remover">✕</button>' +
+      '</div>'
+    ).join('');
+  }
+  function qrMgmtAdd() {
+    quickReplies.push({ trigger: '/novo', text: '' });
+    saveQuickReplies();
+    qrMgmtRender();
+    // Foca no campo trigger do novo item
+    setTimeout(() => {
+      const inputs = document.querySelectorAll('.qr-mgmt-item .qr-trigger-input');
+      const last = inputs[inputs.length - 1];
+      if (last) { last.focus(); last.select(); }
+    }, 50);
+  }
+  function qrMgmtUpdateTrigger(i, val) {
+    if (!quickReplies[i]) return;
+    let v = String(val || '').trim();
+    if (v && !v.startsWith('/')) v = '/' + v;
+    if (!v) v = '/atalho';
+    quickReplies[i].trigger = v;
+    saveQuickReplies();
+  }
+  function qrMgmtUpdateText(i, val) {
+    if (!quickReplies[i]) return;
+    quickReplies[i].text = String(val || '');
+    saveQuickReplies();
+  }
+  function qrMgmtDelete(i) {
+    if (!confirm('Remover este atalho?')) return;
+    quickReplies.splice(i, 1);
+    saveQuickReplies();
+    qrMgmtRender();
+  }
+  // Inicializa quick replies no boot
+  loadQuickReplies();
 
   // Polling + notificações: estado pra detectar mensagens novas
   let pollTimer = null;
@@ -3842,7 +4383,23 @@ router.get('/', (req, res) => {
 
     const list = document.getElementById('inbox-list');
     if (!convs.length) {
-      list.innerHTML = '<div class="actives-empty">Nenhuma conversa nesse filtro</div>';
+      const hasFilter = currentFilter !== 'all' || (searchQuery && searchQuery.trim());
+      if (hasFilter) {
+        list.innerHTML =
+          '<div class="empty-state">' +
+            '<div class="es-icon">🔍</div>' +
+            '<div class="es-title">Nenhuma conversa com esse filtro</div>' +
+            '<div class="es-sub">Tenta limpar o filtro ou busca pra ver todas as conversas.</div>' +
+            '<button onclick="clearInboxFilters()" type="button">Limpar filtro</button>' +
+          '</div>';
+      } else {
+        list.innerHTML =
+          '<div class="empty-state">' +
+            '<div class="es-icon">💬</div>' +
+            '<div class="es-title">Aguardando primeira conversa</div>' +
+            '<div class="es-sub">Quando alguém mandar mensagem pro WhatsApp da academia, vai aparecer aqui em tempo real.</div>' +
+          '</div>';
+      }
       return;
     }
 
@@ -3947,6 +4504,18 @@ router.get('/', (req, res) => {
         <h3>Avaliação & notas</h3>
         \${noteHtml}
       </section>
+
+      <section class="detail-section">
+        <h3>Notas internas (só você)</h3>
+        <div class="detail-internal-notes">
+          <textarea
+            id="internal-note-input"
+            placeholder="Anote aqui o que NÃO vai pro lead. Ex: 'pediu pra ligar 18h', 'esposa não autorizou ainda', 'comprou plano semestral em 2024'..."
+            oninput="onInternalNoteChange('\${c.from}')">\${escapeHtml(loadInternalNote(c.from))}</textarea>
+          <div class="notes-status" id="internal-note-status"></div>
+          <div class="notes-help">Salvas no seu navegador. Não sincroniza entre consultoras.</div>
+        </div>
+      </section>
     \`;
   }
 
@@ -3994,12 +4563,13 @@ router.get('/', (req, res) => {
   }
 
   function renderChatMessages(c) {
-    if (!c.history.length) {
+    const merged = getMergedHistory(c);
+    if (!merged.length) {
       return '<div class="chat-empty"><div style="opacity:.5;font-size:13px">Sem mensagens ainda</div></div>';
     }
     let lastDay = '';
     let lastGroupKey = '';
-    return c.history.map(m => {
+    return merged.map(m => {
       const day = fmtDayDivider(m.createdAt || c.firstContactAt);
       let dayHtml = '';
       let dayChanged = false;
@@ -4013,6 +4583,9 @@ router.get('/', (req, res) => {
       const senderName = fromHuman ? (getUserDisplay(fromHuman) || 'Atendente') : '';
       const inOrOut = isOut ? 'out' : 'in';
       const humanCls = fromHuman ? ' human' : '';
+      const isPending = m._pendingStatus === 'pending';
+      const isFailed  = m._pendingStatus === 'failed';
+      const pendingCls = isPending ? ' pending' : (isFailed ? ' failed-send' : '');
 
       // Group consecutive messages from same sender (role + user id)
       const groupKey = m.role + ':' + (m.sentByUserId || '');
@@ -4030,31 +4603,52 @@ router.get('/', (req, res) => {
         bodyHtml = senderHtml +
           '<audio class="bubble-audio" controls preload="metadata" src="/admin/api/media/' + encodeURIComponent(m.mediaPath) + '"></audio>';
       } else {
-        bodyHtml = senderHtml + linkify(escapeHtml(m.content));
+        // Reply/quote: linhas que começam com "> " viram bloco visual citado.
+        const split = extractQuoteAndBody(m.content || '');
+        let inner = '';
+        if (split.quote) {
+          inner += '<div class="bubble-quote">' + linkify(escapeHtml(split.quote)) + '</div>';
+        }
+        inner += linkify(escapeHtml(split.body));
+        bodyHtml = senderHtml + inner;
       }
 
       // Checkmarks de status (só pra msgs OUTgoing — IA ou consultora)
       let statusHtml = '';
       if (isOut) {
-        const st = m.deliveryStatus;
-        if (st === 'read') {
-          statusHtml = '<span class="msg-check read" title="Lido">✓✓</span>';
-        } else if (st === 'delivered') {
-          statusHtml = '<span class="msg-check delivered" title="Entregue">✓✓</span>';
-        } else if (st === 'sent' || m.wamid) {
-          statusHtml = '<span class="msg-check sent" title="Enviado">✓</span>';
-        } else if (st === 'failed') {
-          statusHtml = '<span class="msg-check failed" title="Falhou">⚠</span>';
+        if (isPending) {
+          statusHtml = '<span class="msg-check pending" title="Enviando…">⏱</span>';
+        } else if (isFailed) {
+          statusHtml = '<span class="msg-check failed" title="Falhou">⚠</span>' +
+            '<button class="retry-send" onclick="retrySend(\'' + c.from + '\', \'' + (m.id || '') + '\')" type="button">Tentar de novo</button>';
+        } else {
+          const st = m.deliveryStatus;
+          if (st === 'read') {
+            statusHtml = '<span class="msg-check read" title="Lido">✓✓</span>';
+          } else if (st === 'delivered') {
+            statusHtml = '<span class="msg-check delivered" title="Entregue">✓✓</span>';
+          } else if (st === 'sent' || m.wamid) {
+            statusHtml = '<span class="msg-check sent" title="Enviado">✓</span>';
+          } else if (st === 'failed') {
+            statusHtml = '<span class="msg-check failed" title="Falhou">⚠</span>';
+          }
         }
       }
+
+      // Botão reply hover (não exibe em pending nem failed nem áudio)
+      const canReply = !isPending && !isFailed && !!m.id && !(m.wasAudio && m.mediaPath);
+      const replyBtn = canReply
+        ? '<button class="bubble-action-reply" type="button" onclick="setReplyTo(\'' + c.from + '\', \'' + m.id + '\')" title="Responder">↩</button>'
+        : '';
 
       const groupCls = isGrouped ? ' grouped' : '';
       return dayHtml +
         '<div class="bubble-row ' + inOrOut + groupCls + '" data-mid="' + (m.id || '') + '">' +
-          '<div class="bubble ' + inOrOut + humanCls + groupCls + '">' +
+          '<div class="bubble ' + inOrOut + humanCls + groupCls + pendingCls + '">' +
             bodyHtml +
             '<div class="bubble-meta">' + fmtMessageTime(m.createdAt) + statusHtml + '</div>' +
           '</div>' +
+          replyBtn +
         '</div>';
     }).join('');
   }
@@ -4084,13 +4678,23 @@ router.get('/', (req, res) => {
              <button onclick="releaseConv(event, '\${c.from}')">Devolver pra IA</button>
            </div>\`
         : '';
+      const replyPreview = (replyingTo && replyingTo.phone === c.from)
+        ? \`<div class="composer-reply-preview" id="composer-reply-preview">
+             <div class="crp-body">
+               <div class="crp-label">Respondendo a</div>
+               <div class="crp-text">\${escapeHtml(replyingTo.text)}</div>
+             </div>
+             <button class="crp-close" onclick="clearReplyTo()" title="Cancelar resposta" type="button">×</button>
+           </div>\`
+        : '';
       return \`
         \${banner}
         <div class="emoji-panel hidden" id="emoji-panel"></div>
+        \${replyPreview}
         <div class="chat-input-bar" id="chat-input-bar">
           <button class="composer-btn chat-attach" onclick="onAttachClick(event)" title="Anexar arquivo, imagem ou documento" type="button">+</button>
           <div class="chat-input-pill">
-            <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}..." rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)"></textarea>
+            <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}... (use / pra atalhos)" rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)" onblur="setTimeout(hideQRDropdown, 150)"></textarea>
             <button class="chat-emoji" id="chat-emoji-btn" onclick="toggleEmojiPanel(event)" title="Inserir emoji" type="button">😊</button>
           </div>
           <button class="chat-mic" onclick="startRecording('\${c.from}')" title="Gravar áudio" type="button">
@@ -4358,6 +4962,8 @@ router.get('/', (req, res) => {
     if (bar) {
       bar.classList.toggle('has-text', el.value.trim().length > 0);
     }
+    // Slash commands: detecta "/" no início e mostra dropdown
+    showQRDropdownIfTriggered(el);
   }
 
   // + (anexo) — placeholder até implementar upload de imagem/arquivo
@@ -4367,6 +4973,24 @@ router.get('/', (req, res) => {
   }
 
   function handleChatKey(e, phone) {
+    // Quick reply dropdown — navegação por teclado
+    if (qrDropdownActive && qrDropdownMatches.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); qrMoveActive(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); qrMoveActive(-1); return; }
+      if (e.key === 'Tab') { e.preventDefault(); qrPick(qrDropdownIndex); return; }
+      if (e.key === 'Escape') { e.preventDefault(); hideQRDropdown(); return; }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        qrPick(qrDropdownIndex);
+        return;
+      }
+    }
+    // Esc cancela reply preview se ativo
+    if (e.key === 'Escape' && replyingTo && replyingTo.phone === phone) {
+      e.preventDefault();
+      clearReplyTo();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendChatReply(phone);
@@ -4475,9 +5099,43 @@ router.get('/', (req, res) => {
   async function sendChatReply(phone) {
     const ta = document.getElementById('chat-input');
     if (!ta) return;
-    const text = ta.value.trim();
+    let text = ta.value.trim();
     if (!text) return;
-    ta.disabled = true;
+
+    // Reply/citar: prepend quote ao texto enviado
+    if (replyingTo && replyingTo.phone === phone && replyingTo.text) {
+      text = '> ' + replyingTo.text + '\n\n' + text;
+    }
+    const wasReplyTo = replyingTo;
+    replyingTo = null;
+
+    // Optimistic UI: empurra bubble pendente imediatamente.
+    const tid = tempId();
+    const arr = pendingMessages.get(phone) || [];
+    arr.push({ tempId: tid, text, status: 'pending', createdAt: Date.now() });
+    pendingMessages.set(phone, arr);
+
+    // Limpa input e reconstrói bar (pra remover preview de reply se tinha)
+    ta.value = '';
+    autoGrowChat(ta);
+    hideQRDropdown();
+    chatScrollPinned = true;
+
+    // Re-render do chat com bubble pending visível
+    const c = allConversations.find(x => x.from === phone);
+    if (c) {
+      const msgsEl = document.getElementById('chat-messages');
+      if (msgsEl) {
+        msgsEl.innerHTML = renderChatMessages(c);
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
+      // Se a barra de input tinha reply preview, força rebuild pra remover
+      if (wasReplyTo) {
+        const wrap = document.getElementById('chat-input-wrap');
+        if (wrap) { wrap.dataset.mode = 'fresh'; syncChatInputBar(c); }
+      }
+    }
+
     try {
       const r = await fetch('/admin/api/conversations/' + phone + '/reply', {
         method: 'POST',
@@ -4485,21 +5143,66 @@ router.get('/', (req, res) => {
         body: JSON.stringify({ text }),
       });
       if (!r.ok) {
-        const data = await r.json();
-        alert('Erro: ' + (data.error || 'falha ao enviar'));
-        ta.disabled = false;
+        const data = await r.json().catch(() => ({}));
+        markPendingFailed(phone, tid, data.error || 'falha ao enviar');
         return;
       }
-      ta.value = '';
-      autoGrowChat(ta);
-      chatScrollPinned = true;
+      // Sucesso: remove a pending (servidor vai mandar via SSE/loadConversations o real)
+      clearPendingByTempId(phone, tid);
       await loadConversations();
-      ta.disabled = false;
-      ta.focus();
+      const ta2 = document.getElementById('chat-input');
+      if (ta2) ta2.focus();
     } catch (e2) {
-      alert('Falha de conexão');
-      ta.disabled = false;
+      markPendingFailed(phone, tid, 'sem conexão');
     }
+  }
+
+  function markPendingFailed(phone, tid, reason) {
+    const arr = pendingMessages.get(phone);
+    if (!arr) return;
+    const p = arr.find(x => x.tempId === tid);
+    if (p) p.status = 'failed';
+    // Re-render pra mostrar estado failed
+    const c = allConversations.find(x => x.from === phone);
+    if (c && phone === selectedPhone) {
+      const msgsEl = document.getElementById('chat-messages');
+      if (msgsEl) msgsEl.innerHTML = renderChatMessages(c);
+    }
+    showToast({ title: '⚠️ Mensagem não enviou', message: reason || 'Tenta de novo' });
+  }
+  function clearPendingByTempId(phone, tid) {
+    const arr = pendingMessages.get(phone);
+    if (!arr) return;
+    const idx = arr.findIndex(x => x.tempId === tid);
+    if (idx >= 0) {
+      arr.splice(idx, 1);
+      if (!arr.length) pendingMessages.delete(phone);
+    }
+  }
+  function retrySend(phone, mid) {
+    const arr = pendingMessages.get(phone);
+    if (!arr) return;
+    const p = arr.find(x => x.tempId === mid);
+    if (!p) return;
+    // Volta pra pending e re-tenta
+    p.status = 'pending';
+    const c = allConversations.find(x => x.from === phone);
+    if (c) {
+      const msgsEl = document.getElementById('chat-messages');
+      if (msgsEl) msgsEl.innerHTML = renderChatMessages(c);
+    }
+    fetch('/admin/api/conversations/' + phone + '/reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: p.text }),
+    }).then(r => {
+      if (r.ok) {
+        clearPendingByTempId(phone, mid);
+        loadConversations();
+      } else {
+        return r.json().catch(() => ({})).then(data => markPendingFailed(phone, mid, data.error || 'falha'));
+      }
+    }).catch(() => markPendingFailed(phone, mid, 'sem conexão'));
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -4728,6 +5431,17 @@ router.get('/', (req, res) => {
     renderInboxList();
   }
 
+  function clearInboxFilters() {
+    searchQuery = '';
+    currentFilter = 'all';
+    const sb = document.getElementById('inbox-search-input');
+    if (sb) sb.value = '';
+    document.querySelectorAll('#filter-bar .filter-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === 'all');
+    });
+    renderInboxList();
+  }
+
   async function rateConv(phone, rating) {
     const conv = allConversations.find(c => c.from === phone);
     const comment = conv && conv.review ? conv.review.comment : '';
@@ -4840,7 +5554,7 @@ router.get('/', (req, res) => {
     document.querySelectorAll('.nav-item[data-nav], .sub-item[data-nav]').forEach(el => {
       el.classList.toggle('active', el.dataset.nav === tab);
     });
-    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes' || tab === 'conhecimento' || tab === 'modulos' || tab === 'playground') {
+    if (tab === 'prompt' || tab === 'users' || tab === 'conexoes' || tab === 'conhecimento' || tab === 'modulos' || tab === 'playground' || tab === 'atalhos') {
       const cfg = document.getElementById('cfg-group');
       if (cfg) cfg.classList.add('open');
     }
@@ -4879,6 +5593,7 @@ router.get('/', (req, res) => {
     if (tab === 'conhecimento') loadKnowledge();
     if (tab === 'modulos') loadModulos();
     if (tab === 'playground') initPlayground();
+    if (tab === 'atalhos') qrMgmtRender();
   }
 
   // ─────────────────────────────────────────────────────────────────

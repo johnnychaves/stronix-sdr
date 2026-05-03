@@ -4,6 +4,43 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-03 — Polish PR frontend (Optimistic UI + Reply + Quick replies + Notas + Skeleton/Empty)
+
+**Contexto:** Antes de soltar o painel pra outras consultoras (hoje só Johnny opera) e antes de ligar v2 em 5%, janela natural pra polir UX. PR único frontend-only em [src/admin.js](src/admin.js) (monolítico 6242 linhas). Princípio: tudo em localStorage + handlers, zero back-end novo.
+
+**5 features entregues:**
+
+1. **Optimistic UI no envio** — bubble aparece instantâneo com ⏱ pulsante (`msg-check.pending` animação shimmer), vira ✓ quando servidor confirma via `loadConversations`. Em erro vira ⚠ com botão "Tentar de novo" inline. Implementação: `pendingMessages` Map<phone, [{tempId, text, status, createdAt}]>, `getMergedHistory(c)` concatena history real + pending, `renderChatMessages` itera o merged. `clearPendingByTempId` remove no sucesso, `markPendingFailed` marca falha. `retrySend(phone, mid)` reabilita pending e re-tenta.
+
+2. **Reply / citar mensagem** — botão `.bubble-action-reply` (↩) revela em hover na bubble, click chama `setReplyTo(phone, mid)` que popula `replyingTo = {phone, text}` e força rebuild da composer. Preview com `.composer-reply-preview` mostra trecho citado (até 80 chars), X cancela ou Esc no textarea. Send prepend `> {trecho}\n\n` no texto. WhatsApp renderiza `> ` como quote nativo do lado do lead. No painel, `extractQuoteAndBody(text)` separa quote do body, renderiza `.bubble-quote` estilizado dentro da bubble. Não exige tabela/campo novo no DB.
+
+3. **Quick replies (slash commands)** — digita `/` no início da composer dispara `showQRDropdownIfTriggered(textarea)`, mostra `.quick-reply-dropdown` acima do input com matches por prefix. ↑↓ navega (`qrMoveActive`), Enter/Tab expande (`qrPick`), Esc fecha (`hideQRDropdown`). 6 snippets seed (`/aula`, `/valores`, `/horario`, `/endereco`, `/agendar`, `/ola`). Aba nova "Configurações → Atalhos rápidos" pra CRUD: `qrMgmtRender/qrMgmtAdd/qrMgmtUpdateTrigger/qrMgmtUpdateText/qrMgmtDelete`. localStorage `quickReplies` (array `[{trigger, text}]`).
+
+4. **Notas internas** — section nova na sidebar direita (`renderLeadDetail`) com textarea + status de salvamento + microcopy "Salvas no seu navegador. Não sincroniza entre consultoras". `loadInternalNote(phone)` lê de `localStorage[internalNote:${phone}]`, `onInternalNoteChange` debounced 500ms grava via `saveInternalNote`. Limitação aceita: não sincroniza entre consultoras nem dispositivos. Se virar pedido, vira backend depois (tabela `internal_notes` + endpoints + SSE).
+
+5. **Skeleton loaders + Empty states** — todos os 8 placeholders `<div class="empty">Carregando...</div>` substituídos por `<div class="skeleton-list">` com 3-5 `.skeleton-card` shimmer animados (compact pra inbox, tall pra v2-monitor). Inbox vazia com filtro ativo mostra `.empty-state` com SVG icon + microcopy "Nenhuma conversa com esse filtro" + botão "Limpar filtro" (chama `clearInboxFilters()`). Inbox vazia sem filtro: "Aguardando primeira conversa". Variantes de empty-state também usadas no qr-mgmt sem snippets.
+
+**Arquivos modificados:**
+- [src/admin.js](src/admin.js) — todas as mudanças (frontend monolítico). +~370 linhas CSS, +~250 linhas JS, modificações em `renderChatMessages`, `sendChatReply`, `buildInputBar`, `handleChatKey`, `autoGrowChat`, `renderLeadDetail`, `switchTab`, `setActiveNav`, `renderInboxList`. Nova aba `tab-atalhos` com painel de gerenciamento.
+
+**Smoke server-side:**
+- `node --check src/admin.js` ✅ syntax válido
+- Server sobe local com env dummy (PORT=3001, WHATSAPP_PROVIDER=meta com creds dummy + dummies pra Anthropic/OpenAI/ElevenLabs)
+- Bootstrap admin via `/admin/api/auth/bootstrap` ok, retorna cookie de sessão
+- GET `/admin` autenticado retorna 200 com 258676 bytes
+- Grep no HTML rendered confirma: `skeleton-card` (11x), `qr-mgmt-list` (3x), `Atalhos rápidos` sub-item (3x), `detail-internal-notes` (6x), `composer-reply-preview` (7x), `setReplyTo`, `loadQuickReplies`, `internal-note-input` todos presentes
+- Smoke browser via Claude in Chrome bloqueado por permission prompt — adiado pra validação visual pelo Johnny ao abrir o painel
+
+**Trade-offs aceitos:**
+- Quick replies em localStorage = não sincroniza entre consultoras nem dispositivos. v1 ok, v2 vira backend se virar pedido.
+- Notas internas idem.
+- Reply usa `> ` no texto ao invés de tabela threads. Single source of truth, WhatsApp renderiza nativo. Render no painel via `extractQuoteAndBody`.
+- Bubble pendente pode aparecer brevemente duplicada se SSE entrega o real ANTES do POST retornar (race < 200ms). Aceitável.
+
+**Política de flag mantida:** `AGENT_VERSION=v1` continua default. Polish PR é independente do trilho v2 — não afeta agente nem prompt.
+
+---
+
 ## 2026-05-02 — PR #37: Admin Tooling (Trilha B) — pré-requisito da janela de validação
 
 **Contexto:** Último PR antes de ligar `AGENT_VERSION=v2` em 5%. Constrói toda a tela de monitoramento que o Johnny vai usar diariamente durante a janela de 50 conversas / 14 dias.
