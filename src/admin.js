@@ -891,7 +891,14 @@ function normalizePhoneBR(input) {
 
 // API — limpa conversa de um número
 router.delete('/api/conversations/:from', (req, res) => {
-  clearConversation(req.params.from);
+  const phone = req.params.from;
+  clearConversation(phone);
+  // Emite SSE pra outras abas/clientes atualizarem em tempo real
+  // (sem isso, abas paralelas mostram conv fantasma até polling/refresh)
+  try {
+    require('./events').emitConversationChanged(phone);
+    require('./events').emitLeadsChanged();
+  } catch {}
   res.json({ ok: true });
 });
 
@@ -5117,6 +5124,15 @@ router.get('/', (req, res) => {
   }
 
   function selectConv(phone) {
+    // Cancela estados órfãos da conv anterior antes de trocar:
+    // - replyingTo apontava pra msg da conv anterior (visualmente confuso se voltar)
+    // - noteModeActive: sem reset, modo nota fica ativo na conv nova (composer amber + msg vai como nota)
+    // - recState: gravação de áudio ativa fica zumbi com mic capturando em background
+    if (recState) {
+      try { cancelRecording(); } catch {}
+    }
+    replyingTo = null;
+    noteModeActive = false;
     selectedPhone = phone;
     chatScrollPinned = true;
     renderInboxList();
@@ -6065,6 +6081,11 @@ router.get('/', (req, res) => {
     e.stopPropagation();
     if (!confirm('Devolver pra IA? A IA volta a responder essa conversa.')) return;
     await fetch('/admin/api/conversations/' + phone + '/release', { method: 'POST' });
+    // Reset estados do composer humano: modo nota / reply / gravação não fazem
+    // sentido depois de devolver pra IA. Sem isso, banner amber fica preso.
+    if (recState) { try { cancelRecording(); } catch {} }
+    replyingTo = null;
+    noteModeActive = false;
     loadConversations();
   }
 

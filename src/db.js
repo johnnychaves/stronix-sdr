@@ -731,6 +731,10 @@ function deleteInternalNote(id, requestingUserId, isAdmin) {
 }
 
 function clearConversation(phone) {
+  // Canonicaliza pra unificar variações ±9 dígito BR (ex: 12 vs 13 dígitos).
+  // Sem isso, DELETE pode não casar se o phone que veio tem variação
+  // diferente do salvo no DB → painel acha que apagou mas DB intacto.
+  phone = canonicalizeContactPhone(phone);
   stmts.deleteMessages.run(phone);
   stmts.deleteContact.run(phone);
   console.log(`[db] conversa limpa: ${phone}`);
