@@ -57,6 +57,15 @@ PR #39 entregou notas em localStorage no sidebar direito. Redesenhado pra:
 - Playground pra simular conversas com IA sem afetar produção
 - Custo estimado em R$ por chamada visível no playground
 
+### 🎭 Persona da marca (2026-05-03)
+- Aba Configurações → Agente → "🎭 Voz e tom da marca" (admin only)
+- 4 slots editáveis sem mexer em estrutura: abertura, gírias quentes, gírias proibidas, frases proibidas extras
+- `assembleNucleoV2(persona)` ([src/persona-v2.js](src/persona-v2.js)) faz string-replace dos placeholders no template do núcleo
+- DEFAULT_PERSONA mantém comportamento idêntico ao núcleo pré-persona (migração silenciosa)
+- Help text com 2 exemplos do que NÃO escrever (regra estrutural / roteiro vão em outros lugares)
+- Validação 33/33 offline + smoke E.4 com Anthropic real ($0.02 USD) — bot usou abertura default e parser limpou tags
+- Override total via API direta (`agent_config.nucleo_v2`) segue funcionando como emergência
+
 ---
 
 ## Infraestrutura (100% concluída)

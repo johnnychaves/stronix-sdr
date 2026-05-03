@@ -16,13 +16,19 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('./config');
 const db = require('./db');
-const NUCLEO_V2_DEFAULT = require('./prompt-nucleo-v2');
+const { assembleNucleoV2, getPersona } = require('./persona-v2');
 
-// Resolve o núcleo v2: se admin editou via painel (DB tem agent_config.nucleo_v2),
-// usa essa versão; senão usa o default do arquivo. Lido a cada request — barato
-// (1 query SQLite indexada). Permite editar o prompt sem redeploy.
+// Resolve o núcleo v2 final que vai pro Claude.
+// Ordem de precedência:
+//   1. agent_config.nucleo_v2 (override TOTAL via API direta — emergência)
+//   2. assembleNucleoV2(getPersona()) — núcleo estruturado + persona da marca
+// Lido a cada request (1 query SQLite indexada) — sem restart pra mudança.
+// Tanto replyV2 quanto simulateReplyV2 chamam buildSystemBlocks → mesma
+// função → mesma persona. Paridade garantida.
 function getNucleoV2() {
-  return db.getAgentConfig('nucleo_v2', NUCLEO_V2_DEFAULT) || NUCLEO_V2_DEFAULT;
+  const fullOverride = db.getAgentConfig('nucleo_v2', null);
+  if (fullOverride) return fullOverride;
+  return assembleNucleoV2(getPersona());
 }
 const { routeModules } = require('./router-v2');
 const {

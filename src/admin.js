@@ -653,10 +653,11 @@ router.put('/api/academia-info/:key', auth.requireAdmin, (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────
-// Agent config (núcleo v2 + timing + buffer) — admin only
+// Agent config (núcleo v2 + persona + timing + buffer) — admin only
 // ─────────────────────────────────────────────────────────────────
 
 const NUCLEO_V2_DEFAULT = require('./prompt-nucleo-v2');
+const personaModule = require('./persona-v2');
 const TIMING_DEFAULTS = {
   typing_delay_min_ms: 60 * 1000,
   typing_delay_max_ms: 180 * 1000,
@@ -672,6 +673,12 @@ router.get('/api/agent-config', auth.requireAdmin, (req, res) => {
       isCustom: nucleoCustom !== null,
       defaultLength: NUCLEO_V2_DEFAULT.length,
     },
+    persona: {
+      current: personaModule.getPersona(),
+      default: personaModule.DEFAULT_PERSONA,
+      isCustom: personaModule.isPersonaCustom(),
+      limits: personaModule.LIMITS,
+    },
     typing_delay_min_ms: db.getAgentConfigNumber('typing_delay_min_ms', TIMING_DEFAULTS.typing_delay_min_ms, 0, 600 * 1000),
     typing_delay_max_ms: db.getAgentConfigNumber('typing_delay_max_ms', TIMING_DEFAULTS.typing_delay_max_ms, 0, 600 * 1000),
     buffer_window_ms: db.getAgentConfigNumber('buffer_window_ms', TIMING_DEFAULTS.buffer_window_ms, 1000, 120 * 1000),
@@ -682,13 +689,20 @@ router.get('/api/agent-config', auth.requireAdmin, (req, res) => {
 // PUT salva uma chave do agent_config
 router.put('/api/agent-config/:key', auth.requireAdmin, (req, res) => {
   const key = req.params.key;
-  const allowed = ['nucleo_v2', 'typing_delay_min_ms', 'typing_delay_max_ms', 'buffer_window_ms'];
+  const allowed = ['nucleo_v2', 'persona', 'typing_delay_min_ms', 'typing_delay_max_ms', 'buffer_window_ms'];
   if (!allowed.includes(key)) return res.status(400).json({ error: 'Chave não permitida' });
   const value = req.body?.value;
   if (key === 'nucleo_v2') {
     if (typeof value !== 'string') return res.status(400).json({ error: 'value deve ser string' });
     if (value.length > 50000) return res.status(400).json({ error: 'Núcleo muito longo (máx 50000 chars)' });
     db.setAgentConfig(key, value, req.user.id);
+  } else if (key === 'persona') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return res.status(400).json({ error: 'value deve ser objeto persona ({abertura, giriasQuentes, giriasProibidas, frasesProibidasExtra})' });
+    }
+    const saved = personaModule.setPersona(value, req.user.id);
+    console.log(`[admin] agent_config[persona] atualizado por ${req.user.username}`);
+    return res.json({ ok: true, persona: saved });
   } else {
     const n = Number(value);
     if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'value deve ser número >= 0' });
@@ -701,7 +715,7 @@ router.put('/api/agent-config/:key', auth.requireAdmin, (req, res) => {
 // DELETE restaura ao default (apaga override do DB)
 router.delete('/api/agent-config/:key', auth.requireAdmin, (req, res) => {
   const key = req.params.key;
-  const allowed = ['nucleo_v2', 'typing_delay_min_ms', 'typing_delay_max_ms', 'buffer_window_ms'];
+  const allowed = ['nucleo_v2', 'persona', 'typing_delay_min_ms', 'typing_delay_max_ms', 'buffer_window_ms'];
   if (!allowed.includes(key)) return res.status(400).json({ error: 'Chave não permitida' });
   db.setAgentConfig(key, null, req.user.id);
   console.log(`[admin] agent_config[${key}] restaurado ao default por ${req.user.username}`);
@@ -3722,6 +3736,62 @@ router.get('/', (req, res) => {
     }
     /* Estilos do textarea/botões do núcleo removidos junto com a section. */
 
+    /* Persona — voz e tom da marca (aba Agente) */
+    .persona-row { display: block; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
+    .persona-row:last-child { border-bottom: none; }
+    .persona-row .persona-label {
+      font-size: 13px; color: var(--text-secondary); font-weight: 600;
+      display: block; margin-bottom: 4px;
+    }
+    .persona-row .persona-hint {
+      font-size: 11.5px; color: var(--text-muted); font-style: italic;
+      display: block; margin-bottom: 8px;
+    }
+    .persona-row input[type="text"], .persona-row textarea {
+      width: 100%; padding: 8px 10px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 13px; font-family: inherit;
+      box-sizing: border-box;
+    }
+    .persona-row textarea { min-height: 90px; resize: vertical; line-height: 1.45; }
+    .persona-row input[type="text"]:focus, .persona-row textarea:focus {
+      border-color: var(--brand); outline: none;
+    }
+    .persona-actions {
+      margin-top: 10px;
+      display: flex; align-items: center; gap: 10px;
+      font-size: 12px; color: var(--text-muted);
+    }
+    .persona-actions .persona-status {
+      font-size: 12px; color: var(--text-muted);
+    }
+    .persona-actions .persona-status.custom { color: var(--brand); font-weight: 600; }
+    .persona-actions .persona-restore-btn {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--text-muted); padding: 5px 10px;
+      border-radius: 6px; cursor: pointer;
+      font-size: 12px;
+    }
+    .persona-actions .persona-restore-btn:hover {
+      color: var(--brand); border-color: var(--brand); background: var(--brand-soft);
+    }
+    .persona-warn {
+      margin-top: 10px;
+      padding: 10px 12px;
+      background: rgba(249, 200, 105, .08);
+      border: 1px solid rgba(249, 200, 105, .25);
+      border-radius: 6px;
+      font-size: 12px; color: var(--text-secondary);
+      line-height: 1.5;
+    }
+    .persona-warn strong { color: #f9c869; }
+    .persona-warn code {
+      background: rgba(0,0,0,.25); padding: 1px 5px; border-radius: 3px;
+      font-size: 11.5px;
+    }
+
     /* Skeleton loaders — substituem "Carregando..." textuais */
     .skeleton-list {
       padding: 8px;
@@ -3950,6 +4020,51 @@ router.get('/', (req, res) => {
         <span class="agente-config-suffix">segundos</span>
         <button class="agente-restore" onclick="restoreAgenteConfig('buffer_window_ms')" title="Restaurar default (15s)">↺</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Section: persona (voz e tom da marca) -->
+  <div class="agente-section">
+    <h3 class="agente-section-title">🎭 Voz e tom da marca <span id="persona-status-pill" class="persona-status">(Default)</span></h3>
+    <div class="student-help" style="margin:0 0 14px">
+      Aqui ajusta <strong>como a IA fala</strong>: gírias, abertura, frases que tu não quer ver. Mexer aqui é seguro, não muda a estrutura nem as regras de venda. Mudança aplica na próxima resposta.
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-abertura">Abertura padrão (1ª mensagem)</label>
+      <span class="persona-hint">Frase exata que a IA usa pra começar com lead novo. Mantém curto, 1 linha.</span>
+      <input type="text" id="ac-persona-abertura" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Opa beleza! Sou o Johnny da STRONIX 👋">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-girias-quentes">Gírias e expressões quentes (uma por linha)</label>
+      <span class="persona-hint">Substitutos pras frases performáticas — a IA usa essas em vez de "Excelente!"/"Com certeza!".</span>
+      <textarea id="ac-persona-girias-quentes" oninput="onPersonaChange()" placeholder="Bah&#10;Tri&#10;Beleza&#10;Show"></textarea>
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-girias-proibidas">Frases proibidas (uma por linha)</label>
+      <span class="persona-hint">A IA NUNCA escreve essas. Use pra cortar clichê de vendedor que não soa Stronix.</span>
+      <textarea id="ac-persona-girias-proibidas" oninput="onPersonaChange()" placeholder="Excelente!&#10;Com certeza!&#10;Fico feliz em ajudar"></textarea>
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-frases-extra">Frases proibidas extras da marca (uma por linha)</label>
+      <span class="persona-hint">Lista que tu vai engordando quando ouvir algo que não soa Stronix. Opcional, pode deixar vazio.</span>
+      <textarea id="ac-persona-frases-extra" oninput="onPersonaChange()" placeholder="(opcional)"></textarea>
+    </div>
+
+    <div class="persona-warn">
+      <strong>⚠️ O que NÃO escrever aqui:</strong> esses campos são só de <strong>tom</strong>, não de <strong>regra</strong>. Não coloca regra estrutural aqui, ela vai ser ignorada ou conflita com o núcleo.
+      <br><br>
+      <strong>❌ Não escreve:</strong> <code>"Sempre passa o valor do plano logo no início"</code> — isso é regra de venda, vai em <strong>Módulos do prompt → planos_e_precos</strong>, e contraria a regra dos valores.
+      <br>
+      <strong>❌ Não escreve:</strong> <code>"Se o lead pedir aula, oferece terça às 9h"</code> — isso é roteiro, fica no núcleo (estrutura imutável) ou no módulo <strong>fluxo_aula_experimental</strong>.
+    </div>
+
+    <div class="persona-actions">
+      <button class="persona-restore-btn" type="button" onclick="restorePersona()">↺ Restaurar default</button>
+      <span id="persona-save-status" class="persona-status"></span>
     </div>
   </div>
 
@@ -6541,8 +6656,91 @@ router.get('/', (req, res) => {
       if (elMin) elMin.value = minS;
       if (elMax) elMax.value = maxS;
       if (elBuf) elBuf.value = bufS;
+
+      // Persona — voz e tom
+      if (cfg.persona && cfg.persona.current) {
+        const p = cfg.persona.current;
+        const elAb = document.getElementById('ac-persona-abertura');
+        const elGq = document.getElementById('ac-persona-girias-quentes');
+        const elGp = document.getElementById('ac-persona-girias-proibidas');
+        const elFx = document.getElementById('ac-persona-frases-extra');
+        if (elAb) elAb.value = p.abertura || '';
+        if (elGq) elGq.value = (p.giriasQuentes || []).join('\n');
+        if (elGp) elGp.value = (p.giriasProibidas || []).join('\n');
+        if (elFx) elFx.value = (p.frasesProibidasExtra || []).join('\n');
+        const pill = document.getElementById('persona-status-pill');
+        if (pill) {
+          pill.textContent = cfg.persona.isCustom ? '(Customizado)' : '(Default)';
+          pill.classList.toggle('custom', !!cfg.persona.isCustom);
+        }
+      }
     } catch (e) {
       console.error('[agent-config] erro ao carregar:', e.message);
+    }
+  }
+
+  // Persona — debounce 800ms + auto-save (mais conservador que timing
+  // porque manda payload maior + revalida).
+  let personaSaveTimer = null;
+  function onPersonaChange() {
+    const status = document.getElementById('persona-save-status');
+    if (status) status.textContent = '✏️ Editando...';
+    clearTimeout(personaSaveTimer);
+    personaSaveTimer = setTimeout(savePersona, 800);
+  }
+
+  function readPersonaInputs() {
+    const elAb = document.getElementById('ac-persona-abertura');
+    const elGq = document.getElementById('ac-persona-girias-quentes');
+    const elGp = document.getElementById('ac-persona-girias-proibidas');
+    const elFx = document.getElementById('ac-persona-frases-extra');
+    const splitLines = (s) => (s || '').split('\n').map(x => x.trim()).filter(x => x.length > 0);
+    return {
+      abertura: (elAb?.value || '').trim(),
+      giriasQuentes: splitLines(elGq?.value),
+      giriasProibidas: splitLines(elGp?.value),
+      frasesProibidasExtra: splitLines(elFx?.value),
+    };
+  }
+
+  async function savePersona() {
+    const status = document.getElementById('persona-save-status');
+    const persona = readPersonaInputs();
+    try {
+      const r = await fetch('/admin/api/agent-config/persona', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: persona }),
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        if (status) status.textContent = '⚠ Erro';
+        showToast({ severity: 'warn', title: 'Erro ao salvar persona', message: data.error || 'Tenta de novo' });
+        return;
+      }
+      if (status) status.textContent = '✓ Salvo';
+      const pill = document.getElementById('persona-status-pill');
+      if (pill) { pill.textContent = '(Customizado)'; pill.classList.add('custom'); }
+      setTimeout(() => { if (status) status.textContent = ''; }, 2000);
+    } catch (e) {
+      if (status) status.textContent = '⚠ Sem conexão';
+      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
+    }
+  }
+
+  async function restorePersona() {
+    if (!confirm('Restaurar voz e tom ao default? Suas customizações serão perdidas.')) return;
+    try {
+      const r = await fetch('/admin/api/agent-config/persona', { method: 'DELETE' });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        showToast({ severity: 'warn', title: 'Erro ao restaurar', message: data.error || 'Tenta de novo' });
+        return;
+      }
+      await loadAgentConfig();
+      showToast({ severity: 'info', title: '↺ Restaurado', message: 'Voz e tom voltou pro default.' });
+    } catch (e) {
+      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
     }
   }
 
