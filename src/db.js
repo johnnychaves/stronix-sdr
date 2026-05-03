@@ -978,11 +978,31 @@ function addMessageWithSender(phone, role, content, wasAudio, sentByUserId, medi
 // não tinha o buffer ainda. Esta função adiciona o ponteiro pro arquivo.
 function setLastAssistantMessageMediaPath(phone, mediaPath) {
   phone = canonicalizeContactPhone(phone);
+  // Filtra was_audio=1 + media_path NULL pra evitar race: se uma msg de TEXTO
+  // foi adicionada DEPOIS da msg audio (raro mas possível com batches paralelos),
+  // o "last assistant" seria o text, e o path iria pra msg errada.
   db.prepare(`
     UPDATE messages SET media_path = ?
     WHERE id = (
       SELECT id FROM messages
-      WHERE phone = ? AND role = 'assistant'
+      WHERE phone = ? AND role = 'assistant' AND was_audio = 1 AND media_path IS NULL
+      ORDER BY id DESC LIMIT 1
+    )
+  `).run(mediaPath, phone);
+  try { require('./events').emitConversationChanged(phone); } catch {}
+}
+
+// Atualiza media_path da última mensagem 'user' com was_audio=true desse phone.
+// Usado quando lead manda áudio: webhook salva o buffer em disco e chama esta
+// helper depois que agent.reply persistiu a msg do user (com transcrição como
+// content). Assim o frontend pode renderizar o player em vez da transcrição.
+function setLastUserAudioMessageMediaPath(phone, mediaPath) {
+  phone = canonicalizeContactPhone(phone);
+  db.prepare(`
+    UPDATE messages SET media_path = ?
+    WHERE id = (
+      SELECT id FROM messages
+      WHERE phone = ? AND role = 'user' AND was_audio = 1 AND media_path IS NULL
       ORDER BY id DESC LIMIT 1
     )
   `).run(mediaPath, phone);
@@ -1700,6 +1720,7 @@ module.exports = {
   getContactAssignment,
   addMessageWithSender,
   setLastAssistantMessageMediaPath,
+  setLastUserAudioMessageMediaPath,
   updateMessageDeliveryStatus,
   // Knowledge base
   getAllAcademiaInfo,
