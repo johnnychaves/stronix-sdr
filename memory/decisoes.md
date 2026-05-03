@@ -4,6 +4,48 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-02 — Baseline de capacidade e custo (levantamento pós-PR37)
+
+**Contexto:** Antes de ligar v2 em 5%, levantamento técnico pra ter números de referência sobre custo, latência e gargalos. Vira baseline pra comparar pós-rollout.
+
+**Tokens por turno (input cacheado 90% via cache_control ephemeral):**
+- V1 monolítico: ~10.000 tokens (40k chars)
+- V2 núcleo (cached): ~3.163 tokens (12k chars)
+- V2 + 1 módulo: ~3.530 tokens
+- V2 + 3 módulos (limit MAX_MODULES): ~4.263 tokens
+- **V2 reduz input em ~60-68%** mesmo carregando módulos via Roteador
+
+**Custo mensal estimado (30 leads/dia × 6 turnos médios = 5.400 chamadas/mês):**
+- Conservador: **~$66/mês (~R$363)**
+- Crescimento (50/dia): ~$95
+- Stress (100/dia): ~$160
+- **CAC ratio < 1%** do LTV (R$149-199 × 6 meses médios)
+
+Componentes do custo: Sonnet 4.5 (~$28), Haiku 4.5 resumo (~$1,5), Whisper (~$4), ElevenLabs (~$22), Railway (~$10-15).
+
+**Latência percebida pelo lead (intencional):**
+- Buffer 15s + sleep typingDelayMs 60-180s = **1-3 minutos**. Mimic humano.
+- SSE no admin: ~100ms (real-time). Polling fallback: 30s.
+
+**Gargalos conhecidos (NÃO resolver preventivamente):**
+1. Race condition no sleep de digitação se lead manda 2ª msg — known issue de 2026-05-01. Lock por phone (~30 linhas) resolve. Não-bloqueador no volume atual.
+2. Buffer in-memory perde msgs em restart Railway (raro).
+3. Anthropic Tier 1: 50 req/min. Bloqueia em pico extremo (>50 msgs/min). STRONIX está bem longe disso.
+
+**Capacidade real estimada (folga sem refatorar):**
+- ~100 leads/dia: tranquilo
+- ~300/dia: race conditions começam a aparecer
+- ~1000/dia: precisa lock + queue persistente + multi-worker
+
+**Princípio sócio aplicado:** STRONIX hoje em ~30 leads/dia tem **10x de folga**. NÃO refatorar pra escalabilidade que não existe (queue, cluster, etc). Quando passar de 100/dia, revisitar.
+
+**Baseline pós-PR37 pra comparar pós-rollout 5%:**
+- Bateria E variando 3-5/6 (variabilidade do Sonnet em respostas longas, known issue PR33)
+- F.1 (Fase 3) 100% nas 5 runs de validação
+- Custo bateria: $0.30 por 22 cenários
+
+---
+
 ## 2026-05-02 — Resumo dinâmico via Haiku 4.5 em background (Fase 3, PR #36)
 
 **Decisão:** Conversas longas (≥20 msgs) usam (resumo estruturado + msgs novas) em vez de 50 msgs cheias no prompt. Resumo gerado por **Haiku 4.5** em **fire-and-forget após responder** ao lead. Threshold de 20 msgs pra primeiro resumo + update incremental a cada 10 msgs novas.
