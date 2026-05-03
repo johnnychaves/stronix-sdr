@@ -4,6 +4,89 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-02 — Levantamento técnico pós-PR37 (caracteres + custo + capacidade)
+
+**Contexto:** Pedido do Johnny ao final da sessão de PRs (#33-#37). Levantamento de baseline pra ter números reais antes de ligar v2 em 5%.
+
+### A. Comparativo de caracteres V1 vs V2
+
+| Métrica | V1 (monolítico) | V2 (núcleo + módulos) |
+|---|---|---|
+| Prompt principal (chars) | **40.011** | **12.652** (núcleo cacheado) |
+| Tokens estimados | ~10.000 | ~3.163 |
+| Por turno sem módulo | 10k | 3.163 (-68%) |
+| Por turno com 1 módulo | 10k | ~3.530 |
+| Por turno com 3 módulos (limit) | 10k | ~4.263 |
+
+**28 módulos seed (47.380 chars total):**
+- Conhecimento (12): média 1.148 chars
+- Objeções (10): média 1.313 chars
+- Situacionais (6): média 2.217 chars
+- Sistema (3): média 2.150 chars
+- Maior: `publicos_especificos` (3.007 chars). Menor: `transferencia_clube` (418).
+
+**Ganho real:** V1 carrega TUDO sempre. V2 carrega só o relevante via Roteador determinístico (max 3 módulos).
+
+### B. Estimativa de custo mensal (baseline 30 leads/dia)
+
+**Premissas:** 30 leads/dia × 6 turnos médios = 180 chamadas Sonnet/dia (5.400/mês). 30% leads >20 msgs (270 Haiku resumo/mês). 40% mandam áudio (2.160 Whisper). 60% recebem áudio (3.240 ElevenLabs).
+
+| Componente | Custo/mês USD |
+|---|---|
+| Sonnet 4.5 input cache miss (10%) | $6,48 |
+| Sonnet 4.5 input cache hit (90%) | $5,83 |
+| Sonnet 4.5 output | $16,20 |
+| Haiku 4.5 (resumo dinâmico) | $1,49 |
+| OpenAI Whisper (transcrição) | $3,89 |
+| ElevenLabs (TTS voz clonada) | $22,00 |
+| Railway (hosting + volume) | $10-15 |
+| **Total conservador** | **~$66 (~R$363)** |
+
+**Cenários:** crescimento (50/dia) ~$95, stress (100/dia) ~$160. CAC < 1% do LTV (R$149-199 × 6 meses). V2 economiza ~10-20% vs V1 mesmo com Haiku adicional.
+
+### C. Real-time + análise de capacidade
+
+**Pipeline lead → resposta:**
+1. Webhook recebe (~10ms)
+2. **Buffer 15s** (debouncing — qualquer msg nova reseta timer)
+3. flushBuffer dispara processBatch (t=15s)
+4. Chama Sonnet (+2-4s)
+5. **Sleep typingDelayMs (1-3 min)** ← simula digitação humana
+6. sendMessage Baileys (+200-500ms)
+
+**Latência percebida pelo lead:** 1-3 minutos (intencional).
+
+**Real-time no admin (SSE em `/admin/api/events`):**
+- Latência ~100ms
+- Eventos: conversation.changed, connections.changed, appointments.changed, students.changed, v2.metrics.changed (PR37)
+- Coalesce 250ms por phone, heartbeat 25s, polling 30s como fallback
+
+**Capacidade atual (estimada):**
+- ~100 leads/dia: tranquilo
+- ~300 leads/dia: race conditions ocasionais aparecem
+- ~1000 leads/dia: precisa lock por phone + queue persistente + multi-worker
+
+**STRONIX (30/dia) tem folga de 10x antes de redesenhar.**
+
+### Gargalos conhecidos identificados
+
+| Gargalo | Risco | Mitigação |
+|---|---|---|
+| Buffer in-memory (15s) | Restart perde msgs pendentes | Persistir em DB (médio prazo) |
+| Sleep 1-3min sem lock por phone | Race se lead manda 2ª msg durante sleep → 2 chamadas Claude paralelas | **Lock por phone (~30 linhas, low-risk)** — known issue desde 2026-05-01 |
+| Anthropic Tier 1 (50 req/min Sonnet) | Pico extremo de 50+ msgs/min vira 429 | Subir pra Tier 2 ($40 deposit) dobra limite |
+| SQLite single-writer | Aguenta centenas de leads concorrentes (WAL mode) | OK pro nível atual |
+| Node single-thread | Bloqueia se computação pesada — aqui é só I/O | OK |
+
+### Recomendações priorizadas (saíram dessa análise)
+
+1. **🟡 Curto prazo:** lock por phone no buffer (elimina race condition de 2ª msg durante sleep). ~30 linhas, low-risk.
+2. **🟢 Médio prazo:** persistir buffer no DB pra sobreviver a restart. Só relevante se >100 leads/dia.
+3. **🟢 Longo prazo:** queue dedicada (Redis + BullMQ) + Node clusterizado. Só se >500 leads/dia.
+4. **🟡 Operacional:** verificar tier Anthropic atual. Se Tier 1, upgrade pra Tier 2 dobra rate limit.
+
+---
+
 ## 2026-05-02 — PR #37: Admin Tooling (Trilha B) — pré-requisito da janela de validação
 
 **Contexto:** Último PR antes de ligar `AGENT_VERSION=v2` em 5%. Constrói toda a tela de monitoramento que o Johnny vai usar diariamente durante a janela de 50 conversas / 14 dias.
