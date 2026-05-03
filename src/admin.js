@@ -2460,18 +2460,24 @@ router.get('/', (req, res) => {
     }
     .chat-input::placeholder { color: var(--text-muted); }
 
-    /* Emoji DENTRO da pill (ao lado direito do textarea) */
-    .chat-emoji {
+    /* Botões de ícone DENTRO da pill (note toggle + emoji), gray monocromático */
+    .chat-emoji, .chat-note-toggle {
       width: 36px; height: 36px;
       border-radius: 50%; border: none;
-      background: transparent; color: var(--text-secondary);
+      background: transparent; color: var(--text-muted);
       cursor: pointer; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 22px; line-height: 1;
-      margin-bottom: 4px;
+      padding: 0; margin-bottom: 4px;
       transition: background var(--t-fast), color var(--t-fast);
     }
-    .chat-emoji:hover { background: var(--bg-4); }
+    .chat-emoji svg, .chat-note-toggle svg {
+      width: 20px; height: 20px;
+      stroke: currentColor; fill: none;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .chat-emoji:hover, .chat-note-toggle:hover {
+      background: var(--bg-4); color: var(--text-secondary);
+    }
     .chat-emoji.active { background: var(--brand-soft); color: var(--brand); }
 
     /* Mic / Send — só um aparece por vez (toggle por has-text) */
@@ -3295,23 +3301,11 @@ router.get('/', (req, res) => {
     }
     .qr-mgmt-add:hover { filter: brightness(1.1); }
 
-    /* Notas internas — modo toggle no composer + bubble inline na conversa */
-    .chat-note-toggle {
-      background: transparent;
-      border: none;
-      cursor: pointer;
-      padding: 4px 6px;
-      font-size: 18px;
-      line-height: 1;
-      opacity: .7;
-      border-radius: 6px;
-      transition: all .15s ease;
-    }
-    .chat-note-toggle:hover { opacity: 1; background: rgba(243, 156, 18, .1); }
+    /* Notas internas — toggle no composer (ícone cinza, ativo vira amber sutil) */
+    /* Estilo base de tamanho/layout vem de .chat-emoji, .chat-note-toggle (compartilhado) */
     .chat-note-toggle.active {
-      opacity: 1;
-      background: rgba(243, 156, 18, .22);
-      box-shadow: 0 0 0 1px rgba(243, 156, 18, .35) inset;
+      color: #f9c869;
+      background: rgba(243, 156, 18, .14);
     }
     .chat-input-pill.note-mode {
       background: rgba(243, 156, 18, .08);
@@ -3333,18 +3327,23 @@ router.get('/', (req, res) => {
     }
     .note-mode-indicator.visible { display: block; }
 
-    /* Bubble nota interna — centralizada, fundo amber dark, sem tail */
-    .bubble-row.note { justify-content: center; padding: 4px 0; }
+    /* Bubble nota interna — formato out (lado direito + tail), cor amber pra distinguir */
+    .bubble-row.note { justify-content: flex-end; }
     .bubble-row.note .bubble-action-reply { display: none; }
     .bubble.note {
       background: linear-gradient(180deg, #3a2f1a 0%, #2f2614 100%);
-      border-left: 3px solid #f39c12;
-      max-width: 75%;
-      border-top-left-radius: 8px !important;
-      border-top-right-radius: 8px !important;
-      box-shadow: 0 1px 2px rgba(0,0,0,.25);
+      max-width: 65%;
+      border-top-right-radius: 4px;
+      box-shadow: 0 1px 1.5px rgba(0,0,0,.25);
     }
-    .bubble.note::before { display: none !important; }
+    .bubble.note::before {
+      content: ''; position: absolute;
+      top: 0; right: -7px; width: 0; height: 0;
+      border-style: solid;
+      border-width: 0 0 10px 7px;
+      border-color: transparent transparent transparent #3a2f1a;
+      filter: drop-shadow(1px 1px 0 rgba(0,0,0,.05));
+    }
     .bubble.note:hover { box-shadow: 0 2px 6px rgba(0,0,0,.35); }
     .bubble.note .note-header {
       font-size: 11px; font-weight: 700;
@@ -3378,7 +3377,9 @@ router.get('/', (req, res) => {
     .bubble.note.pending { opacity: .62; }
     .bubble.note.failed-send {
       background: linear-gradient(180deg, #6b2222 0%, #5a1818 100%) !important;
-      border-left-color: var(--danger) !important;
+    }
+    .bubble.note.failed-send::before {
+      border-color: transparent transparent transparent #6b2222 !important;
     }
 
     /* Skeleton loaders — substituem "Carregando..." textuais */
@@ -4808,8 +4809,12 @@ router.get('/', (req, res) => {
           <button class="composer-btn chat-attach" onclick="onAttachClick(event)" title="Anexar arquivo, imagem ou documento" type="button">+</button>
           <div class="\${pillCls}" id="chat-input-pill">
             <textarea class="chat-input" id="chat-input" placeholder="\${placeholder}" rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)" onblur="setTimeout(hideQRDropdown, 150)"></textarea>
-            <button class="\${noteToggleCls}" id="chat-note-toggle" onclick="toggleNoteMode(event, '\${c.from}')" title="Adicionar nota interna (só o time vê)" type="button">📝</button>
-            <button class="chat-emoji" id="chat-emoji-btn" onclick="toggleEmojiPanel(event)" title="Inserir emoji" type="button">😊</button>
+            <button class="\${noteToggleCls}" id="chat-note-toggle" onclick="toggleNoteMode(event, '\${c.from}')" title="Adicionar nota interna (só o time vê)" type="button">
+              <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+            </button>
+            <button class="chat-emoji" id="chat-emoji-btn" onclick="toggleEmojiPanel(event)" title="Inserir emoji" type="button">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+            </button>
           </div>
           <button class="chat-mic" onclick="startRecording('\${c.from}')" title="Gravar áudio" type="button">
             <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
