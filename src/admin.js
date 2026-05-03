@@ -3720,73 +3720,7 @@ router.get('/', (req, res) => {
       border-color: var(--brand);
       background: var(--brand-soft);
     }
-    .agente-help-warn {
-      padding: 10px 12px;
-      background: rgba(243, 156, 18, .08);
-      border-left: 3px solid #f39c12;
-      border-radius: 6px;
-      font-size: 12.5px; color: #f9c869;
-      line-height: 1.5;
-      margin-bottom: 12px;
-    }
-    #ac-nucleo {
-      width: 100%; min-height: 360px;
-      background: var(--bg-3); border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 14px;
-      color: var(--text-primary);
-      font-family: ui-monospace, 'SF Mono', monospace;
-      font-size: 12.5px; line-height: 1.5;
-      resize: vertical;
-      box-sizing: border-box;
-    }
-    #ac-nucleo:focus { border-color: var(--brand); outline: none; }
-    .agente-actions {
-      display: flex; align-items: center; gap: 10px;
-      margin-top: 10px;
-    }
-    .agente-char-count {
-      flex: 1;
-      font-size: 12px; color: var(--text-muted);
-      font-variant-numeric: tabular-nums;
-    }
-    .agente-btn-primary, .agente-btn-secondary {
-      padding: 7px 14px;
-      border-radius: 6px;
-      font-size: 12.5px; font-weight: 600;
-      cursor: pointer;
-      transition: all var(--t-fast);
-    }
-    .agente-btn-primary {
-      background: var(--brand); color: #001f17;
-      border: none;
-    }
-    .agente-btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
-    .agente-btn-primary:disabled {
-      background: var(--bg-3); color: var(--text-muted);
-      cursor: not-allowed;
-    }
-    .agente-btn-secondary {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-    }
-    .agente-btn-secondary:hover {
-      border-color: var(--text-muted); color: var(--text-primary);
-    }
-    .agente-status {
-      font-size: 11px; font-weight: 500;
-      padding: 2px 8px; border-radius: 4px;
-      letter-spacing: .03em;
-    }
-    .agente-status.custom {
-      background: rgba(243, 156, 18, .15);
-      color: #f9c869;
-    }
-    .agente-status.default {
-      background: rgba(0, 168, 132, .12);
-      color: var(--brand-light);
-    }
+    /* Estilos do textarea/botões do núcleo removidos junto com a section. */
 
     /* Skeleton loaders — substituem "Carregando..." textuais */
     .skeleton-list {
@@ -3970,10 +3904,10 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadAgentConfig()">↻ Atualizar</button>
   </div>
   <div class="student-help">
-    Personaliza o agente v2 sem precisar redeploy. Mudanças aplicam <strong>na próxima resposta</strong> da IA.<br>
-    <strong>Núcleo do prompt</strong> = identidade, regras, máquina de estado. Editar errado pode quebrar a IA — usa "Restaurar padrão" se precisar voltar atrás.<br>
-    <strong>Tempo de digitação</strong> = quanto a IA "leva pra digitar" antes de mandar a resposta (simula humano).<br>
-    <strong>Janela de buffer</strong> = quanto tempo aguarda o lead parar de digitar antes de processar batch de mensagens.
+    Configurações de comportamento do agente v2. Mudanças aplicam <strong>na próxima resposta</strong> da IA, sem redeploy.<br>
+    <strong>Tempo de digitação</strong> = quanto a IA "leva pra digitar" antes de mandar a resposta (simula humano em vez de bot que responde instantâneo).<br>
+    <strong>Janela de buffer</strong> = quanto tempo aguarda o lead parar de digitar antes de processar batch de mensagens.<br>
+    Pra editar <strong>conteúdo do que a IA fala</strong> (regras, objeções, knowledge base): vai em <strong>Módulos do prompt</strong> e <strong>Conhecimento</strong>.
   </div>
 
   <!-- Section: timing -->
@@ -4019,17 +3953,11 @@ router.get('/', (req, res) => {
     </div>
   </div>
 
-  <!-- Section: núcleo -->
+  <!-- Aviso: pra editar o conteúdo do prompt, vai em Módulos do prompt -->
   <div class="agente-section">
-    <h3 class="agente-section-title">📜 Núcleo do prompt v2 <span id="ac-nucleo-status" class="agente-status"></span></h3>
-    <div class="agente-help-warn">
-      ⚠️ Esse texto é a <strong>identidade base</strong> do agente — define quem ele é, regras de ouro, máquina de estado, formato das tags. Edição errada pode quebrar respostas. Usa "Restaurar padrão" pra voltar ao texto original do código.
-    </div>
-    <textarea id="ac-nucleo" spellcheck="false" placeholder="Carregando..." onchange="saveAgenteNucleo()"></textarea>
-    <div class="agente-actions">
-      <span class="agente-char-count" id="ac-nucleo-count">— chars</span>
-      <button class="agente-btn-secondary" onclick="restoreAgenteConfig('nucleo_v2')">↺ Restaurar padrão</button>
-      <button class="agente-btn-primary" id="ac-nucleo-save" onclick="saveAgenteNucleo()" disabled>Salvar núcleo</button>
+    <h3 class="agente-section-title">📚 Editar conteúdo do agente</h3>
+    <div class="student-help" style="margin:0">
+      O <strong>conteúdo do agente</strong> (regras de venda, knowledge base, objeções, situações) é editado em <strong>Configurações → Módulos do prompt</strong> (28 módulos sob demanda) e <strong>Configurações → Conhecimento</strong> (preços, horários, modalidades). Esse é o jeito oficial de personalizar o que o agente fala.
     </div>
   </div>
 </div>
@@ -6461,7 +6389,7 @@ router.get('/', (req, res) => {
     if (tab === 'modulos') loadModulos();
     if (tab === 'playground') initPlayground();
     if (tab === 'atalhos') qrMgmtRender();
-    if (tab === 'agente') { bindNucleoTextarea(); loadAgentConfig(); }
+    if (tab === 'agente') loadAgentConfig();
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -6584,9 +6512,11 @@ router.get('/', (req, res) => {
     institucional: '⭐ Diferenciais',
   };
   // ─────────────────────────────────────────────────────────────────
-  // Aba Agente — config v2 (núcleo + timing + buffer)
+  // Aba Agente — config v2 (timing + buffer). Núcleo do prompt v2 fica
+  // gerenciado via "Módulos do prompt" + "Conhecimento" (jeito oficial).
+  // Backend ainda aceita override de nucleo_v2 via API direta pra
+  // emergência, mas UI não expõe mais.
   // ─────────────────────────────────────────────────────────────────
-  let agenteNucleoOriginal = '';
   const agenteSaveTimers = {};
 
   async function loadAgentConfig() {
@@ -6611,44 +6541,8 @@ router.get('/', (req, res) => {
       if (elMin) elMin.value = minS;
       if (elMax) elMax.value = maxS;
       if (elBuf) elBuf.value = bufS;
-
-      // Núcleo
-      const nucleo = cfg.nucleo_v2 || {};
-      const ta = document.getElementById('ac-nucleo');
-      if (ta) {
-        ta.value = nucleo.current || '';
-        agenteNucleoOriginal = nucleo.current || '';
-      }
-      updateNucleoCharCount();
-      const status = document.getElementById('ac-nucleo-status');
-      if (status) {
-        status.className = 'agente-status ' + (nucleo.isCustom ? 'custom' : 'default');
-        status.textContent = nucleo.isCustom ? 'Customizado' : 'Default';
-      }
-      const saveBtn = document.getElementById('ac-nucleo-save');
-      if (saveBtn) saveBtn.disabled = true;
     } catch (e) {
       console.error('[agent-config] erro ao carregar:', e.message);
-    }
-  }
-
-  // Atualiza contador de chars do núcleo + habilita botão Salvar se mudou
-  function updateNucleoCharCount() {
-    const ta = document.getElementById('ac-nucleo');
-    const count = document.getElementById('ac-nucleo-count');
-    const saveBtn = document.getElementById('ac-nucleo-save');
-    if (!ta || !count) return;
-    const len = (ta.value || '').length;
-    count.textContent = len.toLocaleString('pt-BR') + ' chars';
-    if (saveBtn) saveBtn.disabled = (ta.value === agenteNucleoOriginal);
-  }
-
-  // Listener auto-update no textarea (oninput)
-  function bindNucleoTextarea() {
-    const ta = document.getElementById('ac-nucleo');
-    if (ta && !ta.dataset.boundCount) {
-      ta.addEventListener('input', updateNucleoCharCount);
-      ta.dataset.boundCount = '1';
     }
   }
 
@@ -6675,37 +6569,8 @@ router.get('/', (req, res) => {
     }, 600);
   }
 
-  async function saveAgenteNucleo() {
-    const ta = document.getElementById('ac-nucleo');
-    if (!ta) return;
-    const value = ta.value;
-    const saveBtn = document.getElementById('ac-nucleo-save');
-    if (saveBtn) saveBtn.disabled = true;
-    try {
-      const r = await fetch('/admin/api/agent-config/nucleo_v2', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value }),
-      });
-      if (!r.ok) {
-        const data = await r.json().catch(() => ({}));
-        showToast({ severity: 'warn', title: 'Erro ao salvar', message: data.error || 'Tenta de novo' });
-        if (saveBtn) saveBtn.disabled = false;
-        return;
-      }
-      agenteNucleoOriginal = value;
-      const status = document.getElementById('ac-nucleo-status');
-      if (status) { status.className = 'agente-status custom'; status.textContent = 'Customizado'; }
-      showToast({ severity: 'info', title: '✓ Núcleo salvo', message: 'Aplica na próxima resposta da IA.' });
-    } catch (e) {
-      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
-      if (saveBtn) saveBtn.disabled = false;
-    }
-  }
-
   async function restoreAgenteConfig(key) {
     const labels = {
-      nucleo_v2: 'núcleo do prompt',
       typing_delay_min_ms: 'delay mínimo',
       typing_delay_max_ms: 'delay máximo',
       buffer_window_ms: 'janela de buffer',
