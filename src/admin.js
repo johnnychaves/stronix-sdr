@@ -4601,14 +4601,22 @@ router.get('/', (req, res) => {
     // Botões de ação do header (só re-render se mudou)
     const actionsEl = document.getElementById('chat-header-actions');
     if (!actionsEl) return;
-    const desiredKey = isHuman ? (isMine ? 'release' : 'view') : 'assume';
+    const isAdmin = me && me.role === 'admin';
+    // Key inclui isAdmin pra forçar rebuild quando role muda (raro mas possível)
+    const desiredKey = (isHuman ? (isMine ? 'release' : 'view') : 'assume') + (isAdmin ? '-a' : '');
     if (actionsEl.dataset.key === desiredKey) return;
     actionsEl.dataset.key = desiredKey;
     let actionBtns = '';
+    const transferBtn = '<button class="chat-action-btn" onclick="openTransferModal(\\'' + c.from + '\\')" title="Transferir esse atendimento pra outra pessoa do time">🔄 Transferir</button>';
     if (!isHuman) {
-      actionBtns = '<button class="chat-action-btn primary" onclick="assumeConv(event, \\'' + c.from + '\\')">Assumir</button>';
-    } else if (isMine || (me && me.role === 'admin')) {
-      actionBtns = '<button class="chat-action-btn" onclick="releaseConv(event, \\'' + c.from + '\\')">Devolver pra IA</button>';
+      // IA atendendo: admin pode transferir direto pra alguém (skip auto-assume),
+      // consultora não tem permissão de transferir conversa que não é dela.
+      actionBtns = (isAdmin ? transferBtn : '') +
+        '<button class="chat-action-btn primary" onclick="assumeConv(event, \\'' + c.from + '\\')">Assumir</button>';
+    } else if (isMine || isAdmin) {
+      // Você (ou admin) tá atendendo: Transferir + Devolver pra IA
+      actionBtns = transferBtn +
+        '<button class="chat-action-btn" onclick="releaseConv(event, \\'' + c.from + '\\')">Devolver pra IA</button>';
     }
     actionsEl.innerHTML =
       actionBtns +
@@ -6018,7 +6026,18 @@ router.get('/', (req, res) => {
     e.stopPropagation();
     if (!confirm('Limpar conversa de ' + fmtPhone(from) + '? Histórico e atribuição serão apagados.')) return;
     await fetch('/admin/api/conversations/' + from, { method: 'DELETE' });
-    if (selectedPhone === from) selectedPhone = null;
+    if (selectedPhone === from) {
+      // Reseta seleção e força rebuild do chat + ficha do lead pra empty state.
+      // Sem isso, o chat continua mostrando a conversa deletada (header, bubbles,
+      // composer) porque updateChatIncremental retorna early quando selectedPhone === null.
+      selectedPhone = null;
+      replyingTo = null;
+      noteModeActive = false;
+      const layout = document.getElementById('inbox-layout');
+      if (layout) layout.classList.remove('has-selected');
+      renderChat();
+      renderLeadDetail();
+    }
     loadConversations();
   }
 
