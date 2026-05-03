@@ -16,7 +16,14 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('./config');
 const db = require('./db');
-const NUCLEO_V2 = require('./prompt-nucleo-v2');
+const NUCLEO_V2_DEFAULT = require('./prompt-nucleo-v2');
+
+// Resolve o núcleo v2: se admin editou via painel (DB tem agent_config.nucleo_v2),
+// usa essa versão; senão usa o default do arquivo. Lido a cada request — barato
+// (1 query SQLite indexada). Permite editar o prompt sem redeploy.
+function getNucleoV2() {
+  return db.getAgentConfig('nucleo_v2', NUCLEO_V2_DEFAULT) || NUCLEO_V2_DEFAULT;
+}
 const { routeModules } = require('./router-v2');
 const {
   buildResumoBlock,
@@ -183,7 +190,7 @@ function buildModulesBlock(moduleNames) {
 function buildSystemBlocks({ state, moduleNames, dynamicCtx, resumoBlock }) {
   const blocks = [
     // Camada 1: Núcleo estático (~12.5k chars). CACHEADO.
-    { type: 'text', text: NUCLEO_V2, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: getNucleoV2(), cache_control: { type: 'ephemeral' } },
   ];
 
   // Camada 2: Knowledge base (planos atuais, horários, promo). CACHEADO (raramente muda).

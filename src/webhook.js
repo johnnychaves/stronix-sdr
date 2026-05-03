@@ -42,14 +42,18 @@ if (!fs.existsSync(MEDIA_DIR)) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Delay antes de enviar resposta de texto, simulando SDR humano que está
-// atendendo várias conversas em paralelo. Range 1-3 min, proporcional ao
-// tamanho — resposta curta ~60s, média ~120s, longa (300+ chars) ~180s.
+// atendendo várias conversas em paralelo. Proporcional ao tamanho — curta
+// usa MIN, longa (300+ chars) usa MAX. MIN/MAX editáveis pelo painel via
+// agent_config (chaves typing_delay_min_ms / typing_delay_max_ms).
 function typingDelayMs(text) {
-  const MIN_MS = 60 * 1000;   // 1 min — resposta curta
-  const MAX_MS = 180 * 1000;  // 3 min — resposta longa
-  const FULL_LEN = 300;       // chars que justificam o teto
+  const MIN_MS = db.getAgentConfigNumber('typing_delay_min_ms', 60 * 1000, 0, 600 * 1000);
+  const MAX_MS = db.getAgentConfigNumber('typing_delay_max_ms', 180 * 1000, 0, 600 * 1000);
+  const FULL_LEN = 300;
   const ratio = Math.min(1, (text || '').length / FULL_LEN);
-  return Math.round(MIN_MS + (MAX_MS - MIN_MS) * ratio);
+  // Garante MIN <= MAX (defensive — se admin setar invertido)
+  const lo = Math.min(MIN_MS, MAX_MS);
+  const hi = Math.max(MIN_MS, MAX_MS);
+  return Math.round(lo + (hi - lo) * ratio);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -64,7 +68,11 @@ function typingDelayMs(text) {
 // Quando timer expira, processa o batch concatenado como UMA conversa.
 // ─────────────────────────────────────────────────────────────────────
 
-const BUFFER_WINDOW_MS = 15 * 1000;
+// Janela de debounce do buffer — editável via painel (chave buffer_window_ms).
+// Default 15s. Lido a cada enqueue pra refletir mudança sem restart.
+function getBufferWindowMs() {
+  return db.getAgentConfigNumber('buffer_window_ms', 15 * 1000, 1000, 120 * 1000);
+}
 const buffers = new Map(); // phone -> { messages: [{text, isAudio}], timer }
 
 function enqueueMessage(from, text, isAudio, audioFilename = null) {
@@ -75,8 +83,9 @@ function enqueueMessage(from, text, isAudio, audioFilename = null) {
   }
   buf.messages.push({ text, isAudio, audioFilename });
   if (buf.timer) clearTimeout(buf.timer);
-  buf.timer = setTimeout(() => flushBuffer(from), BUFFER_WINDOW_MS);
-  console.log(`[buffer] ${from} acumulou ${buf.messages.length} msg(s) — aguardando ${BUFFER_WINDOW_MS / 1000}s sem nova msg pra processar`);
+  const windowMs = getBufferWindowMs();
+  buf.timer = setTimeout(() => flushBuffer(from), windowMs);
+  console.log(`[buffer] ${from} acumulou ${buf.messages.length} msg(s) — aguardando ${windowMs / 1000}s sem nova msg pra processar`);
 }
 
 function flushBuffer(from) {
