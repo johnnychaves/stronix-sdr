@@ -66,13 +66,13 @@ function typingDelayMs(text) {
 const BUFFER_WINDOW_MS = 15 * 1000;
 const buffers = new Map(); // phone -> { messages: [{text, isAudio}], timer }
 
-function enqueueMessage(from, text, isAudio) {
+function enqueueMessage(from, text, isAudio, audioFilename = null) {
   let buf = buffers.get(from);
   if (!buf) {
     buf = { messages: [], timer: null };
     buffers.set(from, buf);
   }
-  buf.messages.push({ text, isAudio });
+  buf.messages.push({ text, isAudio, audioFilename });
   if (buf.timer) clearTimeout(buf.timer);
   buf.timer = setTimeout(() => flushBuffer(from), BUFFER_WINDOW_MS);
   console.log(`[buffer] ${from} acumulou ${buf.messages.length} msg(s) — aguardando ${BUFFER_WINDOW_MS / 1000}s sem nova msg pra processar`);
@@ -91,15 +91,19 @@ function flushBuffer(from) {
   const anyAudio   = messages.some(m => m.isAudio);
   const firstText  = messages.find(m => !m.isAudio)?.text || '';
   const explicitAudio = !anyAudio && messages.some(m => isExplicitAudioRequest(m.text));
+  // Se houver áudio(s) no batch, pega o primeiro filename salvo pro player.
+  // Múltiplos áudios concatenam transcrições mas só o primeiro vira player —
+  // raro o lead mandar 2+ áudios em <15s. Aceitável.
+  const firstAudioFilename = messages.find(m => m.isAudio && m.audioFilename)?.audioFilename || null;
 
   console.log(`[buffer] flush ${from}: ${messages.length} msg(s) concatenadas (${text.length} chars)`);
 
-  processBatch(from, { text, anyAudio, explicitAudio, firstText }).catch(err => {
+  processBatch(from, { text, anyAudio, explicitAudio, firstText, firstAudioFilename }).catch(err => {
     console.error(`[buffer] erro ao processar batch de ${from}:`, err.message);
   });
 }
 
-async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) {
+async function processBatch(from, { text, anyAudio, explicitAudio, firstText, firstAudioFilename = null }) {
   // Roteamento aluno vs lead — antes de qualquer IA
   const student = db.getStudent(from);
   if (student) {
@@ -120,6 +124,10 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
     db.getOrCreateContact(from);
     db.addMessageWithSender(from, 'user', text, anyAudio, null);
     db.updateLastContact(from);
+    // Lead's incoming audio: anexa o filename salvo em disco pra player no painel
+    if (anyAudio && firstAudioFilename) {
+      try { db.setLastUserAudioMessageMediaPath(from, firstAudioFilename); } catch {}
+    }
     const assignedUser = assignment.assignedUserId ? db.getUserById(assignment.assignedUserId) : null;
     const fallbackUsers = assignedUser ? [] : [...db.getActiveAdmins(), ...db.getActiveConsultors()];
     console.log(`[webhook] ${from} em atendimento humano (${assignedUser?.display_name || 'sem dono'}) — IA não responde`);
@@ -162,6 +170,12 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText }) 
     ? await replyV2(from, text, { isAudio: anyAudio })
     : await reply(from, text, { isAudio: anyAudio, forceAudio });
   const shouldSendAudio = forceAudio || result.useAudio;
+
+  // Lead's incoming audio: agent.reply já salvou a msg user com was_audio=true mas
+  // sem media_path. Anexa o filename salvo em disco pra player no painel.
+  if (anyAudio && firstAudioFilename) {
+    try { db.setLastUserAudioMessageMediaPath(from, firstAudioFilename); } catch {}
+  }
 
   if (shouldSendAudio) {
     console.log(`[webhook] enviando resposta em áudio para ${from}`);
@@ -206,10 +220,26 @@ async function handleIncomingMessage(parsed) {
   const { from, type } = parsed;
   let text = parsed.text;
   let isAudio = type === 'audio';
+  let savedAudioFilename = null;
 
   if (type === 'audio') {
+    // Salva o áudio bruto em disco ANTES de transcrever, pra player no painel
+    // mesmo se a transcrição falhar. Filename é uuid.<ext> baseado no mime.
     try {
-      // parsed.audioBuffer é o áudio cru pronto pra transcrição
+      const mime = parsed.audioMime || 'audio/ogg';
+      const ext = mime.includes('mpeg') || mime.includes('mp3') ? 'mp3'
+               : mime.includes('mp4')  ? 'mp4'
+               : mime.includes('ogg')  ? 'ogg'
+               : mime.includes('webm') ? 'webm'
+               : 'bin';
+      savedAudioFilename = `${crypto.randomUUID()}.${ext}`;
+      fs.writeFileSync(path.join(MEDIA_DIR, savedAudioFilename), parsed.audioBuffer);
+    } catch (e) {
+      console.error('[webhook] não consegui salvar áudio recebido em disco:', e.message);
+      savedAudioFilename = null;
+    }
+
+    try {
       text = await transcribeAudioBuffer(parsed.audioBuffer, parsed.audioMime);
       console.log(`[webhook] transcrição de ${from}: "${text}"`);
     } catch (err) {
@@ -226,7 +256,7 @@ async function handleIncomingMessage(parsed) {
     return;
   }
 
-  enqueueMessage(from, text, isAudio);
+  enqueueMessage(from, text, isAudio, savedAudioFilename);
 }
 
 // Detecta quando o lead pede explicitamente áudio por texto
