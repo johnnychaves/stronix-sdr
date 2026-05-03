@@ -202,7 +202,7 @@ PR #39 entregou notas em localStorage no sidebar direito. Redesenhado pra:
 | Item | Prioridade | Detalhe |
 |---|---|---|
 | **Trocar pro número real da academia** | 🔴 Alta (próximo passo) | Hoje rodando no celular pessoal do Johnny pra teste. Quando estável: para o JetSales, abre Conexões → Desconectar → escaneia QR com número da academia. Tudo pronto. |
-| **AGENT_VERSION fica em v1 até smoke playground passar** | 🔴 Política firme | Mesmo após merge do PR34 (Fase 2 completa), `AGENT_VERSION=v1` continua default. **Smoke manual no playground v2 com 5-10 cenários reais é PRÉ-REQUISITO** antes de cogitar v2 em 5%. Não pula essa etapa. |
+| ~~AGENT_VERSION fica em v1~~ | ✅ Trocado pra v2 default em 2026-05-03 | Sócio decidiu pular smoke playground + rollout 5%. Default agora é v2, v1 fica como fallback de emergência (Monitor v2 → pausa instantânea + env var). Documentado em [decisoes.md](decisoes.md). |
 | ~~Fase 2 — Roteador de módulos~~ | ✅ Concluído PR #34 | [src/router-v2.js](src/router-v2.js) determinístico: estado (estagio + objecao_ativa) + 18 keywords pt-br + limit 3 módulos. 39/39 + 14/14 unit tests passam. Bateria E: 3/5 (cenário EXT_E2 incluso). |
 | ~~Fase 3 — Resumo dinâmico~~ | ✅ Concluído PR #36 | [src/resumo-dinamico.js](src/resumo-dinamico.js) Haiku 4.5 fire-and-forget. 10 seções Anexo 5. Sanity check. F.1 ✅ 5/5. Suite offline 100/100. |
 | ~~Trilha B — Admin Tooling~~ | ✅ Concluído PR #37 | Aba "🚦 Monitor v2": lista + filtros + detalhe + avaliação 3-níveis + métricas em tempo real + 5 alertas + pausa runtime + force-resumo + export CSV + onboarding tour. 5 conversas seed pra teste pré-prod. 133/133 offline + smoke browser validado. Instrumentação automática alimenta as métricas combinadas no PR33/34. |

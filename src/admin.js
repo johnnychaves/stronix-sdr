@@ -3997,8 +3997,8 @@ router.get('/', (req, res) => {
     <h2>Testar agente</h2>
     <div style="display:flex;gap:10px;align-items:center">
       <select id="pg-version" onchange="onPlaygroundVersionChange()" style="background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
-        <option value="v1">v1 (prompt monolítico, em produção)</option>
-        <option value="v2">v2 (núcleo + módulos, BATERIA E)</option>
+        <option value="v2" selected>v2 (núcleo + módulos — em produção)</option>
+        <option value="v1">v1 (prompt monolítico — fallback de emergência)</option>
       </select>
       <select id="pg-cenario" onchange="loadCenario()" style="background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;display:none">
         <option value="">— Carregar cenário —</option>

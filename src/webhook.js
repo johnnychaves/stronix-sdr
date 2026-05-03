@@ -5,10 +5,11 @@ const { replyV2 } = require('./agent-v2');
 const wa = require('./whatsapp');
 
 // Toggle entre Johnny v1 (prompt monolítico) e v2 (núcleo + módulos).
-// Default v1 — só ativa v2 quando AGENT_VERSION=v2 explícito.
-// PR #37: pode ser pausado via DB flag (admin "pausar v2 imediatamente")
-// sem precisar restart. Lê env como baseline e checa override em DB.
-const AGENT_VERSION_ENV = (process.env.AGENT_VERSION || 'v1').toLowerCase();
+// Default v2 desde 2026-05-03 — v1 fica como fallback de emergência.
+// Se v2 quebrar em prod, admin pausa via Monitor v2 (DB flag) que vira pra v1
+// instantâneo sem precisar restart. Pra reverter permanentemente: setar
+// AGENT_VERSION=v1 na env do Railway.
+const AGENT_VERSION_ENV = (process.env.AGENT_VERSION || 'v2').toLowerCase();
 console.log(`[webhook] agent version (env): ${AGENT_VERSION_ENV}`);
 
 // Resolve a cada request — barato (1 query SQLite indexada). Permite admin
