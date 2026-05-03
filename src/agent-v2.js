@@ -396,7 +396,10 @@ async function replyV2Inner(from, text, { isAudio = false } = {}) {
 
   // Nome capturado na tag → atualiza contacts.name (não em lead_state)
   if (parsed.nameFromTag && parsed.nameFromTag !== '') {
-    try { db.setContactName(from, parsed.nameFromTag); } catch {}
+    try {
+      db.setContactName(from, parsed.nameFromTag);
+      try { require('./events').emitLeadsChanged(); } catch {}
+    } catch {}
   }
 
   // 13. Módulo requerido pra próximo turno (se Johnny pediu)

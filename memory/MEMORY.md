@@ -74,6 +74,9 @@ Este arquivo é o ponto de entrada do sistema de memória. Leia-o primeiro para 
 ## Variáveis de ambiente (Railway)
 
 ```
+# Versão do agente — default v2 desde 2026-05-03 (era v1)
+AGENT_VERSION=v2                                # 'v2' (default) ou 'v1' (fallback de emergência)
+
 # WhatsApp provider — controla se usa Cloud API oficial ou Baileys
 WHATSAPP_PROVIDER=baileys                       # 'meta' ou 'baileys' (default 'meta')
 

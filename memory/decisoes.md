@@ -4,6 +4,46 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-03 — AGENT_VERSION default vira v2 (v1 fica como fallback de emergência)
+
+**Decisão:** Trocar o default de `AGENT_VERSION_ENV` de `'v1'` pra `'v2'` em [src/webhook.js](src/webhook.js). Pular o caminho original de "smoke playground → 5% rollout → janela 50/14d → 100%". Manter v1 no código como fallback acionável via Monitor v2 (admin pausa instantâneo via DB flag) e via env var `AGENT_VERSION=v1`.
+
+**Por quê o sócio decidiu pular o caminho conservador:**
+- Polish PR + features de UX (#39-#49) entregues e estáveis em produção
+- Ele quer parar de manter v1 ativo + os 38k chars do prompt monolítico em sincronia com knowledge base / módulos / lead_state do v2
+- Aceitou conscientemente os riscos conhecidos do v2 documentados na memory:
+  - Bateria E variando 3-5/6 (variabilidade Sonnet em respostas com objecao_ativa)
+  - Tag `[ESTADO:]` esquecida em respostas longas (estimado 10-20%)
+  - `routeModules() === []` em casos não cobertos pelas 39 keywords (estimado <15%)
+
+**Por quê eu (Claude) discordei brevemente antes de executar:**
+- Memory documenta smoke playground como "pré-requisito firme"
+- Os 3 bugs do v2 acima podem afetar conversas de leads reais imediatamente
+- Caminho rollout 5% mediria isso com baixo risco
+
+Sócio respondeu: caminho B (v2 default + v1 como fallback) — meio-termo entre rip-the-band-aid e rollout faseado. Aceito.
+
+**Implementação:**
+- [src/webhook.js](src/webhook.js): `AGENT_VERSION_ENV = process.env.AGENT_VERSION || 'v2'` (era `'v1'`)
+- [src/admin.js](src/admin.js): playground default `<option value="v2" selected>` (era v1 selected)
+- [src/agent-v2.js](src/agent-v2.js): captura de nome via `parsed.nameFromTag` agora emite `events.emitLeadsChanged()` pra atualizar a aba Leads em tempo real (consistência com v1)
+- v1 (`src/agent.js`, `src/prompt.js`) **mantido intacto** como fallback
+
+**Plano de rollback se v2 quebrar em prod:**
+1. **Imediato (sem restart):** abrir Monitor v2 → "⏸ Pausar v2 imediatamente". Backend lê DB flag a cada request, vira v1 instantâneo.
+2. **Permanente:** setar `AGENT_VERSION=v1` no Railway. Override volta pro env-baseline.
+3. **Definitivo:** revert do commit do PR.
+
+**Métricas a acompanhar nos próximos 14 dias:**
+- % conversas com tag `[ESTADO:]` esquecida (v2_metrics_log captura como `tag_esquecida`)
+- % turnos com `routeModules() === []` (captura como `router_empty`)
+- Reviews 👎 vs 👍 nas conversas reais
+- Crashes em `replyV2` (capturado como `crash` no Monitor v2)
+
+**Quando deletar v1 de vez:** se 14 dias com v2 em prod sem incidente E métricas dentro dos thresholds (tag <10%, router_empty <5%), abrir PR removendo `src/agent.js`, `src/prompt.js`, e o toggle do webhook. Por enquanto fica como rede de proteção.
+
+---
+
 ## 2026-05-03 — Notas internas migram de localStorage pra backend sincronizado
 
 **Decisão:** PR #39 (polish) entregou notas internas como textarea no sidebar direito + localStorage por navegador. 1 dia depois, pivô pra backend sincronizado: tabela `internal_notes`, endpoints REST, render inline na conversa como bubble, toggle 📝 no composer.
