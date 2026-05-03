@@ -3314,19 +3314,6 @@ router.get('/', (req, res) => {
     .chat-input-pill.note-mode .chat-input::placeholder {
       color: rgba(249, 200, 105, .55);
     }
-    .note-mode-indicator {
-      display: none;
-      padding: 6px 12px;
-      background: rgba(243, 156, 18, .12);
-      color: #f9c869;
-      font-size: 11.5px;
-      font-weight: 500;
-      border-left: 3px solid #f39c12;
-      border-radius: 6px 6px 0 0;
-      animation: crpSlideDown .18s ease;
-    }
-    .note-mode-indicator.visible { display: block; }
-
     /* Bubble nota interna — formato out (lado direito + tail), cor amber pra distinguir */
     .bubble-row.note { justify-content: flex-end; }
     .bubble-row.note .bubble-action-reply { display: none; }
@@ -4792,9 +4779,6 @@ router.get('/', (req, res) => {
              <button class="crp-close" onclick="clearReplyTo()" title="Cancelar resposta" type="button">×</button>
            </div>\`
         : '';
-      const noteIndicator = noteModeActive
-        ? '<div class="note-mode-indicator visible">📝 Nota interna — só o time vê, não vai pro lead</div>'
-        : '<div class="note-mode-indicator" id="note-mode-indicator">📝 Nota interna — só o time vê, não vai pro lead</div>';
       const pillCls = noteModeActive ? 'chat-input-pill note-mode' : 'chat-input-pill';
       const noteToggleCls = noteModeActive ? 'chat-note-toggle active' : 'chat-note-toggle';
       const placeholder = noteModeActive
@@ -4804,7 +4788,6 @@ router.get('/', (req, res) => {
         \${banner}
         <div class="emoji-panel hidden" id="emoji-panel"></div>
         \${replyPreview}
-        \${noteIndicator}
         <div class="chat-input-bar" id="chat-input-bar">
           <button class="composer-btn chat-attach" onclick="onAttachClick(event)" title="Anexar arquivo, imagem ou documento" type="button">+</button>
           <div class="\${pillCls}" id="chat-input-pill">
