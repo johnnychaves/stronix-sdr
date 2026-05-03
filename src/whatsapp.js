@@ -122,6 +122,23 @@ async function notifyStudent(studentPhone, student, incomingText) {
   }
 }
 
+async function notifyTransfer({ leadPhone, leadName, fromUser, toUser, lastMessagePreview }) {
+  if (!toUser || !toUser.phone) return;
+  const display = formatBRPhoneDisplay(leadPhone);
+  const fromName = (fromUser && fromUser.display_name) || 'Alguém do time';
+  const leadLabel = leadName ? `${leadName} (${display})` : display;
+  const previewBlock = lastMessagePreview
+    ? `\n💬 _Última msg: "${lastMessagePreview.slice(0, 200)}"_\n`
+    : '';
+  const message =
+    `🔄 *Atendimento transferido pra você*\n\n` +
+    `${fromName} te passou o atendimento de:\n📱 ${leadLabel}\n` +
+    previewBlock +
+    `\nAcesse o painel pra responder: https://stronix-sdr-production.up.railway.app/admin`;
+  try { await sendMessage(toUser.phone, message); }
+  catch (err) { console.error(`[whatsapp] erro ao notificar transferência pra ${toUser.display_name}:`, err.message); }
+}
+
 async function notifyAssignedConsultor({ leadPhone, assignedUser, fallbackUsers, incomingText }) {
   const display = formatBRPhoneDisplay(leadPhone);
   const preview = incomingText.length > 200 ? incomingText.slice(0, 200) + '...' : incomingText;
@@ -171,6 +188,7 @@ module.exports = {
   notifyOwner: notifyOwner_v2,
   notifyStudent,
   notifyAssignedConsultor,
+  notifyTransfer,
   formatBRPhoneDisplay,
   // Compat: alguns chamadores usam sendAudio com mediaId (Meta-only)
   // Mantém disponível pra Meta pre-existente; Baileys callers devem usar sendVoice.
