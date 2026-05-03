@@ -4,6 +4,58 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-03 — Notas internas v2: backend sincronizado + bubble inline + toggle no composer
+
+**Contexto:** Polish PR de manhã (#39) entregou notas em localStorage no sidebar direito. Sócio pediu redesenho: tirar do canto, virar bubble inline na conversa, toggle no composer ao lado do emoji, **e todas as consultoras veem as notas de todas**. Esse último item exige backend.
+
+**Backend ([src/db.js](src/db.js)):**
+- Tabela `internal_notes(id, phone, user_id, content, created_at)` + index `(phone, created_at)`. Migração idempotente via `CREATE TABLE IF NOT EXISTS`.
+- Prepared statements: `insertInternalNote`, `getInternalNotesByPhone` (JOIN users pra display_name), `getInternalNoteById`, `deleteInternalNote`
+- Helpers: `addInternalNote(phone, userId, content)` valida não-vazio + max 2000, canonicaliza phone; `getInternalNotesByPhone(phone)` → array; `deleteInternalNote(id, userId, isAdmin)` → `{ok, reason?}` com regra de permissão (autor ou admin)
+- `getAllConversations` agora retorna `internalNotes: [...]` em cada conversation
+
+**Endpoints ([src/admin.js](src/admin.js)):**
+- `POST /admin/api/conversations/:phone/internal-notes` (requireAuth via `router.use`). Body `{content}`. Retorna `{ok, note}`. Emite `events.emitConversationChanged(phone)` pra SSE.
+- `DELETE /admin/api/internal-notes/:id`. 403 se não-autorizado, 200 se ok. Emite SSE.
+
+**Frontend ([src/admin.js](src/admin.js)):**
+
+UI:
+- **Removida** section "Notas internas (só você)" do sidebar direito (`renderLeadDetail`) + helpers `loadInternalNote/saveInternalNote/onInternalNoteChange` + constante `NOTES_STORAGE_PREFIX` + CSS `.detail-internal-notes` antigo
+- Adicionado botão `📝` no `chat-input-pill` ao lado do `😊` (`<button class="chat-note-toggle">`)
+- Indicator "📝 Nota interna — só o time vê, não vai pro lead" acima do composer quando ativo
+- CSS novo: `.chat-input-pill.note-mode` (tint amber sutil), `.note-mode-indicator`, `.bubble.note` (centralizada, fundo amber dark), `.note-header`, `.note-delete`
+
+Comportamento:
+- Estado global `noteModeActive`. `toggleNoteMode(e, phone)` inverte + força rebuild do composer + limpa `replyingTo` se ativo (quote não combina com nota)
+- `sendChatReply` redireciona pra `sendInternalNote(phone, text)` quando `noteModeActive`
+- `sendInternalNote`: optimistic UI com pending bubble flag `isNote: true`, POST endpoint, sucesso → `loadConversations` + reset modo, falha → `markPendingFailed`
+- `deleteNote(noteId)`: confirm + DELETE + loadConversations
+- `getMergedHistory(c)` agora junta `c.history + c.internalNotes + pending`, sort por `createdAt` ASC
+- `renderChatMessages` checka `m._isNote === true` e renderiza bubble especial: header "📝 Nota interna · Autor", body, ✕ delete pra autor/admin (hover-only)
+- `messagesStamp` inclui notes count + last note createdAt pra que SSE/polling re-renderize quando outra consultora anota
+
+**Smoke E2E validado:**
+- Server local com env dummies sobe ✅
+- Login admin → POST /contacts/init cria contato → POST /internal-notes cria nota id=1, id=2 ✅
+- GET /conversations retorna `internalNotes: [...]` com 2 notas (autor "Admin") ✅
+- POST com content vazio → 400 "Nota vazia" ✅
+- DELETE /internal-notes/1 → 200 ✅
+- GET de novo → 1 nota restante ✅
+- Extração do `<script>` do `/admin` rendered → `node --check` passa OK (lição do hotfix #40 aplicada)
+- Grep no HTML rendered confirma: 5x `chat-note-toggle`, 4x `note-mode-indicator`, 3x handlers `toggleNoteMode/sendInternalNote/deleteNote`, 6x CSS `.bubble.note`, 2x refs `internalNotes`
+
+**Trade-offs aceitos** (registrados em [memory/decisoes.md](decisoes.md)):
+- Hard delete sem soft delete
+- Sem edição (apaga + recria)
+- Limit 2000 chars
+- Sem markdown
+- Notas em localStorage do PR #39 ficam órfãs
+
+**Política mantida:** `AGENT_VERSION=v1` continua default. Notes v2 é independente do trilho v2.
+
+---
+
 ## 2026-05-03 — Polish PR frontend (Optimistic UI + Reply + Quick replies + Notas + Skeleton/Empty)
 
 **Contexto:** Antes de soltar o painel pra outras consultoras (hoje só Johnny opera) e antes de ligar v2 em 5%, janela natural pra polir UX. PR único frontend-only em [src/admin.js](src/admin.js) (monolítico 6242 linhas). Princípio: tudo em localStorage + handlers, zero back-end novo.

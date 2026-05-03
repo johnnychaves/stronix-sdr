@@ -1158,6 +1158,51 @@ router.delete('/api/reviews/:phone', (req, res) => {
   res.json({ ok: true });
 });
 
+// API — cria nota interna (sincronizada entre todas as consultoras)
+router.post('/api/conversations/:phone/internal-notes', (req, res) => {
+  const phone = req.params.phone;
+  const content = (req.body && req.body.content) || '';
+  if (!db.getContact(phone)) return res.status(404).json({ error: 'Conversa não encontrada' });
+  if (!String(content).trim()) return res.status(400).json({ error: 'Nota vazia' });
+  if (String(content).length > 2000) return res.status(400).json({ error: 'Nota muito longa (máx 2000 chars)' });
+  try {
+    const note = db.addInternalNote(phone, req.user.id, content);
+    try { require('./events').emitConversationChanged(phone); } catch {}
+    res.json({
+      ok: true,
+      note: {
+        id: note.id,
+        content: note.content,
+        createdAt: note.createdAt,
+        userId: note.userId,
+        userName: req.user.displayName || req.user.username,
+      },
+    });
+  } catch (err) {
+    console.error('[admin] erro ao criar nota interna:', err.message);
+    res.status(500).json({ error: err.message || 'Falha ao criar nota' });
+  }
+});
+
+// API — apaga nota interna (autor ou admin)
+router.delete('/api/internal-notes/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  const isAdmin = req.user && req.user.role === 'admin';
+  const result = db.deleteInternalNote(id, req.user.id, isAdmin);
+  if (!result.ok) {
+    if (result.reason === 'not_found') return res.status(404).json({ error: 'Nota não encontrada' });
+    if (result.reason === 'forbidden') return res.status(403).json({ error: 'Você só pode apagar suas próprias notas' });
+    return res.status(500).json({ error: 'Falha ao apagar' });
+  }
+  try {
+    if (result.note && result.note.phone) {
+      require('./events').emitConversationChanged(result.note.phone);
+    }
+  } catch {}
+  res.json({ ok: true });
+});
+
 // API — lista alunos cadastrados (desviam IA pra atendimento humano)
 router.get('/api/students', (req, res) => {
   res.json(db.getAllStudents());
@@ -3250,30 +3295,90 @@ router.get('/', (req, res) => {
     }
     .qr-mgmt-add:hover { filter: brightness(1.1); }
 
-    /* Notas internas — textarea na sidebar direita */
-    .detail-internal-notes { display: flex; flex-direction: column; gap: 6px; }
-    .detail-internal-notes textarea {
-      background: var(--bg-3);
-      border: 1px solid var(--border);
+    /* Notas internas — modo toggle no composer + bubble inline na conversa */
+    .chat-note-toggle {
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      padding: 4px 6px;
+      font-size: 18px;
+      line-height: 1;
+      opacity: .7;
       border-radius: 6px;
-      padding: 8px 10px;
-      color: var(--text-primary);
-      font-size: 13px; line-height: 1.5;
-      font-family: inherit;
-      resize: vertical; min-height: 70px; width: 100%;
-      box-sizing: border-box;
+      transition: all .15s ease;
     }
-    .detail-internal-notes textarea:focus {
-      border-color: var(--brand); outline: none;
+    .chat-note-toggle:hover { opacity: 1; background: rgba(243, 156, 18, .1); }
+    .chat-note-toggle.active {
+      opacity: 1;
+      background: rgba(243, 156, 18, .22);
+      box-shadow: 0 0 0 1px rgba(243, 156, 18, .35) inset;
     }
-    .detail-internal-notes .notes-status {
-      font-size: 11px; color: var(--text-muted);
-      text-align: right; font-style: italic;
-      min-height: 14px;
+    .chat-input-pill.note-mode {
+      background: rgba(243, 156, 18, .08);
+      border-color: rgba(243, 156, 18, .42);
     }
-    .detail-internal-notes .notes-help {
-      font-size: 11.5px; color: var(--text-muted);
-      font-style: italic; line-height: 1.45;
+    .chat-input-pill.note-mode .chat-input::placeholder {
+      color: rgba(249, 200, 105, .55);
+    }
+    .note-mode-indicator {
+      display: none;
+      padding: 6px 12px;
+      background: rgba(243, 156, 18, .12);
+      color: #f9c869;
+      font-size: 11.5px;
+      font-weight: 500;
+      border-left: 3px solid #f39c12;
+      border-radius: 6px 6px 0 0;
+      animation: crpSlideDown .18s ease;
+    }
+    .note-mode-indicator.visible { display: block; }
+
+    /* Bubble nota interna — centralizada, fundo amber dark, sem tail */
+    .bubble-row.note { justify-content: center; padding: 4px 0; }
+    .bubble-row.note .bubble-action-reply { display: none; }
+    .bubble.note {
+      background: linear-gradient(180deg, #3a2f1a 0%, #2f2614 100%);
+      border-left: 3px solid #f39c12;
+      max-width: 75%;
+      border-top-left-radius: 8px !important;
+      border-top-right-radius: 8px !important;
+      box-shadow: 0 1px 2px rgba(0,0,0,.25);
+    }
+    .bubble.note::before { display: none !important; }
+    .bubble.note:hover { box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+    .bubble.note .note-header {
+      font-size: 11px; font-weight: 700;
+      color: #f9c869;
+      letter-spacing: .03em;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+    .bubble.note .note-body {
+      color: #e8d5b0; font-size: 13.5px;
+      line-height: 1.45;
+    }
+    .bubble.note .bubble-meta {
+      color: rgba(249, 200, 105, .55);
+    }
+    .bubble.note .note-delete {
+      background: transparent; border: none;
+      color: rgba(249, 200, 105, .55);
+      font-size: 14px; cursor: pointer;
+      padding: 0 4px;
+      margin-left: 4px;
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity .15s ease;
+    }
+    .bubble.note:hover .note-delete { opacity: 1; }
+    .bubble.note .note-delete:hover {
+      color: var(--danger);
+      background: rgba(248, 113, 113, .1);
+    }
+    .bubble.note.pending { opacity: .62; }
+    .bubble.note.failed-send {
+      background: linear-gradient(180deg, #6b2222 0%, #5a1818 100%) !important;
+      border-left-color: var(--danger) !important;
     }
 
     /* Skeleton loaders — substituem "Carregando..." textuais */
@@ -3896,10 +4001,9 @@ router.get('/', (req, res) => {
   let qrDropdownIndex = 0;
   let qrDropdownMatches = [];
 
-  // Notas internas: textarea por contato no sidebar direito, salva em localStorage.
-  // Não sincroniza entre consultoras (limitação aceita — backend depois se virar pedido).
-  const NOTES_STORAGE_PREFIX = 'internalNote:';
-  let notesSaveTimer = null;
+  // Notas internas — modo toggle no composer + bubble inline na conversa.
+  // Sincronizadas via backend (POST /internal-notes), todas as consultoras veem.
+  let noteModeActive = false;
 
   // ─── Polish helpers ───
   function loadQuickReplies() {
@@ -3919,18 +4023,6 @@ router.get('/', (req, res) => {
   }
   function saveQuickReplies() {
     try { localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(quickReplies)); } catch {}
-  }
-  function loadInternalNote(phone) {
-    if (!phone) return '';
-    try { return localStorage.getItem(NOTES_STORAGE_PREFIX + phone) || ''; }
-    catch { return ''; }
-  }
-  function saveInternalNote(phone, value) {
-    if (!phone) return;
-    try {
-      if (value && value.trim()) localStorage.setItem(NOTES_STORAGE_PREFIX + phone, value);
-      else localStorage.removeItem(NOTES_STORAGE_PREFIX + phone);
-    } catch {}
   }
   function setReplyTo(phone, mid) {
     const c = allConversations.find(x => x.from === phone);
@@ -3987,17 +4079,29 @@ router.get('/', (req, res) => {
     return 'tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
   }
   function getMergedHistory(c) {
-    // Concatena histórico real do servidor + msgs pendentes/falhadas (locais).
+    // Concatena histórico real (mensagens + notas internas) + pendentes locais,
+    // ordenado por createdAt pra render cronológico.
     const pend = pendingMessages.get(c.from) || [];
-    if (!pend.length) return c.history;
-    return c.history.concat(pend.map(p => ({
+    const notes = (c.internalNotes || []).map(n => ({
+      id: n.id,
+      content: n.content,
+      createdAt: n.createdAt,
+      userId: n.userId,
+      userName: n.userName,
+      _isNote: true,
+    }));
+    const pendingItems = pend.map(p => ({
       id: p.tempId,
-      role: 'assistant',
+      role: p.isNote ? null : 'assistant',
       content: p.text,
       createdAt: p.createdAt,
       sentByUserId: (typeof me !== 'undefined' && me) ? me.id : null,
-      _pendingStatus: p.status, // 'pending' | 'failed'
-    })));
+      userName: (typeof me !== 'undefined' && me) ? (me.displayName || me.username) : null,
+      _pendingStatus: p.status,           // 'pending' | 'failed'
+      _isNote: !!p.isNote,
+    }));
+    const all = c.history.concat(notes).concat(pendingItems);
+    return all.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   }
   function clearPendingForServerMatch(phone, sentText) {
     // Quando uma msg confirma no servidor, remove a pending equivalente.
@@ -4083,21 +4187,6 @@ router.get('/', (req, res) => {
     ta.selectionStart = ta.selectionEnd = qr.text.length;
     autoGrowChat(ta);
     hideQRDropdown();
-  }
-  // Notas internas — onChange handler com debounce
-  function onInternalNoteChange(phone) {
-    const ta = document.getElementById('internal-note-input');
-    if (!ta) return;
-    const status = document.getElementById('internal-note-status');
-    if (status) status.textContent = 'Digitando…';
-    clearTimeout(notesSaveTimer);
-    notesSaveTimer = setTimeout(() => {
-      saveInternalNote(phone, ta.value);
-      if (status) {
-        status.textContent = ta.value.trim() ? 'Salvo no seu navegador' : 'Vazio';
-        setTimeout(() => { if (status) status.textContent = ''; }, 1800);
-      }
-    }, 500);
   }
   // Quick replies management — aba Configurações
   function qrMgmtRender() {
@@ -4505,17 +4594,6 @@ router.get('/', (req, res) => {
         \${noteHtml}
       </section>
 
-      <section class="detail-section">
-        <h3>Notas internas (só você)</h3>
-        <div class="detail-internal-notes">
-          <textarea
-            id="internal-note-input"
-            placeholder="Anote aqui o que NÃO vai pro lead. Ex: 'pediu pra ligar 18h', 'esposa não autorizou ainda', 'comprou plano semestral em 2024'..."
-            oninput="onInternalNoteChange('\${c.from}')">\${escapeHtml(loadInternalNote(c.from))}</textarea>
-          <div class="notes-status" id="internal-note-status"></div>
-          <div class="notes-help">Salvas no seu navegador. Não sincroniza entre consultoras.</div>
-        </div>
-      </section>
     \`;
   }
 
@@ -4578,14 +4656,36 @@ router.get('/', (req, res) => {
         lastDay = day;
         dayChanged = true;
       }
+      const isPending = m._pendingStatus === 'pending';
+      const isFailed  = m._pendingStatus === 'failed';
+      const pendingCls = isPending ? ' pending' : (isFailed ? ' failed-send' : '');
+
+      // ─── Bubble nota interna ───
+      if (m._isNote) {
+        const noteAuthor = m.userName || (m.sentByUserId ? (getUserDisplay(m.sentByUserId) || 'Atendente') : 'Atendente');
+        const canDelete = !isPending && !isFailed && !!m.id && me && (m.userId === me.id || me.role === 'admin');
+        const noteStatus = isPending
+          ? '<span class="msg-check pending" title="Salvando…">⏱</span>'
+          : (isFailed ? '<span class="msg-check failed" title="Falhou">⚠</span>' : '');
+        const deleteBtn = canDelete
+          ? '<button class="note-delete" onclick="deleteNote(' + m.id + ')" title="Apagar nota" type="button">×</button>'
+          : '';
+        lastGroupKey = ''; // notas quebram agrupamento de bubbles normais
+        return dayHtml +
+          '<div class="bubble-row note" data-mid="' + (m.id || '') + '">' +
+            '<div class="bubble note' + pendingCls + '">' +
+              '<div class="note-header">📝 Nota interna · ' + escapeHtml(noteAuthor) + '</div>' +
+              '<div class="note-body">' + linkify(escapeHtml(m.content || '')) + '</div>' +
+              '<div class="bubble-meta">' + fmtMessageTime(m.createdAt) + noteStatus + deleteBtn + '</div>' +
+            '</div>' +
+          '</div>';
+      }
+
       const isOut = m.role === 'assistant';
       const fromHuman = m.sentByUserId;
       const senderName = fromHuman ? (getUserDisplay(fromHuman) || 'Atendente') : '';
       const inOrOut = isOut ? 'out' : 'in';
       const humanCls = fromHuman ? ' human' : '';
-      const isPending = m._pendingStatus === 'pending';
-      const isFailed  = m._pendingStatus === 'failed';
-      const pendingCls = isPending ? ' pending' : (isFailed ? ' failed-send' : '');
 
       // Group consecutive messages from same sender (role + user id)
       const groupKey = m.role + ':' + (m.sentByUserId || '');
@@ -4657,14 +4757,18 @@ router.get('/', (req, res) => {
   // Usado no render parcial pra evitar re-render quando nada mudou, e forçar
   // re-render quando o status muda mesmo sem msg nova.
   function messagesStamp(c) {
-    if (!c.history.length) return '0';
-    const last = c.history[c.history.length - 1];
+    const notes = c.internalNotes || [];
+    if (!c.history.length && !notes.length) return '0';
+    const last = c.history.length ? c.history[c.history.length - 1] : null;
     let maxStatus = 0;
     for (const m of c.history) {
       if (m.readAt && m.readAt > maxStatus) maxStatus = m.readAt;
       else if (m.deliveredAt && m.deliveredAt > maxStatus) maxStatus = m.deliveredAt;
     }
-    return c.history.length + '|' + (last.createdAt || 0) + '|' + maxStatus;
+    // Inclui notas no stamp pra que SSE/polling re-renderize quando alguém adiciona/apaga
+    const lastNote = notes.length ? notes[notes.length - 1] : null;
+    return c.history.length + '|' + (last ? last.createdAt : 0) + '|' + maxStatus +
+           '|n' + notes.length + '|' + (lastNote ? lastNote.createdAt : 0);
   }
 
   function buildInputBar(c) {
@@ -4687,14 +4791,24 @@ router.get('/', (req, res) => {
              <button class="crp-close" onclick="clearReplyTo()" title="Cancelar resposta" type="button">×</button>
            </div>\`
         : '';
+      const noteIndicator = noteModeActive
+        ? '<div class="note-mode-indicator visible">📝 Nota interna — só o time vê, não vai pro lead</div>'
+        : '<div class="note-mode-indicator" id="note-mode-indicator">📝 Nota interna — só o time vê, não vai pro lead</div>';
+      const pillCls = noteModeActive ? 'chat-input-pill note-mode' : 'chat-input-pill';
+      const noteToggleCls = noteModeActive ? 'chat-note-toggle active' : 'chat-note-toggle';
+      const placeholder = noteModeActive
+        ? 'Anote algo sobre esse lead (só o time vê)...'
+        : 'Digite uma mensagem como ' + escapeHtml(me.displayName) + '... (use / pra atalhos)';
       return \`
         \${banner}
         <div class="emoji-panel hidden" id="emoji-panel"></div>
         \${replyPreview}
+        \${noteIndicator}
         <div class="chat-input-bar" id="chat-input-bar">
           <button class="composer-btn chat-attach" onclick="onAttachClick(event)" title="Anexar arquivo, imagem ou documento" type="button">+</button>
-          <div class="chat-input-pill">
-            <textarea class="chat-input" id="chat-input" placeholder="Digite uma mensagem como \${escapeHtml(me.displayName)}... (use / pra atalhos)" rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)" onblur="setTimeout(hideQRDropdown, 150)"></textarea>
+          <div class="\${pillCls}" id="chat-input-pill">
+            <textarea class="chat-input" id="chat-input" placeholder="\${placeholder}" rows="1" onkeydown="handleChatKey(event, '\${c.from}')" oninput="autoGrowChat(this)" onblur="setTimeout(hideQRDropdown, 150)"></textarea>
+            <button class="\${noteToggleCls}" id="chat-note-toggle" onclick="toggleNoteMode(event, '\${c.from}')" title="Adicionar nota interna (só o time vê)" type="button">📝</button>
             <button class="chat-emoji" id="chat-emoji-btn" onclick="toggleEmojiPanel(event)" title="Inserir emoji" type="button">😊</button>
           </div>
           <button class="chat-mic" onclick="startRecording('\${c.from}')" title="Gravar áudio" type="button">
@@ -5102,6 +5216,12 @@ router.get('/', (req, res) => {
     let text = ta.value.trim();
     if (!text) return;
 
+    // Modo nota interna: posta nota em vez de reply, e desativa o modo após enviar.
+    if (noteModeActive) {
+      await sendInternalNote(phone, text);
+      return;
+    }
+
     // Reply/citar: prepend quote ao texto enviado
     if (replyingTo && replyingTo.phone === phone && replyingTo.text) {
       text = '> ' + replyingTo.text + '\\n\\n' + text;
@@ -5203,6 +5323,90 @@ router.get('/', (req, res) => {
         return r.json().catch(() => ({})).then(data => markPendingFailed(phone, mid, data.error || 'falha'));
       }
     }).catch(() => markPendingFailed(phone, mid, 'sem conexão'));
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Notas internas — toggle no composer + envio + delete
+  // ─────────────────────────────────────────────────────────────────
+  function toggleNoteMode(e, phone) {
+    if (e) e.stopPropagation();
+    noteModeActive = !noteModeActive;
+    // Limpa reply preview se ativo (quote não combina com nota interna)
+    if (noteModeActive && replyingTo && replyingTo.phone === phone) {
+      replyingTo = null;
+    }
+    // Força rebuild da barra de input pra refletir o estado
+    const c = allConversations.find(x => x.from === phone);
+    if (c) {
+      const wrap = document.getElementById('chat-input-wrap');
+      if (wrap) { wrap.dataset.mode = 'fresh'; syncChatInputBar(c); }
+    }
+    setTimeout(() => document.getElementById('chat-input')?.focus(), 50);
+  }
+
+  async function sendInternalNote(phone, text) {
+    const ta = document.getElementById('chat-input');
+    if (!text || !text.trim()) return;
+    const trimmed = text.trim();
+    if (trimmed.length > 2000) {
+      showToast({ severity: 'warn', title: 'Nota muito longa', message: 'Máx 2000 caracteres' });
+      return;
+    }
+
+    // Optimistic UI: empurra pending note
+    const tid = tempId();
+    const arr = pendingMessages.get(phone) || [];
+    arr.push({ tempId: tid, text: trimmed, status: 'pending', createdAt: Date.now(), isNote: true });
+    pendingMessages.set(phone, arr);
+
+    // Limpa input + sai do modo nota + força rebuild
+    if (ta) { ta.value = ''; autoGrowChat(ta); }
+    noteModeActive = false;
+    chatScrollPinned = true;
+    const c = allConversations.find(x => x.from === phone);
+    if (c) {
+      const wrap = document.getElementById('chat-input-wrap');
+      if (wrap) { wrap.dataset.mode = 'fresh'; syncChatInputBar(c); }
+      const msgsEl = document.getElementById('chat-messages');
+      if (msgsEl) {
+        msgsEl.innerHTML = renderChatMessages(c);
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
+    }
+
+    try {
+      const r = await fetch('/admin/api/conversations/' + phone + '/internal-notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: trimmed }),
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        markPendingFailed(phone, tid, data.error || 'falha ao salvar nota');
+        return;
+      }
+      clearPendingByTempId(phone, tid);
+      await loadConversations();
+      const ta2 = document.getElementById('chat-input');
+      if (ta2) ta2.focus();
+    } catch (e2) {
+      markPendingFailed(phone, tid, 'sem conexão');
+    }
+  }
+
+  async function deleteNote(noteId) {
+    if (!confirm('Apagar essa nota interna? Não dá pra recuperar.')) return;
+    try {
+      const r = await fetch('/admin/api/internal-notes/' + noteId, { method: 'DELETE' });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        showToast({ severity: 'warn', title: 'Não consegui apagar', message: data.error || 'Tenta de novo' });
+        return;
+      }
+      await loadConversations();
+    } catch (e) {
+      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────
