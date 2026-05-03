@@ -910,6 +910,54 @@ router.post('/api/conversations/:phone/assume', (req, res) => {
   res.json({ ok: true });
 });
 
+// API — transfere conversa pra outro user (consultora ou admin ativo).
+// Só o atendente atual ou admin pode transferir. Notifica via WhatsApp
+// quem recebeu (se tiver phone cadastrado).
+router.post('/api/conversations/:phone/transfer', async (req, res) => {
+  const { phone } = req.params;
+  const { targetUserId } = req.body || {};
+  const tid = parseInt(targetUserId, 10);
+  if (!tid) return res.status(400).json({ error: 'targetUserId obrigatório' });
+  if (tid === req.user.id) return res.status(400).json({ error: 'Não dá pra transferir pra si mesmo' });
+
+  const contact = db.getContact(phone);
+  if (!contact) return res.status(404).json({ error: 'Conversa não encontrada' });
+
+  // Permissão: precisa ser o atendente atual OU admin
+  const isCurrent = contact.assigned_user_id === req.user.id;
+  const isAdmin = req.user.role === 'admin';
+  if (!isCurrent && !isAdmin) {
+    return res.status(403).json({ error: 'Você precisa estar atendendo essa conversa pra transferir' });
+  }
+
+  const target = db.getUserById(tid);
+  if (!target || !target.active) return res.status(400).json({ error: 'Usuário destino inválido ou inativo' });
+
+  db.transferConversation(phone, tid);
+  console.log(`[admin] ${req.user.username} transferiu conversa ${phone} pra ${target.username}`);
+
+  // Notifica quem recebeu (fire-and-forget, não bloqueia resposta)
+  try {
+    const wa = require('./whatsapp');
+    if (wa.notifyTransfer) {
+      // Pega última msg pra dar contexto na notificação
+      const lastMsg = db.getLastMessageForContact ? db.getLastMessageForContact(phone) : null;
+      wa.notifyTransfer({
+        leadPhone: phone,
+        leadName: contact.name,
+        fromUser: { display_name: req.user.displayName || req.user.username },
+        toUser: { phone: target.phone, display_name: target.display_name },
+        lastMessagePreview: lastMsg ? lastMsg.content : null,
+      }).catch(() => {});
+    }
+  } catch {}
+
+  res.json({
+    ok: true,
+    target: { id: target.id, displayName: target.display_name, role: target.role },
+  });
+});
+
 // API — devolve conversa pra IA (libera assignment)
 router.post('/api/conversations/:phone/release', (req, res) => {
   const a = db.getContactAssignment(req.params.phone);
@@ -2365,6 +2413,85 @@ router.get('/', (req, res) => {
     .handoff-banner button:hover {
       background: rgba(0,168,132,.32);
       color: #fff;
+    }
+
+    /* Botão "Transferir" no handoff-banner — visual secundário, ao lado de Devolver */
+    .handoff-banner .btn-transfer {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.15);
+      color: var(--brand-light);
+      font: 600 11.5px var(--font-sans);
+      cursor: pointer;
+      padding: 4px 10px;
+      border-radius: 6px;
+      margin-right: 6px;
+      display: inline-flex; align-items: center; gap: 4px;
+      transition: all var(--t-fast);
+    }
+    .handoff-banner .btn-transfer:hover {
+      background: rgba(255,255,255,.14);
+      color: #fff;
+      border-color: rgba(255,255,255,.3);
+    }
+    .handoff-banner .hb-actions { display: flex; align-items: center; }
+
+    /* Modal Transferir — reusa modal-backdrop / modal-card / modal-head */
+    .transfer-card { width: 480px; max-width: 92vw; max-height: 80vh; display: flex; flex-direction: column; }
+    .transfer-help {
+      padding: 12px 18px 0;
+      font-size: 12.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .transfer-list {
+      padding: 12px 18px 18px;
+      overflow-y: auto;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .transfer-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 12px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all var(--t-fast);
+    }
+    .transfer-item:hover {
+      background: var(--bg-3);
+      border-color: var(--brand);
+      transform: translateX(2px);
+    }
+    .transfer-item .ti-avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark, #007a60) 100%);
+      color: #001f17;
+      display: flex; align-items: center; justify-content: center;
+      font: 700 13px var(--font-sans);
+      flex-shrink: 0;
+    }
+    .transfer-item.is-admin .ti-avatar {
+      background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+      color: #fff;
+    }
+    .transfer-item .ti-body { flex: 1; min-width: 0; }
+    .transfer-item .ti-name {
+      font: 600 13.5px var(--font-sans); color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .transfer-item .ti-meta {
+      font: 500 11.5px var(--font-sans); color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .transfer-item .ti-arrow {
+      color: var(--text-muted); font-size: 16px;
+      transition: transform var(--t-fast);
+    }
+    .transfer-item:hover .ti-arrow { color: var(--brand); transform: translateX(2px); }
+    .transfer-empty {
+      padding: 24px 12px;
+      text-align: center; color: var(--text-muted);
+      font-size: 13px;
     }
 
     /* Hint sutil acima do composer quando IA tá atendendo —
@@ -3943,6 +4070,22 @@ router.get('/', (req, res) => {
   </div>
 </div>
 
+<!-- Modal: Transferir conversa pra outro user -->
+<div class="modal-backdrop hidden" id="transfer-backdrop" onclick="if(event.target===this)closeTransferModal()">
+  <div class="modal-card transfer-card" role="dialog" aria-label="Transferir conversa">
+    <div class="modal-head">
+      <div class="modal-title">🔄 Transferir conversa</div>
+      <button class="modal-close" onclick="closeTransferModal()" type="button" title="Fechar (Esc)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="transfer-help" id="transfer-help">Selecione pra quem você quer passar o atendimento. A pessoa vai receber notificação no WhatsApp (se tiver telefone cadastrado).</div>
+    <div class="transfer-list" id="transfer-list">
+      <div class="transfer-empty">Carregando usuários…</div>
+    </div>
+  </div>
+</div>
+
 <script>
   let originalPrompt = '';
 
@@ -4829,7 +4972,10 @@ router.get('/', (req, res) => {
       if (isMine) {
         banner = \`<div class="handoff-banner">
              <div><span class="hb-dot"></span><strong>Você está atendendo</strong> · IA pausada</div>
-             <button onclick="releaseConv(event, '\${c.from}')">Devolver pra IA</button>
+             <div class="hb-actions">
+               <button class="btn-transfer" onclick="openTransferModal('\${c.from}')" title="Transferir esse atendimento pra outra pessoa do time" type="button">🔄 Transferir</button>
+               <button onclick="releaseConv(event, '\${c.from}')">Devolver pra IA</button>
+             </div>
            </div>\`;
       } else if (!isHuman) {
         banner = \`<div class="ai-active-hint">
@@ -4937,6 +5083,77 @@ router.get('/', (req, res) => {
   function closeNewChat() {
     const bd = document.getElementById('new-chat-backdrop');
     if (bd) bd.classList.add('hidden');
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Transferir conversa — modal com lista de users ativos
+  // ─────────────────────────────────────────────────────────────────
+  let transferTargetPhone = null;
+
+  async function openTransferModal(phone) {
+    transferTargetPhone = phone;
+    const bd = document.getElementById('transfer-backdrop');
+    if (!bd) return;
+    bd.classList.remove('hidden');
+    const list = document.getElementById('transfer-list');
+    if (list) list.innerHTML = '<div class="transfer-empty">Carregando usuários…</div>';
+    try {
+      const r = await fetch('/admin/api/users-public');
+      if (!r.ok) throw new Error('falha ao carregar');
+      const users = await r.json();
+      // Filtra: exclui self
+      const eligible = users.filter(u => !me || u.id !== me.id);
+      if (!eligible.length) {
+        list.innerHTML = '<div class="transfer-empty">Não há outras pessoas cadastradas pra receber. Cadastre consultoras em Configurações → Usuários.</div>';
+        return;
+      }
+      list.innerHTML = eligible.map(u => {
+        const initials = (u.display_name || '')
+          .split(/\\s+/).slice(0, 2)
+          .map(p => (p[0] || '').toUpperCase())
+          .join('') || '?';
+        const roleLabel = u.role === 'admin' ? 'Admin' : 'Consultora';
+        const isAdminCls = u.role === 'admin' ? ' is-admin' : '';
+        return '<div class="transfer-item' + isAdminCls + '" onclick="doTransfer(' + u.id + ', \\'' + escapeHtml(u.display_name) + '\\')">' +
+                 '<div class="ti-avatar">' + escapeHtml(initials) + '</div>' +
+                 '<div class="ti-body">' +
+                   '<div class="ti-name">' + escapeHtml(u.display_name) + '</div>' +
+                   '<div class="ti-meta">' + roleLabel + '</div>' +
+                 '</div>' +
+                 '<div class="ti-arrow">→</div>' +
+               '</div>';
+      }).join('');
+    } catch (e) {
+      list.innerHTML = '<div class="transfer-empty">Erro ao carregar usuários. Tenta de novo.</div>';
+    }
+  }
+
+  function closeTransferModal() {
+    const bd = document.getElementById('transfer-backdrop');
+    if (bd) bd.classList.add('hidden');
+    transferTargetPhone = null;
+  }
+
+  async function doTransfer(targetUserId, targetDisplayName) {
+    if (!transferTargetPhone) return;
+    const phone = transferTargetPhone;
+    closeTransferModal();
+    try {
+      const r = await fetch('/admin/api/conversations/' + phone + '/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserId }),
+      });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        showToast({ severity: 'warn', title: 'Não consegui transferir', message: data.error || 'Tenta de novo' });
+        return;
+      }
+      showToast({ severity: 'info', title: '🔄 Atendimento transferido', message: 'Passou pra ' + targetDisplayName + '. Notificamos no WhatsApp.' });
+      await loadConversations();
+    } catch (e) {
+      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
+    }
   }
 
   // Detecta se input parece com número BR (ignora texto puro com letras).
@@ -5257,6 +5474,10 @@ router.get('/', (req, res) => {
     const newChat = document.getElementById('new-chat-backdrop');
     if (newChat && !newChat.classList.contains('hidden')) {
       newChat.classList.add('hidden');
+    }
+    const transfer = document.getElementById('transfer-backdrop');
+    if (transfer && !transfer.classList.contains('hidden')) {
+      closeTransferModal();
     }
   });
 

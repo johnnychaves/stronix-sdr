@@ -942,6 +942,15 @@ function releaseConversation(phone) {
   try { require('./events').emitConversationChanged(phone); } catch {}
 }
 
+// Transfere uma conversa já assumida pra outro usuário. Diferente de assume,
+// NÃO exige assigned_user_id IS NULL — sobrescreve o assignment atual.
+// Caller deve validar permissão (atendente atual ou admin) antes de chamar.
+function transferConversation(phone, newUserId) {
+  phone = canonicalizeContactPhone(phone);
+  stmts.forceAssumeConversation.run(newUserId, Date.now(), phone);
+  try { require('./events').emitConversationChanged(phone); } catch {}
+}
+
 function getContactAssignment(phone) {
   const c = stmts.getContactWithAssignment.get(phone);
   if (!c) return null;
@@ -1687,6 +1696,7 @@ module.exports = {
   // assignment
   assumeConversation,
   releaseConversation,
+  transferConversation,
   getContactAssignment,
   addMessageWithSender,
   setLastAssistantMessageMediaPath,
