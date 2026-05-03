@@ -309,6 +309,21 @@ db.exec(`
   );
 `);
 
+// Notas internas — comentários do time sobre o lead, NÃO vão pro WhatsApp.
+// Renderizadas inline na conversa, ordenadas por created_at junto com mensagens.
+// Sincronizadas entre todas as consultoras (substitui o localStorage do PR #39).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS internal_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phone TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_internal_notes_phone ON internal_notes(phone, created_at);
+`);
+
 // ─────────────────────────────────────────────────────────────────────
 // PREPARED STATEMENTS (otimizadas, reusadas)
 // ─────────────────────────────────────────────────────────────────────
@@ -483,6 +498,22 @@ const stmts = {
     WHERE wamid = ?
   `),
   getMessageByWamid: db.prepare('SELECT * FROM messages WHERE wamid = ?'),
+
+  // Internal notes — comentários do time sobre o lead, sincronizados.
+  insertInternalNote: db.prepare(`
+    INSERT INTO internal_notes (phone, user_id, content, created_at)
+    VALUES (?, ?, ?, ?)
+  `),
+  getInternalNotesByPhone: db.prepare(`
+    SELECT n.id, n.phone, n.user_id, n.content, n.created_at,
+           u.display_name as user_name
+    FROM internal_notes n
+    LEFT JOIN users u ON u.id = n.user_id
+    WHERE n.phone = ?
+    ORDER BY n.created_at ASC
+  `),
+  getInternalNoteById: db.prepare('SELECT * FROM internal_notes WHERE id = ?'),
+  deleteInternalNote: db.prepare('DELETE FROM internal_notes WHERE id = ?'),
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -609,6 +640,13 @@ function getAllConversations() {
     const lastMessage = history.length > 0 ? history[history.length - 1] : null;
     const review = stmts.getReview.get(c.phone) || null;
     const assignedUser = c.assigned_user_id ? stmts.getUserById.get(c.assigned_user_id) : null;
+    const internalNotes = stmts.getInternalNotesByPhone.all(c.phone).map(n => ({
+      id: n.id,
+      content: n.content,
+      createdAt: n.created_at,
+      userId: n.user_id,
+      userName: n.user_name || null,
+    }));
     return {
       from: c.phone,
       fromDisplay: c.phone.slice(0, 2) + '...' + c.phone.slice(-4),
@@ -627,8 +665,46 @@ function getAllConversations() {
         comment: review.comment,
         reviewedAt: review.reviewed_at,
       } : null,
+      internalNotes,
     };
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// INTERNAL NOTES (notas internas do time sobre o lead)
+// ─────────────────────────────────────────────────────────────────────
+
+function addInternalNote(phone, userId, content) {
+  const canonPhone = canonicalizeContactPhone(phone);
+  const trimmed = String(content || '').trim();
+  if (!trimmed) throw new Error('Nota vazia');
+  if (trimmed.length > 2000) throw new Error('Nota muito longa (máx 2000 chars)');
+  const createdAt = Date.now();
+  const result = stmts.insertInternalNote.run(canonPhone, userId, trimmed, createdAt);
+  return { id: result.lastInsertRowid, phone: canonPhone, content: trimmed, createdAt, userId };
+}
+
+function getInternalNotesByPhone(phone) {
+  const canonPhone = canonicalizeContactPhone(phone);
+  return stmts.getInternalNotesByPhone.all(canonPhone).map(n => ({
+    id: n.id,
+    content: n.content,
+    createdAt: n.created_at,
+    userId: n.user_id,
+    userName: n.user_name || null,
+  }));
+}
+
+// Retorna { ok: bool, reason?: 'not_found' | 'forbidden', note? }
+// Permite apagar se o user é o autor OU se é admin.
+function deleteInternalNote(id, requestingUserId, isAdmin) {
+  const note = stmts.getInternalNoteById.get(id);
+  if (!note) return { ok: false, reason: 'not_found' };
+  if (!isAdmin && note.user_id !== requestingUserId) {
+    return { ok: false, reason: 'forbidden' };
+  }
+  stmts.deleteInternalNote.run(id);
+  return { ok: true, note: { id: note.id, phone: note.phone } };
 }
 
 function clearConversation(phone) {
@@ -1650,4 +1726,8 @@ module.exports = {
   setRuntimeFlag,
   isValidReviewRating,
   maskPhone,
+  // Internal notes
+  addInternalNote,
+  getInternalNotesByPhone,
+  deleteInternalNote,
 };

@@ -4,6 +4,50 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-03 — Notas internas migram de localStorage pra backend sincronizado
+
+**Decisão:** PR #39 (polish) entregou notas internas como textarea no sidebar direito + localStorage por navegador. 1 dia depois, pivô pra backend sincronizado: tabela `internal_notes`, endpoints REST, render inline na conversa como bubble, toggle 📝 no composer.
+
+**Por quê migrei tão cedo:**
+- Sócio percebeu na hora que limitação de localStorage matava o caso de uso real: time precisa **ver contexto coletivo** do lead. "Johnny ligou 18h ontem", "esposa do lado quando atendeu", "comprou semestral em 2024" — esse contexto serve a todas as consultoras, não só quem digitou.
+- Mover o textarea pro **fluxo do composer** (não pro sidebar) reduz fricção: anotação fica no caminho natural, não num canto fora do contexto.
+- Render inline na conversa (em vez de "ficha do lead") faz a nota aparecer no momento certo da timeline, perto da mensagem que motivou a anotação. Contexto inline > ficha estática.
+
+**Por quê não fiz já no PR #39:**
+- PR #39 era polish frontend-only, escopo deliberadamente fechado. Sócio explicitou "sem alterar o back-end".
+- Migração via dia seguinte permitiu medir o que precisa do esforço extra (sync entre consultoras) antes de gastar.
+
+**Implementação ([src/db.js](src/db.js) + [src/admin.js](src/admin.js)):**
+
+Backend:
+- Tabela `internal_notes(id, phone, user_id, content, created_at)` + index em `(phone, created_at)`
+- Helpers: `addInternalNote`, `getInternalNotesByPhone`, `deleteInternalNote(id, userId, isAdmin)`
+- Permissão: autor ou admin pode apagar
+- `getAllConversations` retorna `internalNotes: [...]` em cada conversa (sem chamada extra)
+- Endpoints `POST /admin/api/conversations/:phone/internal-notes` + `DELETE /admin/api/internal-notes/:id`
+- Emite `events.emitConversationChanged(phone)` pra SSE re-renderizar
+
+Frontend:
+- Removida section da sidebar direita + helpers `loadInternalNote/saveInternalNote/onInternalNoteChange/NOTES_STORAGE_PREFIX`. localStorage existente fica órfão (raro, feature ainda não divulgada)
+- Estado `noteModeActive` global. Toggle 📝 no `chat-input-pill` ao lado do 😊
+- CSS: `.chat-input-pill.note-mode` com tint amber + `.note-mode-indicator` acima
+- `sendChatReply` redireciona pra `sendInternalNote(phone, text)` quando `noteModeActive`
+- Optimistic UI: pending bubble com flag `isNote: true` + render como bubble note dim
+- Render: `getMergedHistory` agora junta `c.history + c.internalNotes + pending`, ordenado por `createdAt`. Bubble especial centralizada com header "📝 Nota interna · Autor", fundo amber dark
+- Delete via hover ✕ (autor/admin) → confirm → DELETE → loadConversations
+- `messagesStamp` inclui count + last createdAt das notas pra forçar re-render via SSE quando outra consultora adiciona
+
+**Trade-offs aceitos:**
+- ⚠️ Hard delete (não soft). Notas raras precisam recuperar; se virar pedido, vira `deleted_at` flag.
+- ⚠️ Sem edição. Errou? Apaga e cria nova. Edit complica permission model.
+- ⚠️ Limit 2000 chars (server-side). Mais que isso vira documento, não nota.
+- ⚠️ Sem markdown. Texto puro com auto-linkify de URLs.
+- ⚠️ Notas órfãs em localStorage do PR #39: ignoradas. Documentado no commit message.
+
+**Princípio sócio aplicado:** "Single source of truth no DB, render derivado." Nota não duplica em messages — vive em tabela própria, frontend merge por timestamp pro render.
+
+---
+
 ## 2026-05-02 — Resumo dinâmico via Haiku 4.5 em background (Fase 3, PR #36)
 
 **Decisão:** Conversas longas (≥20 msgs) usam (resumo estruturado + msgs novas) em vez de 50 msgs cheias no prompt. Resumo gerado por **Haiku 4.5** em **fire-and-forget após responder** ao lead. Threshold de 20 msgs pra primeiro resumo + update incremental a cada 10 msgs novas.
