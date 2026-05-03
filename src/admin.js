@@ -3939,7 +3939,7 @@ router.get('/', (req, res) => {
     if (!m || !m.content) return;
     // Remove qualquer quote prévia da msg citada (não cita citação)
     const cleanText = stripQuotePrefix(m.content);
-    const trimmed = cleanText.replace(/\s+/g, ' ').trim().slice(0, 80);
+    const trimmed = cleanText.replace(/\\s+/g, ' ').trim().slice(0, 80);
     if (!trimmed) return;
     replyingTo = { phone, text: trimmed };
     // Re-renderiza a barra de input pra mostrar o preview
@@ -3962,26 +3962,26 @@ router.get('/', (req, res) => {
   function stripQuotePrefix(text) {
     // Remove linhas iniciais que começam com "> " (quote)
     if (!text) return text;
-    const lines = text.split('\n');
+    const lines = text.split('\\n');
     let i = 0;
-    while (i < lines.length && /^&gt;\s|^>\s|^>$/.test(lines[i])) i++;
+    while (i < lines.length && /^&gt;\\s|^>\\s|^>$/.test(lines[i])) i++;
     // Pula uma linha em branco logo após o quote
     while (i < lines.length && lines[i].trim() === '') i++;
-    return lines.slice(i).join('\n');
+    return lines.slice(i).join('\\n');
   }
   function extractQuoteAndBody(text) {
     // Para render: separa o bloco de quote (linhas iniciando com "> ") do corpo.
     if (!text) return { quote: '', body: text };
-    const lines = text.split('\n');
+    const lines = text.split('\\n');
     const quoteLines = [];
     let i = 0;
-    while (i < lines.length && /^>\s?/.test(lines[i])) {
-      quoteLines.push(lines[i].replace(/^>\s?/, ''));
+    while (i < lines.length && /^>\\s?/.test(lines[i])) {
+      quoteLines.push(lines[i].replace(/^>\\s?/, ''));
       i++;
     }
     if (!quoteLines.length) return { quote: '', body: text };
     while (i < lines.length && lines[i].trim() === '') i++;
-    return { quote: quoteLines.join('\n'), body: lines.slice(i).join('\n') };
+    return { quote: quoteLines.join('\\n'), body: lines.slice(i).join('\\n') };
   }
   function tempId() {
     return 'tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -4032,7 +4032,7 @@ router.get('/', (req, res) => {
   function showQRDropdownIfTriggered(textarea) {
     const v = textarea.value;
     // Trigger: textarea começa com "/" e ainda não tem espaço/quebra (busca em progresso)
-    if (!v.startsWith('/') || /[\s\n]/.test(v)) {
+    if (!v.startsWith('/') || /[\\s\\n]/.test(v)) {
       hideQRDropdown();
       return;
     }
@@ -4620,7 +4620,7 @@ router.get('/', (req, res) => {
           statusHtml = '<span class="msg-check pending" title="Enviando…">⏱</span>';
         } else if (isFailed) {
           statusHtml = '<span class="msg-check failed" title="Falhou">⚠</span>' +
-            '<button class="retry-send" onclick="retrySend(\'' + c.from + '\', \'' + (m.id || '') + '\')" type="button">Tentar de novo</button>';
+            '<button class="retry-send" onclick="retrySend(\\'' + c.from + '\\', \\'' + (m.id || '') + '\\')" type="button">Tentar de novo</button>';
         } else {
           const st = m.deliveryStatus;
           if (st === 'read') {
@@ -4638,7 +4638,7 @@ router.get('/', (req, res) => {
       // Botão reply hover (não exibe em pending nem failed nem áudio)
       const canReply = !isPending && !isFailed && !!m.id && !(m.wasAudio && m.mediaPath);
       const replyBtn = canReply
-        ? '<button class="bubble-action-reply" type="button" onclick="setReplyTo(\'' + c.from + '\', \'' + m.id + '\')" title="Responder">↩</button>'
+        ? '<button class="bubble-action-reply" type="button" onclick="setReplyTo(\\'' + c.from + '\\', \\'' + m.id + '\\')" title="Responder">↩</button>'
         : '';
 
       const groupCls = isGrouped ? ' grouped' : '';
@@ -5104,7 +5104,7 @@ router.get('/', (req, res) => {
 
     // Reply/citar: prepend quote ao texto enviado
     if (replyingTo && replyingTo.phone === phone && replyingTo.text) {
-      text = '> ' + replyingTo.text + '\n\n' + text;
+      text = '> ' + replyingTo.text + '\\n\\n' + text;
     }
     const wasReplyTo = replyingTo;
     replyingTo = null;
