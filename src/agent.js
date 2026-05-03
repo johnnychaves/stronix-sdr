@@ -169,6 +169,27 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
     setAudioFlags(from, { awaitingAudioConfirm: true, askedForAudio: true });
   }
 
+  // ─── CAPTURA DE NOME ───
+  // Quando a IA captura o nome do lead durante o roteiro de qualificação,
+  // sinaliza com [NOME:fulano]. Backend extrai, salva em contacts.name e
+  // remove a tag antes de enviar ao lead. Se aparecer junto com AGENDAMENTO,
+  // o nome do AGENDAMENTO ainda tem prioridade pra notificação.
+  const nameMatch = cleanText.match(/\[NOME:\s*([^\]\n]+?)\s*\]/i);
+  if (nameMatch && nameMatch[1]) {
+    const capturedName = nameMatch[1].trim();
+    if (capturedName && capturedName.length >= 2 && capturedName.length <= 80) {
+      try {
+        db.setContactName(from, capturedName);
+        try { require('./events').emitLeadsChanged(); } catch {}
+        try { require('./events').emitConversationChanged(from); } catch {}
+        console.log(`[agent] 👤 nome capturado de ${from}: "${capturedName}"`);
+      } catch (e) {
+        console.error('[agent] erro ao salvar nome:', e.message);
+      }
+    }
+    cleanText = cleanText.replace(/\[NOME:[^\]\n]+\]\s*\n?/gi, '').trim();
+  }
+
   // ─── DETECÇÃO DE AGENDAMENTO ───
   // Extrai tag [AGENDAMENTO:nome=X|dia=X|turno=X|modalidade=X] se presente,
   // salva no banco e notifica o dono. A tag é removida antes de enviar ao lead.
@@ -188,6 +209,17 @@ async function reply(from, text, { isAudio = false, forceAudio = false } = {}) {
       scheduledTurn: apptData.turno      || null,
       scheduledHour: apptData.hora       || null,
     });
+
+    // Persiste nome do agendamento em contacts.name também (caso ainda não
+    // tenha sido capturado via [NOME:X] antes). Roteiro padrão captura
+    // nome ANTES do agendamento, mas se a tag [NOME:] foi esquecida, isso
+    // garante o cadastro pelo menos no momento do agendamento.
+    if (apptData.nome && (!currentContact || !currentContact.name)) {
+      try {
+        db.setContactName(from, apptData.nome);
+        try { require('./events').emitLeadsChanged(); } catch {}
+      } catch {}
+    }
 
     // Notifica o dono de forma assíncrona (não bloqueia a resposta)
     notifyOwner(from, apptData).catch(err =>

@@ -565,7 +565,30 @@ function updateLastContact(phone) {
 
 // Atualiza nome de um contato (NULL pra limpar)
 function setContactName(phone, name) {
+  phone = canonicalizeContactPhone(phone);
   stmts.updateName.run(name && name.trim() ? name.trim() : null, phone);
+}
+
+// Retorna todos os contatos que NÃO são alunos cadastrados (= leads).
+// Inclui dados básicos pra listagem no painel: phone, name, first_contact,
+// last_contact, message_count. Ordena por último contato desc (mais recente
+// no topo).
+function getAllLeads() {
+  return db.prepare(`
+    SELECT c.phone, c.name, c.first_contact_at, c.last_contact_at,
+           COUNT(m.id) as message_count
+    FROM contacts c
+    LEFT JOIN messages m ON m.phone = c.phone
+    WHERE c.phone NOT IN (SELECT phone FROM students)
+    GROUP BY c.phone
+    ORDER BY c.last_contact_at DESC
+  `).all().map(r => ({
+    phone: r.phone,
+    name: r.name || null,
+    firstContactAt: r.first_contact_at,
+    lastContactAt: r.last_contact_at,
+    messageCount: r.message_count,
+  }));
 }
 
 function updateAudioFlags(phone, { audioPermission, awaitingAudioConfirm, askedForAudio }) {
@@ -1672,6 +1695,7 @@ module.exports = {
   getOrCreateContact,
   canonicalizeContactPhone,
   setContactName,
+  getAllLeads,
   updateLastContact,
   updateAudioFlags,
   addMessage,
