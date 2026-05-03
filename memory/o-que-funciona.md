@@ -4,6 +4,244 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-03 — Optimistic UI: pendingMessages Map<phone, [...]> + render mesclado
+
+**Contexto:** Painel admin tinha delay perceptível entre clicar Send e msg aparecer. Sensação de lentidão em UI moderna.
+
+**Solução** ([src/admin.js](../src/admin.js)):
+```js
+const pendingMessages = new Map(); // phone → [{tempId, text, status, createdAt}]
+
+async function sendChatReply(phone) {
+  // ... extrai text + replyingTo
+  const tid = tempId(); // 'tmp-{ts}-{rand}'
+  const arr = pendingMessages.get(phone) || [];
+  arr.push({ tempId: tid, text, status: 'pending', createdAt: Date.now() });
+  pendingMessages.set(phone, arr);
+  // Re-render imediato (bubble com ⏱ aparece antes do fetch)
+  msgsEl.innerHTML = renderChatMessages(c);
+  try {
+    const r = await fetch(...);
+    if (r.ok) { clearPendingByTempId(phone, tid); await loadConversations(); }
+    else { markPendingFailed(phone, tid, error); }
+  } catch { markPendingFailed(phone, tid, 'sem conexão'); }
+}
+
+function getMergedHistory(c) {
+  const pend = pendingMessages.get(c.from) || [];
+  return c.history.concat(pend.map(p => ({
+    id: p.tempId, role: 'assistant', content: p.text,
+    createdAt: p.createdAt, sentByUserId: me?.id,
+    _pendingStatus: p.status, // 'pending' | 'failed'
+  })));
+}
+```
+
+`renderChatMessages` itera `getMergedHistory(c)` ao invés de `c.history` direto. Bubbles pending recebem classe `.pending` (opacity .62) e checkmark `⏱` pulsante. Failed = `.failed-send` (fundo vermelho) + botão `Tentar de novo` inline que chama `retrySend(phone, mid)`.
+
+**Por que funciona:**
+- Sensação de instantâneo (~0ms vs ~200-400ms antes)
+- Race condition leve aceita (bubble pode duplicar < 200ms se SSE entrega real antes do POST retornar). Cleanup via `clearPendingByTempId` resolve.
+- TempIds com `Date.now() + Math.random().toString(36)` colidem com prob ~0
+- Estado em memória local, não sincroniza entre tabs — mas serve só pro feedback visual no envio próprio
+
+---
+
+## 2026-05-03 — Reply/citar via prefix `> ` no texto (sem tabela threads)
+
+**Contexto:** WhatsApp Web tem citação de msg específica. Painel não tinha. Conversa de 50+ msgs fica difícil de costurar.
+
+**Solução** ([src/admin.js](../src/admin.js)):
+- Botão `.bubble-action-reply` (↩) hover-only no canto da bubble:
+```css
+.bubble-row:hover .bubble-action-reply { opacity: 1; }
+.bubble-row.in .bubble-action-reply { right: -28px; }
+.bubble-row.out .bubble-action-reply { left: -28px; }
+```
+- Click chama `setReplyTo(phone, mid)` que define `replyingTo = {phone, text}` (até 80 chars do trecho citado, sem citação anterior via `stripQuotePrefix`)
+- Composer ganha `.composer-reply-preview` quando `replyingTo` ativo
+- `sendChatReply` prepend `> ${replyingTo.text}\n\n` no texto enviado
+- No render do bubble, `extractQuoteAndBody(text)` separa o bloco de quote do body:
+```js
+function extractQuoteAndBody(text) {
+  const lines = text.split('\n');
+  const quoteLines = [];
+  let i = 0;
+  while (i < lines.length && /^>\s?/.test(lines[i])) {
+    quoteLines.push(lines[i].replace(/^>\s?/, '')); i++;
+  }
+  if (!quoteLines.length) return { quote: '', body: text };
+  while (i < lines.length && lines[i].trim() === '') i++;
+  return { quote: quoteLines.join('\n'), body: lines.slice(i).join('\n') };
+}
+```
+- Bubble renderiza `.bubble-quote` (border-left + bg suave) acima do body
+
+**Por que funciona:**
+- **Single source of truth:** quote vive no texto. Não precisa de tabela `message_replies` nem campo `quoted_message_id`. WhatsApp renderiza `> ` como quote nativo do lado do lead.
+- Não-quoted messages também passam pelo `extractQuoteAndBody` — quando não há `> ` no início, retorna `{quote:'', body: text}` sem custo perceptível.
+- Esc no textarea cancela o reply via `clearReplyTo()` — UX igual WhatsApp.
+- Trade-off aceito: histórico no DB tem `> trecho` literal. Aceitável.
+
+---
+
+## 2026-05-03 — Slash commands com dropdown navegável + management em localStorage
+
+**Contexto:** Consultora repete frases padrão dezenas de vezes/dia (horários, valores, propostas). Snippets economizam tempo real.
+
+**Solução** ([src/admin.js](../src/admin.js)):
+- Trigger: textarea começa com `/` e ainda não tem espaço/quebra:
+```js
+function showQRDropdownIfTriggered(textarea) {
+  const v = textarea.value;
+  if (!v.startsWith('/') || /[\s\n]/.test(v)) { hideQRDropdown(); return; }
+  const query = v.toLowerCase();
+  qrDropdownMatches = quickReplies.filter(qr => qr.trigger.toLowerCase().startsWith(query));
+  // Se nada bate, mostra todos pra discoverability
+  if (!qrDropdownMatches.length) qrDropdownMatches = quickReplies.slice();
+  // Render dropdown ...
+}
+```
+- Navegação por teclado em `handleChatKey`:
+```js
+if (qrDropdownActive && qrDropdownMatches.length) {
+  if (e.key === 'ArrowDown') { qrMoveActive(1); return; }
+  if (e.key === 'ArrowUp')   { qrMoveActive(-1); return; }
+  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+    qrPick(qrDropdownIndex); return;
+  }
+  if (e.key === 'Escape') { hideQRDropdown(); return; }
+}
+```
+- Click no item via `onmousedown="event.preventDefault();qrPick(${i})"` — preventDefault evita blur antes do click
+- Dropdown fecha com debounce no blur: `onblur="setTimeout(hideQRDropdown, 150)"`
+- 6 defaults seed populados na 1ª carga via `loadQuickReplies` se localStorage vazio
+- Management em aba "Configurações → Atalhos rápidos" — CRUD inline com input `qr-trigger-input` (auto-prepend `/`) + `qr-text-input` + botão remover
+
+**Por que funciona:**
+- Zero back-end. localStorage `quickReplies` array `[{trigger, text}]`.
+- Defaults seed dão valor imediato sem onboarding.
+- Discoverability: `/` sozinho mostra todos → consultora descobre os disponíveis.
+- Limitação aceita: não sincroniza entre consultoras/dispositivos. Se virar pedido, vira backend (`quick_replies` table + endpoints).
+
+---
+
+## 2026-05-03 — Notas internas por contato em localStorage (debounced)
+
+**Contexto:** Consultora precisa anotar contexto sobre o lead que NÃO vai pro WhatsApp ("pediu pra ligar 18h", "esposa não autorizou", "comprou semestral em 2024"). Sem isso, vira anotação no caderno físico ou perde.
+
+**Solução** ([src/admin.js](../src/admin.js)):
+- Section nova em `renderLeadDetail`:
+```js
+<section class="detail-section">
+  <h3>Notas internas (só você)</h3>
+  <div class="detail-internal-notes">
+    <textarea id="internal-note-input" placeholder="..."
+      oninput="onInternalNoteChange('${c.from}')">${escapeHtml(loadInternalNote(c.from))}</textarea>
+    <div class="notes-status" id="internal-note-status"></div>
+    <div class="notes-help">Salvas no seu navegador. Não sincroniza entre consultoras.</div>
+  </div>
+</section>
+```
+- Storage prefixado por phone: `localStorage[internalNote:${phone}]`
+- Debounce 500ms via `notesSaveTimer`:
+```js
+function onInternalNoteChange(phone) {
+  clearTimeout(notesSaveTimer);
+  notesSaveTimer = setTimeout(() => {
+    saveInternalNote(phone, ta.value);
+    status.textContent = ta.value.trim() ? 'Salvo no seu navegador' : 'Vazio';
+  }, 500);
+}
+```
+
+**Por que funciona:**
+- Zero back-end. Salva ao parar de digitar.
+- Microcopy explícita ("só você", "não sincroniza") seta expectativa correta.
+- Limitação aceita: cada consultora tem suas próprias notas. Se virar pedido de sincronização, vira tabela DB + endpoints + SSE.
+
+---
+
+## 2026-05-03 — Skeleton loaders com shimmer CSS-only
+
+**Contexto:** "Carregando..." em texto é amador. Skeleton em listas é padrão de produto polido.
+
+**Solução** ([src/admin.js](../src/admin.js)):
+```css
+.skeleton-list { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.skeleton-card {
+  height: 64px; border-radius: 8px;
+  background: linear-gradient(90deg, var(--bg-2) 0%, var(--bg-3) 50%, var(--bg-2) 100%);
+  background-size: 200% 100%;
+  animation: skShimmer 1.4s ease-in-out infinite;
+}
+.skeleton-card.compact { height: 44px; }  /* Inbox cards */
+.skeleton-card.tall { height: 80px; }      /* Monitor v2 cards */
+@keyframes skShimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+```
+
+```html
+<!-- Substitui "Carregando..." nos containers -->
+<div id="inbox-list">
+  <div class="skeleton-list">
+    <div class="skeleton-card compact"></div>
+    <div class="skeleton-card compact"></div>
+    ...
+  </div>
+</div>
+```
+
+**Por que funciona:**
+- Zero JS, zero deps. Pure CSS.
+- Aspect-ratio do skeleton matches a real lista (compact pra Inbox que tem cards de 44px).
+- Quando data carrega, `innerHTML = ` substitui o skeleton-list pela lista real.
+- Animação shimmer (background-position) é GPU-accelerated, não trava UI.
+
+---
+
+## 2026-05-03 — Empty state com microcopy + ação contextual
+
+**Contexto:** "Nenhuma conversa nesse filtro" sozinho é seco. Empty state bem feito tem ícone + título + sub + ação.
+
+**Solução** ([src/admin.js](../src/admin.js)):
+```js
+function renderInboxList() {
+  if (!convs.length) {
+    const hasFilter = currentFilter !== 'all' || (searchQuery && searchQuery.trim());
+    if (hasFilter) {
+      list.innerHTML =
+        '<div class="empty-state">' +
+          '<div class="es-icon">🔍</div>' +
+          '<div class="es-title">Nenhuma conversa com esse filtro</div>' +
+          '<div class="es-sub">Tenta limpar o filtro ou busca pra ver todas as conversas.</div>' +
+          '<button onclick="clearInboxFilters()">Limpar filtro</button>' +
+        '</div>';
+    } else {
+      // ... versão sem filtro com microcopy diferente
+    }
+    return;
+  }
+  // ...
+}
+
+function clearInboxFilters() {
+  searchQuery = ''; currentFilter = 'all';
+  document.getElementById('inbox-search-input').value = '';
+  // ... reset filter buttons
+  renderInboxList();
+}
+```
+
+**Por que funciona:**
+- Diferencia "vazio porque filtro" vs "vazio porque ainda não chegou nada"
+- Botão de ação inline reduz fricção — 1 click vs 3 (procurar onde está o filtro, achar como tirar, voltar)
+- Reusável: `.empty-state` class com `.es-icon` / `.es-title` / `.es-sub` cobre vários contextos (qr-mgmt vazio, etc)
+
+---
+
 ## 2026-05-02 — Baileys: JID resolution antes de enviar (bug 9-dígito BR)
 
 **Contexto:** Mensagens enviadas via Baileys não chegavam no destinatário porque o JID gerado tinha o formato errado. WhatsApp BR registra contas em 2 formatos:

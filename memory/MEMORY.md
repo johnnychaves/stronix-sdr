@@ -29,7 +29,7 @@ Este arquivo é o ponto de entrada do sistema de memória. Leia-o primeiro para 
 - **Stack:** Node.js + Express + Claude Sonnet 4.5 + SQLite + Whisper + ElevenLabs + **Baileys** (com Meta Cloud API ainda disponível como fallback via `WHATSAPP_PROVIDER=meta`)
 - **URL produção:** https://stronix-sdr-production.up.railway.app
 - **Repo:** github.com/johnnychaves/stronix-sdr (privado)
-- **Última atualização:** 2026-05-02
+- **Última atualização:** 2026-05-03
 
 ---
 
