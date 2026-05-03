@@ -485,12 +485,14 @@ router.get('/api/events', (req, res) => {
   const onConn = () => send('connections.changed', {});
   const onAppt = () => send('appointments.changed', {});
   const onStud = () => send('students.changed', {});
+  const onLeads = () => send('leads.changed', {});
   const onAlert = (data) => send('alert', data);
   const onV2 = (data) => send('v2.metrics.changed', data || {});
   events.bus.on('conversation.changed', onConv);
   events.bus.on('connections.changed', onConn);
   events.bus.on('appointments.changed', onAppt);
   events.bus.on('students.changed', onStud);
+  events.bus.on('leads.changed', onLeads);
   events.bus.on('alert', onAlert);
   events.bus.on('v2.metrics.changed', onV2);
 
@@ -506,6 +508,7 @@ router.get('/api/events', (req, res) => {
     events.bus.off('connections.changed', onConn);
     events.bus.off('appointments.changed', onAppt);
     events.bus.off('students.changed', onStud);
+    events.bus.off('leads.changed', onLeads);
     events.bus.off('alert', onAlert);
     events.bus.off('v2.metrics.changed', onV2);
   });
@@ -1254,6 +1257,43 @@ router.delete('/api/internal-notes/:id', (req, res) => {
     if (result.note && result.note.phone) {
       require('./events').emitConversationChanged(result.note.phone);
     }
+  } catch {}
+  res.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// LEADS — contatos que NÃO são alunos. Cadastro manual de nome+phone
+// ─────────────────────────────────────────────────────────────────────
+
+// API — lista todos os leads (contatos que não são alunos)
+router.get('/api/leads', (req, res) => {
+  res.json(db.getAllLeads());
+});
+
+// API — cadastra/atualiza lead (phone + name)
+router.put('/api/leads/:phone', (req, res) => {
+  const { name } = req.body || {};
+  const phone = (req.params.phone || '').replace(/\D/g, '');
+  if (!phone || phone.length < 10) return res.status(400).json({ error: 'Phone inválido (mín 10 dígitos)' });
+  if (db.isStudent(phone)) {
+    return res.status(400).json({ error: 'Esse phone está cadastrado como aluno. Remova de Alunos primeiro.' });
+  }
+  // Garante contato existe (cria com first/last_contact_at = agora se for novo)
+  db.getOrCreateContact(phone);
+  // Atualiza nome (NULL pra limpar)
+  db.setContactName(phone, name);
+  try { require('./events').emitLeadsChanged(); } catch {}
+  res.json({ ok: true, phone });
+});
+
+// API — remove lead (apaga contato + histórico)
+router.delete('/api/leads/:phone', (req, res) => {
+  const phone = (req.params.phone || '').replace(/\D/g, '');
+  if (!phone) return res.status(400).json({ error: 'Phone inválido' });
+  db.clearConversation(phone);
+  try {
+    require('./events').emitLeadsChanged();
+    require('./events').emitConversationChanged(phone);
   } catch {}
   res.json({ ok: true });
 });
@@ -3635,6 +3675,12 @@ router.get('/', (req, res) => {
         <span class="nav-badge" id="nav-badge-appt">0</span>
       </div>
 
+      <div class="nav-item" data-nav="leads" onclick="switchTab('leads', this)" title="Leads cadastrados">
+        <span class="ic"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg></span>
+        <span class="lbl">Leads</span>
+        <span class="nav-badge" id="nav-badge-leads">0</span>
+      </div>
+
       <div class="nav-item" data-nav="alunos" onclick="switchTab('alunos', this)" title="Alunos">
         <span class="ic"><svg viewBox="0 0 24 24"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg></span>
         <span class="lbl">Alunos</span>
@@ -4008,6 +4054,26 @@ router.get('/', (req, res) => {
   </div>
   <div id="qr-mgmt-list" class="qr-mgmt-list"></div>
   <button class="qr-mgmt-add" onclick="qrMgmtAdd()">+ Adicionar atalho</button>
+</div>
+
+<div id="tab-leads" class="panel">
+  <div class="conv-header">
+    <h2>Leads cadastrados — contatos que estão no funil</h2>
+    <button class="refresh-btn" onclick="loadLeads()">↻ Atualizar</button>
+  </div>
+  <div class="student-help">
+    Cadastra aqui leads (telefone + nome) que vc quer adicionar manualmente — útil pra prospecção ativa, follow-up de indicações, etc.<br>
+    A IA também <strong>cadastra automaticamente</strong> via tag <code>[NOME:Fulano]</code> quando o lead se apresenta na conversa. Cadastros existentes podem ter o nome editado clicando.<br>
+    Formato do telefone: <code>5551995304633</code> (com DDI 55 + DDD + número, sem espaços nem traços).
+  </div>
+  <div class="student-form">
+    <input class="phone" id="lead-phone" placeholder="55519XXXXXXXX" maxlength="13">
+    <input class="name" id="lead-name" placeholder="Nome">
+    <button class="btn-add" onclick="addLead()">Adicionar</button>
+  </div>
+  <div id="leads-list">
+    <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
+  </div>
 </div>
 
 <div id="tab-alunos" class="panel">
@@ -6098,6 +6164,7 @@ router.get('/', (req, res) => {
     if (tab === 'prompt') loadPrompt();
     if (tab === 'agendamentos') loadAppointments();
     if (tab === 'alunos') loadStudents();
+    if (tab === 'leads') loadLeads();
     if (tab === 'users') loadUsers();
     if (tab === 'metrics') loadMetrics();
     if (tab === 'v2-monitor' && window.__v2mLoadOnTab) window.__v2mLoadOnTab();
@@ -6830,6 +6897,138 @@ router.get('/', (req, res) => {
     loadStudents();
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Leads — contatos não-alunos no funil (manual + auto-captura via IA)
+  // ─────────────────────────────────────────────────────────────────
+  async function loadLeads() {
+    try {
+      const res = await fetch('/admin/api/leads');
+      if (!res.ok) return;
+      const leads = await res.json();
+      const navBadge = document.getElementById('nav-badge-leads');
+      if (navBadge) navBadge.textContent = String(leads.length);
+      const list = document.getElementById('leads-list');
+      if (!list) return;
+      if (!leads.length) {
+        list.innerHTML =
+          '<div class="empty-state">' +
+            '<div class="es-icon">👥</div>' +
+            '<div class="es-title">Nenhum lead cadastrado ainda</div>' +
+            '<div class="es-sub">Adiciona pelo formulário acima ou aguarda alguém mandar mensagem — a IA cadastra automático quando o lead se apresenta.</div>' +
+          '</div>';
+        return;
+      }
+      list.innerHTML = leads.map(l => {
+        const name = l.name || '<span style="color:#555">sem nome</span>';
+        const lastSeen = l.lastContactAt ? fmtRelativeTime(l.lastContactAt) : '—';
+        const msgs = l.messageCount || 0;
+        return '<div class="student-row">' +
+                 '<span class="phone">' + formatBRPhone(l.phone) + '</span>' +
+                 '<span class="name" onclick="editLeadName(\\'' + l.phone + '\\', ' + JSON.stringify(l.name || '').replace(/"/g, '&quot;') + ')" title="Clica pra editar nome" style="cursor:pointer">' + name + '</span>' +
+                 '<span class="notes" style="font-size:11.5px;color:var(--text-muted)">' + msgs + ' msgs · há ' + lastSeen + '</span>' +
+                 '<button class="btn-msg-student" onclick="messageLead(\\'' + l.phone + '\\', ' + JSON.stringify(l.name || '').replace(/"/g, '&quot;') + ')" title="Abrir conversa">💬 Conversa</button>' +
+                 '<button class="btn-clear" onclick="removeLead(\\'' + l.phone + '\\')">Remover</button>' +
+               '</div>';
+      }).join('');
+    } catch (e) {
+      console.error('[leads] erro ao carregar:', e.message);
+    }
+  }
+
+  async function addLead() {
+    const phoneRaw = document.getElementById('lead-phone').value.trim();
+    const phone = phoneRaw.replace(/\\D/g, '');
+    const name = document.getElementById('lead-name').value.trim();
+    if (!phone || phone.length < 12) {
+      alert('Telefone inválido. Use o formato 5551995304633 (DDI+DDD+número).');
+      return;
+    }
+    try {
+      const res = await fetch('/admin/api/leads/' + phone, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert('Erro: ' + (data.error || 'falha ao cadastrar'));
+        return;
+      }
+      document.getElementById('lead-phone').value = '';
+      document.getElementById('lead-name').value = '';
+      loadLeads();
+    } catch (e) {
+      alert('Falha de conexão: ' + e.message);
+    }
+  }
+
+  async function editLeadName(phone, currentName) {
+    const newName = prompt('Editar nome do lead ' + formatBRPhone(phone) + ':', currentName || '');
+    if (newName === null) return; // cancelou
+    try {
+      const res = await fetch('/admin/api/leads/' + phone, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert('Erro: ' + (data.error || 'falha ao atualizar'));
+        return;
+      }
+      loadLeads();
+      // Se a conversa tá aberta, recarrega tb pra atualizar o header
+      if (selectedPhone === phone) loadConversations();
+    } catch (e) {
+      alert('Falha de conexão: ' + e.message);
+    }
+  }
+
+  async function removeLead(phone) {
+    if (!confirm('Remover lead ' + formatBRPhone(phone) + '? Histórico de conversa será apagado também.')) return;
+    try {
+      const res = await fetch('/admin/api/leads/' + phone, { method: 'DELETE' });
+      if (!res.ok) {
+        alert('Erro ao remover.');
+        return;
+      }
+      // Se conversa aberta era essa, limpa seleção
+      if (selectedPhone === phone) {
+        selectedPhone = null;
+        replyingTo = null;
+        noteModeActive = false;
+        const layout = document.getElementById('inbox-layout');
+        if (layout) layout.classList.remove('has-selected');
+        renderChat();
+        renderLeadDetail();
+      }
+      loadLeads();
+      loadConversations();
+    } catch (e) {
+      alert('Falha de conexão: ' + e.message);
+    }
+  }
+
+  async function messageLead(phone, name) {
+    try {
+      const r = await fetch('/admin/api/contacts/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, name: name || null }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert('Erro: ' + (data.error || 'falha ao abrir conversa'));
+        return;
+      }
+      switchTab('conversas');
+      await loadConversations({ force: true });
+      selectConv(data.phone);
+    } catch (err) {
+      alert('Falha de conexão: ' + err.message);
+    }
+  }
+
   const STATUS_LABEL = {
     pending:   '🟡 Pendente',
     confirmed: '🟢 Confirmado',
@@ -6992,6 +7191,18 @@ router.get('/', (req, res) => {
         const onAlunosTab = document.getElementById('tab-alunos')?.classList.contains('active');
         if (onAlunosTab) loadStudents();
       });
+      sseSource.addEventListener('leads.changed', () => {
+        // Sempre atualiza badge da nav. Recarrega lista só se aba aberta.
+        const onLeadsTab = document.getElementById('tab-leads')?.classList.contains('active');
+        if (onLeadsTab) loadLeads();
+        else {
+          // Atualiza pelo menos o badge sem renderizar lista inteira
+          fetch('/admin/api/leads').then(r => r.ok ? r.json() : []).then(leads => {
+            const navBadge = document.getElementById('nav-badge-leads');
+            if (navBadge) navBadge.textContent = String(leads.length);
+          }).catch(() => {});
+        }
+      });
       sseSource.addEventListener('alert', (e) => {
         try {
           const data = JSON.parse(e.data);
@@ -7100,6 +7311,11 @@ router.get('/', (req, res) => {
     startSSE();
     // Banner de conexão (visível enquanto WhatsApp tá fora)
     refreshConnectionBanner();
+    // Pre-fetch contagem de leads pra badge na nav (sem renderizar a lista)
+    fetch('/admin/api/leads').then(r => r.ok ? r.json() : []).then(leads => {
+      const navBadge = document.getElementById('nav-badge-leads');
+      if (navBadge) navBadge.textContent = String(leads.length);
+    }).catch(() => {});
   })();
 
   // ─────────────────────────────────────────────────────────────────────

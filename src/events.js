@@ -44,6 +44,10 @@ function emitStudentsChanged() {
   bus.emit('students.changed');
 }
 
+function emitLeadsChanged() {
+  bus.emit('leads.changed');
+}
+
 // Alerta operacional — toast no painel + browser notification.
 // severity: 'info' | 'warn' | 'error'
 function emitAlert({ severity = 'warn', title, message, code = null }) {
@@ -56,5 +60,6 @@ module.exports = {
   emitConnectionsChanged,
   emitAppointmentsChanged,
   emitStudentsChanged,
+  emitLeadsChanged,
   emitAlert,
 };
