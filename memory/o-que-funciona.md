@@ -4,6 +4,38 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-03 — Persona via placeholders no núcleo + assemble pure function
+
+**Contexto:** Sócio queria controlar tom (gírias, abertura, frases proibidas) sem expor o núcleo inteiro pra edição via painel (PR #53 já tinha tirado o textarea do núcleo justamente porque admin podia quebrar a estrutura). Solução: subset SEGURO de slots de TOM.
+
+**Padrão aplicado:**
+
+1. **Placeholders no núcleo** ([src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js)) — substituí listas hardcoded de gírias quentes/proibidas por `{{PERSONA_GIRIAS_QUENTES}}`, `{{PERSONA_GIRIAS_PROIBIDAS}}`, `{{PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK}}`. Adicionei linha "ABERTURA PADRÃO: `{{PERSONA_ABERTURA}}`" depois do "QUEM VOCÊ É".
+
+2. **Pure function `assembleNucleoV2(personaPartial)`** ([src/persona-v2.js](../src/persona-v2.js)) — `mergeWithDefaults` + 4 `String.replace` globais. Sem I/O. `DEFAULT_PERSONA` calibrado pra produzir núcleo IDÊNTICO ao pré-persona quando admin não customizou.
+
+3. **`getNucleoV2()` ramifica** — se admin setou `agent_config.nucleo_v2` (override TOTAL via API direta de emergência), usa esse texto bruto; senão `assembleNucleoV2(getPersona())`. `replyV2` e `simulateReplyV2` ambos chamam `buildSystemBlocks` → mesma função → mesma persona.
+
+4. **Validação defensiva no merge** — `asString` e `asStringList` truncam item > 200 chars, lista > 30 items, filtram strings vazias, fazem fallback pro default em valores não-string/array. Sem throw.
+
+5. **JSON inválido no DB cai pro default** — `getPersona()` faz `try/parse/catch`; se DB tem lixo, log warning + retorna default. Não derruba o agente.
+
+**Trade-offs aceitos:**
+- **Exemplo do anti-padrão no núcleo continua hardcoded** com "Opa beleza! Sou o Johnny da STRONIX 👋" mesmo se admin customizou a abertura. É demonstração ESTRUTURAL (mostra forma de tag + reação genuína), não comando. A INSTRUÇÃO oficial é a linha `ABERTURA PADRÃO:` que foi substituída — LLM segue essa.
+- **Custom `nucleo_v2` (override total) BYPASSA persona.** Se admin usar curl pra PUT /api/agent-config/nucleo_v2, persona é ignorada. É emergência só, não tem UI. Documentado.
+- **Persona não invalida prompt cache** — núcleo é cacheado por chamada (cache_control ephemeral), mudar persona = novo cache. Mudanças raras (admin edita uma vez), aceitável.
+
+**Smoke validado:**
+- 33/33 offline em [scripts/test-persona-assemble.js](../scripts/test-persona-assemble.js) (placeholders, conteúdo, custom, clamp, DB roundtrip, estabilidade, estrutura preservada)
+- 1 cenário E.4 ao vivo via Anthropic em [scripts/smoke-persona-e4.js](../scripts/smoke-persona-e4.js): bot abriu com "Opa beleza! Sou o Johnny da STRONIX 👋" (default persona aplicada), defletiu pedido de valor com binária, parser limpou todas as tags. Custo $0.02 USD.
+
+**Quando reusar este padrão:**
+- Qualquer dado de TOM/STYLE que admin queira editar sem mexer em estrutura
+- Permite separar "estrutura imutável" (no template) de "voz da marca" (na config) sem fork de código
+- O importante é DEFAULT calibrado pra preservar comportamento atual quando não customizado
+
+---
+
 ## 2026-05-03 — Optimistic UI: pendingMessages Map<phone, [...]> + render mesclado
 
 **Contexto:** Painel admin tinha delay perceptível entre clicar Send e msg aparecer. Sensação de lentidão em UI moderna.

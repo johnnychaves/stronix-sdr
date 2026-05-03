@@ -4,6 +4,49 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-03 — Persona da marca: edita TOM via slots, núcleo continua imutável
+
+**Decisão:** Adicionar layer "persona" entre o núcleo (template estrutural) e o prompt final pro Claude. Persona tem 4 slots seguros — `abertura`, `giriasQuentes`, `giriasProibidas`, `frasesProibidasExtra` — substituídos via placeholder no template ([src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js)) por `assembleNucleoV2(persona)` em [src/persona-v2.js](../src/persona-v2.js).
+
+**Contexto:** PR #52 expôs textarea do núcleo inteiro na aba Agente. PR #53 removeu porque admin podia quebrar a IA editando estrutura. Persona é o meio-termo: ajusta TOM (gírias, abertura, frases) sem expor regras estruturais.
+
+**Por quê não fazer "append no fim do núcleo":**
+- Cria duas listas conflitantes (núcleo tem gírias proibidas + admin adiciona mais embaixo)
+- LLM fica confuso sobre qual seguir
+- Substituição via placeholder mantém SOURCE OF TRUTH único
+
+**Por quê não fazer "tabela separada de tone settings":**
+- Persona está estruturalmente acoplada ao núcleo (gírias proibidas faz parte da seção ESTILO WHATSAPP)
+- Tabela separada exigiria contrato adicional (qual aplica primeiro? qual sobrescreve?)
+- Single key `agent_config.persona` (JSON) preserva o pattern já existente
+
+**Por quê não usar tool use estruturado pra "voz da marca":**
+- Persona é propriedade GLOBAL do agente (não é decisão por turno)
+- Tool use seria overkill — string replace é zero-latência
+
+**Por quê DEFAULT_PERSONA mantém comportamento idêntico ao núcleo pré-persona:**
+- Migração silenciosa — admin não precisa fazer nada, sistema continua igual
+- `assembleNucleoV2(DEFAULT_PERSONA) === núcleo_pre_persona_inteiro` (validado por testes 33/33)
+- Persona vira opt-in incremental conforme admin descobre o que ajustar
+
+**Limitação aceita: prompt cache invalida ao mudar persona**
+- Cache do Anthropic é por hash do bloco. Mudar persona = novo hash = miss no cache na 1ª chamada pós-edição.
+- Mudanças raras (admin edita uma vez, sistema usa por dias). Custo aceitável vs. complexidade de cachear persona separado.
+
+**Override total via API direta segue funcionando** (`agent_config.nucleo_v2`). Bypassa persona. UI não expõe — é só pra emergência via curl. `getNucleoV2()` em [src/agent-v2.js:32](../src/agent-v2.js:32) ramifica explicitamente: se override total existe, usa direto.
+
+**3 pontos pré-merge confirmados pelo sócio:**
+1. **Help text com exemplos negativos** — UI tem box amarelo com 2 exemplos concretos do que NÃO escrever em persona ("Sempre passa o valor" → regra estrutural; "Se lead pedir aula, oferece terça" → roteiro). Educa quem editar.
+2. **Smoke pré-merge** — [scripts/smoke-persona-e4.js](../scripts/smoke-persona-e4.js) chama Anthropic real com `assembleNucleoV2(DEFAULT_PERSONA)` rodando E.4. Pass com bot usando abertura default + parser limpo. $0.02 USD.
+3. **Paridade reply/simulate** — ambos chamam `buildSystemBlocks` → `getNucleoV2()` na mesma linha 199. Sem fork.
+
+**Próximos passos potenciais (não fazer agora):**
+- Diff visual entre persona atual vs default (mostra o que o admin mudou)
+- Snapshot de personas históricas (revert)
+- Multi-persona por horário/canal — só se aparecer pedido real
+
+---
+
 ## 2026-05-03 — AGENT_VERSION default vira v2 (v1 fica como fallback de emergência)
 
 **Decisão:** Trocar o default de `AGENT_VERSION_ENV` de `'v1'` pra `'v2'` em [src/webhook.js](src/webhook.js). Pular o caminho original de "smoke playground → 5% rollout → janela 50/14d → 100%". Manter v1 no código como fallback acionável via Monitor v2 (admin pausa instantâneo via DB flag) e via env var `AGENT_VERSION=v1`.

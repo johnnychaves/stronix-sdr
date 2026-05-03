@@ -4,6 +4,64 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-03 — Persona da marca: aba Agente edita voz/tom sem mexer em estrutura
+
+**Contexto:** PR #52 entregou aba Agente com edição do núcleo via textarea. PR #53 removeu o textarea do núcleo porque admin podia quebrar a IA editando estrutura. Faltava um meio-termo: deixar o admin ajustar tom (gírias, abertura, frases) sem expor regras estruturais. Sócio aprovou: "controle de tom antes do lançamento — pequenas coisas que só eu sei se soam Stronix".
+
+**Implementação:**
+
+**Placeholders no núcleo** ([src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js)):
+- Adicionada linha "ABERTURA PADRÃO (use literal na PRIMEIRA mensagem...): `{{PERSONA_ABERTURA}}`" logo após "QUEM VOCÊ É"
+- Lista de gírias proibidas substituída por `{{PERSONA_GIRIAS_PROIBIDAS}}` (mantém wording "PROIBIDO: ...")
+- Lista de gírias quentes substituída por `{{PERSONA_GIRIAS_QUENTES}}` (mantém wording "Substitutos quentes: ...")
+- Marker `{{PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK}}` opcional (vazio se admin não preencheu lista extra)
+
+**Módulo persona** ([src/persona-v2.js](../src/persona-v2.js) — novo):
+- `DEFAULT_PERSONA` (frozen) com mesma abertura + gírias do núcleo pré-persona — assembleNucleoV2(default) produz string IDÊNTICA ao núcleo de antes
+- `assembleNucleoV2(personaPartial)` — pure function, faz merge + 4 string.replace globais
+- `mergeWithDefaults` clamp defensivo: item>200 chars trunca, lista>30 items corta, valor não-string/array cai pro default
+- `getPersona()` lê `agent_config.persona` (JSON), com try/catch — JSON inválido → default + log
+- `setPersona/resetPersona/isPersonaCustom` — wrappers pro DB
+- LIMITS exposto pra UI mostrar maxLength
+
+**Wire em [src/agent-v2.js](../src/agent-v2.js):**
+- `getNucleoV2()` agora ramifica: se override total (`agent_config.nucleo_v2`) existe, usa direto (compat emergência); senão `assembleNucleoV2(getPersona())`
+- Removido import dead code de `NUCLEO_V2_DEFAULT` (persona-v2 já carrega o template)
+- **Paridade confirmada:** ambos `replyV2:376` e `simulateReplyV2:509` chamam `buildSystemBlocks()` → `getNucleoV2()` na linha 199. Sem fork.
+
+**Endpoints REST** ([src/admin.js](../src/admin.js:667-720)):
+- GET `/api/agent-config` retorna `persona: { current, default, isCustom, limits }` junto com nucleo+timing
+- PUT `/api/agent-config/persona` aceita `{ value: { abertura, giriasQuentes, giriasProibidas, frasesProibidasExtra } }`. Valida shape (objeto não-array). `setPersona` faz normalize + serialize → DB
+- DELETE `/api/agent-config/persona` apaga override (volta pro default)
+
+**UI aba Agente** ([src/admin.js](../src/admin.js)):
+- Section "🎭 Voz e tom da marca" com badge `(Default)`/`(Customizado)` no header
+- 4 inputs: abertura (text, maxlength=200), 3 textareas (gírias quentes / gírias proibidas / frases proibidas extras), todas linha-por-linha
+- Help text top: "Aqui ajusta como a IA fala: gírias, abertura, frases que tu não quer ver. Mexer aqui é seguro, não muda a estrutura nem as regras de venda. Mudança aplica na próxima resposta."
+- **Box amarelo "⚠️ O que NÃO escrever aqui"** com 2 exemplos concretos (pedido específico do sócio):
+  - ❌ `"Sempre passa o valor do plano logo no início"` → é regra estrutural, vai em Módulos do prompt
+  - ❌ `"Se o lead pedir aula, oferece terça às 9h"` → é roteiro, fica no núcleo ou módulo `fluxo_aula_experimental`
+- Auto-save debounce 800ms, status inline ("✏️ Editando..." → "✓ Salvo")
+- Botão "↺ Restaurar default" com confirm
+
+**Smoke validado:**
+- **33/33 offline** em [scripts/test-persona-assemble.js](../scripts/test-persona-assemble.js): placeholders, conteúdo default preservado, custom substitui, clamp/validação, DB roundtrip com mock, estabilidade (sem mutação, idempotente), estrutura do núcleo mantida (TOPO BLINDADO, MÁQUINA DE ESTADO, REGRAS DE OURO, REGRA DOS VALORES, ANTI-PADRÃO, BLACKLIST, CHECAGEM FINAL)
+- **Smoke E.4 com Anthropic real** ([scripts/smoke-persona-e4.js](../scripts/smoke-persona-e4.js)) — pedido firme do sócio antes de mergear:
+  - Núcleo assembled = 12773 chars sem placeholders
+  - Bot abriu com "Opa beleza! Sou o Johnny da STRONIX 👋" (default persona aplicada com sucesso)
+  - Defletiu pedido de valor com binária ("Já chegamos lá. Mas antes me conta: tu tá treinando ou parado?")
+  - Parser limpou tags ESTADO/MODULO/AGENDAMENTO — nenhum literal vazou no texto
+  - Custo: $0.02 USD (~R$0.11)
+
+**3 pontos do sócio respondidos:**
+1. ✅ Help text com exemplos do que NÃO escrever — box amarelo com 2 exemplos concretos
+2. ✅ Smoke pré-merge com persona default — E.4 PASS com Anthropic real
+3. ✅ Paridade simulateReplyV2 ↔ replyV2 — confirmado no código (linhas 376 e 509 ambas via `buildSystemBlocks`/`getNucleoV2`)
+
+**Política de flag mantida:** AGENT_VERSION=v2 já é default desde 2026-05-03. Persona é independente, default = sem mudança de comportamento.
+
+---
+
 ## 2026-05-03 — Notas internas v2: backend sincronizado + bubble inline + toggle no composer
 
 **Contexto:** Polish PR de manhã (#39) entregou notas em localStorage no sidebar direito. Sócio pediu redesenho: tirar do canto, virar bubble inline na conversa, toggle no composer ao lado do emoji, **e todas as consultoras veem as notas de todas**. Esse último item exige backend.
