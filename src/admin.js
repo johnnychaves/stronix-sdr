@@ -1731,6 +1731,257 @@ router.get('/api/v2/export', auth.requireAdmin, (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// PR #66 — MONITOR UNIFICADO V2 × V3 (admin only)
+// Reusa contrato do PR37, adiciona ?version=v2|v3 e endpoints novos.
+// ─────────────────────────────────────────────────────────────────────
+
+router.get('/api/monitor/metrics', auth.requireAdmin, (req, res) => {
+  const period = req.query.period || '7d';
+  const version = req.query.version || 'v2';
+  if (!db.V2_PERIODS[period]) return res.status(400).json({ error: 'period inválido' });
+  if (!['v2', 'v3'].includes(version)) return res.status(400).json({ error: 'version inválida (v2|v3)' });
+  try {
+    res.json(db.getMetrics(period, version));
+  } catch (err) {
+    console.error('[monitor/metrics] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/monitor/alerts', auth.requireAdmin, (req, res) => {
+  const version = req.query.version || 'v2';
+  if (!['v2', 'v3'].includes(version)) return res.status(400).json({ error: 'version inválida' });
+  try {
+    const alerts = db.getAlerts(version);
+    res.json({ alerts, count: alerts.length, version });
+  } catch (err) {
+    console.error('[monitor/alerts] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/monitor/conversations', auth.requireAdmin, (req, res) => {
+  const { status, version, limit } = req.query;
+  const validStatus = ['em_andamento', 'agendou', 'handoff', 'perdeu'];
+  const filter = (status && validStatus.includes(status)) ? status : null;
+  const v = (version && ['v2', 'v3'].includes(version)) ? version : null;
+  const lim = Math.min(parseInt(limit, 10) || 200, 500);
+  try {
+    const rows = db.getConversations({ status: filter, version: v, limit: lim });
+    res.json({ conversations: rows, total: rows.length, version: v });
+  } catch (err) {
+    console.error('[monitor/conversations] erro:', err.message);
+    res.status(500).json({ error: 'falha ao listar conversas' });
+  }
+});
+
+router.get('/api/monitor/cost', auth.requireAdmin, (req, res) => {
+  const period = req.query.period || '7d';
+  const version = req.query.version || 'v2';
+  if (!db.V2_PERIODS[period]) return res.status(400).json({ error: 'period inválido' });
+  if (!['v2', 'v3'].includes(version)) return res.status(400).json({ error: 'version inválida' });
+  try {
+    res.json(db.getCostMetrics(period, version));
+  } catch (err) {
+    console.error('[monitor/cost] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/monitor/rollout', auth.requireAdmin, (req, res) => {
+  const webhook = require('./webhook');
+  const pctRaw = db.getRuntimeFlag('v3_rollout_pct');
+  const pct = pctRaw === null || pctRaw === '' ? 100 : Math.max(0, Math.min(100, parseInt(pctRaw, 10) || 0));
+  // Distribuição efetiva nas últimas 24h: quantos phones rodaram cada versão.
+  const since24h = Date.now() - 24 * 60 * 60 * 1000;
+  const phoneVersions = db.prepare ? null : null; // safety check
+  const dist = (() => {
+    try {
+      const v2Rows = db.listV2Events ? null : null;
+      const turnsV2 = db.countV2Events(db.V2_EVENT_TYPES.TURN_OK, 24 * 60 * 60 * 1000);
+      const turnsV3 = db.countV2Events(db.V2_EVENT_TYPES.TURN_OK_V3, 24 * 60 * 60 * 1000);
+      const total = turnsV2 + turnsV3;
+      return {
+        last_24h: {
+          turns_v2: turnsV2,
+          turns_v3: turnsV3,
+          pct_v2: total > 0 ? (turnsV2 / total) * 100 : 0,
+          pct_v3: total > 0 ? (turnsV3 / total) * 100 : 0,
+        },
+      };
+    } catch { return null; }
+  })();
+  res.json({
+    env: webhook.AGENT_VERSION_ENV,
+    override: db.getRuntimeFlag('agent_version_override') || null,
+    rollout_pct: pct,
+    rollout_active: webhook.AGENT_VERSION_ENV === 'v3' && pct < 100 && pct > 0,
+    distribution: dist,
+    presets: [0, 5, 10, 25, 50, 100],
+  });
+});
+
+router.put('/api/monitor/rollout', auth.requireAdmin, (req, res) => {
+  const { pct, confirm } = req.body || {};
+  if (typeof pct !== 'number' || pct < 0 || pct > 100 || !Number.isFinite(pct)) {
+    return res.status(400).json({ error: 'pct deve ser número 0..100' });
+  }
+  // Apenas aumentos pedem confirm; reduções são instantâneas (rollback é seguro).
+  const current = parseInt(db.getRuntimeFlag('v3_rollout_pct') || '100', 10);
+  if (pct > current && confirm !== 'AUMENTAR_ROLLOUT_V3') {
+    return res.status(400).json({ error: "aumento de rollout exige body { confirm: 'AUMENTAR_ROLLOUT_V3' }" });
+  }
+  db.setRuntimeFlag('v3_rollout_pct', String(Math.round(pct)), req.user?.id);
+  db.logV2Event(db.V2_EVENT_TYPES.VERSION_CHANGE, null, null, {
+    action: 'rollout_pct_change',
+    from: current,
+    to: Math.round(pct),
+    user: req.user?.id,
+    user_name: req.user?.display_name,
+  });
+  console.warn(`[monitor/rollout] v3_rollout_pct ${current}% → ${Math.round(pct)}% por ${req.user?.display_name || req.user?.id}`);
+  try { require('./events').bus.emit('v2.metrics.changed', { type: 'rollout_change' }); } catch {}
+  res.json({ ok: true, pct: Math.round(pct), previous: current });
+});
+
+// Pause generalizado: aceita target v1|v2|v3|null (limpa override).
+router.post('/api/monitor/pause', auth.requireAdmin, (req, res) => {
+  const { target, confirm } = req.body || {};
+  const validTargets = ['v1', 'v2', 'v3', null, ''];
+  if (!validTargets.includes(target)) {
+    return res.status(400).json({ error: "target deve ser 'v1', 'v2', 'v3', null (limpar)" });
+  }
+  // Pause pra v3 não faz sentido (pause = escapar de v3); aceito mas avisa.
+  if (target === 'v3') {
+    console.warn(`[monitor/pause] target=v3 (forçar v3 sem rollout). Não é "pausa" semanticamente.`);
+  }
+  const expectedConfirm = target ? `PAUSAR_PARA_${target.toUpperCase()}` : 'LIMPAR_OVERRIDE';
+  if (confirm !== expectedConfirm) {
+    return res.status(400).json({ error: `confirm deve ser '${expectedConfirm}'` });
+  }
+  db.setRuntimeFlag('agent_version_override', target || '', req.user?.id);
+  // Reduz rollout pra 0 quando força v2 — senão override+rollout brigam.
+  if (target === 'v2') {
+    db.setRuntimeFlag('v3_rollout_pct', '0', req.user?.id);
+  }
+  db.logV2Event(db.V2_EVENT_TYPES.VERSION_CHANGE, null, null, {
+    action: target ? 'pause' : 'resume',
+    target: target || null,
+    user: req.user?.id,
+    user_name: req.user?.display_name,
+  });
+  console.warn(`[monitor/pause] override=${target || '(cleared)'} por ${req.user?.display_name || req.user?.id}`);
+  try { require('./events').bus.emit('v2.metrics.changed', { type: 'version_change' }); } catch {}
+  const webhook = require('./webhook');
+  res.json({ ok: true, override: target || null, env: webhook.AGENT_VERSION_ENV });
+});
+
+// CSV export com filtro de versão.
+router.get('/api/monitor/export', auth.requireAdmin, (req, res) => {
+  const period = req.query.period || '7d';
+  const version = req.query.version || null;
+  if (!db.V2_PERIODS[period]) return res.status(400).json({ error: 'period inválido' });
+  try {
+    const since = Date.now() - db.V2_PERIODS[period];
+    const conversations = db.getConversations({ limit: 10000, version: version || null })
+      .filter(c => c.last_contact_at >= since);
+    const escapeCsv = (v) => {
+      if (v === null || v === undefined) return '';
+      const s = String(v).replace(/\r?\n/g, ' ').replace(/"/g, '""');
+      return /[",;]/.test(s) ? `"${s}"` : s;
+    };
+    const headers = [
+      'phone', 'name', 'version', 'status', 'estagio_atual', 'objecao_ativa',
+      'insistencias_valor', 'modalidade_recomendada', 'disponibilidade',
+      'total_msgs_lead', 'total_msgs_johnny', 'review_rating', 'review_comment',
+      'data_agendamento', 'hora_agendamento', 'last_contact_at', 'last_message',
+    ];
+    let csv = headers.join(';') + '\n';
+    for (const c of conversations) {
+      csv += [
+        c.phone, c.name, c._version || '', c._status, c.estagio_atual, c.objecao_ativa,
+        c.insistencias_valor, c.modalidade_recomendada, c.disponibilidade,
+        c.total_mensagens_lead, c.total_mensagens_johnny, c.review_rating, c.review_comment,
+        c.data_agendamento, c.hora_agendamento,
+        c.last_contact_at ? new Date(c.last_contact_at).toISOString() : '',
+        c.last_message,
+      ].map(escapeCsv).join(';') + '\n';
+    }
+    const filename = `monitor-${version || 'all'}-${period}-${Date.now()}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('[monitor/export] erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Notificação WhatsApp em alertas críticos (rate-limit por código)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Roda a cada 60s. Pra cada alerta crítico ativo:
+// - Se NUNCA notificou esse código → notifica imediatamente
+// - Se já notificou há ≥1h → notifica de novo
+// - Se notificou há <1h → silencia
+//
+// Estado em agent_config['monitor_alert_notifications'] = JSON
+// { [code+version]: { last_notified_at: ts, count: n } }
+
+const ALERT_NOTIFY_RATE_LIMIT_MS = 60 * 60 * 1000; // 1h por código
+
+async function dispatchAlertNotifications() {
+  const ownerPhone = process.env.OWNER_PHONE_NUMBER;
+  if (!ownerPhone) return;
+  let stateRaw, state = {};
+  try {
+    stateRaw = db.getAgentConfig('monitor_alert_notifications', null);
+    state = stateRaw ? JSON.parse(stateRaw) : {};
+  } catch { state = {}; }
+
+  const wa = require('./whatsapp');
+  const now = Date.now();
+  let dirty = false;
+  for (const version of ['v2', 'v3']) {
+    let alerts;
+    try { alerts = db.getAlerts(version); } catch { continue; }
+    const criticals = alerts.filter(a => a.level === 'critical');
+    for (const a of criticals) {
+      const key = `${a.code}__${version}`;
+      const prev = state[key];
+      const shouldNotify = !prev || (now - (prev.last_notified_at || 0)) >= ALERT_NOTIFY_RATE_LIMIT_MS;
+      if (!shouldNotify) continue;
+      const isFirst = !prev;
+      const msg =
+        `⚠️ *STRONIX SDR — alerta ${version}*\n\n` +
+        `${isFirst ? '🆕 Primeira ocorrência\n\n' : ''}` +
+        `${a.message}\n\n` +
+        `Código: \`${a.code}\`\n` +
+        `Painel → Monitor → ${version === 'v3' ? 'v3' : 'v2'}\n` +
+        `https://stronix-sdr-production.up.railway.app/admin`;
+      try {
+        await wa.sendMessage(ownerPhone, msg);
+        state[key] = { last_notified_at: now, count: (prev?.count || 0) + 1 };
+        dirty = true;
+      } catch (err) {
+        console.error(`[monitor/notify] falhou ao notificar ${a.code}:`, err.message);
+      }
+    }
+  }
+  if (dirty) {
+    try { db.setAgentConfig('monitor_alert_notifications', JSON.stringify(state)); } catch {}
+  }
+}
+
+// Inicia loop só se não estamos em teste/standalone (env DB_PATH em /tmp = teste).
+if (!process.env.DB_PATH || !process.env.DB_PATH.includes('test-')) {
+  setInterval(() => {
+    dispatchAlertNotifications().catch(err => console.error('[monitor/notify] tick falhou:', err.message));
+  }, 60 * 1000);
+}
+
 // Painel HTML
 router.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -3608,6 +3859,89 @@ router.get('/', (req, res) => {
     .v2m-pause-btn:disabled { background: #444; cursor: not-allowed; }
     .v2m-resume-btn { background: var(--brand); color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; }
 
+    /* PR #66 — Monitor unificado v2 × v3 (segmented, rollout, custo, comparação) */
+    .v2m-version-toggle {
+      display: inline-flex; gap: 0;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 2px;
+    }
+    .v2m-version-toggle button {
+      background: transparent; color: var(--text-muted); border: none;
+      padding: 6px 14px; font: 600 12.5px var(--font-sans);
+      border-radius: 6px; cursor: pointer;
+      transition: all var(--t-fast);
+    }
+    .v2m-version-toggle button:hover { color: var(--text-primary); }
+    .v2m-version-toggle button.active {
+      background: var(--brand); color: white;
+    }
+
+    .v2m-rollout {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px;
+    }
+    .v2m-rollout h4 { margin: 0 0 10px 0; font-size: 14px; }
+    .v2m-rollout-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .v2m-rollout-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+    .v2m-rollout-preset {
+      background: var(--bg-2); color: var(--text-secondary);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 4px 10px; font: 500 12px var(--font-mono); cursor: pointer;
+      transition: all var(--t-fast);
+    }
+    .v2m-rollout-preset:hover { background: var(--bg-3); color: var(--text-primary); }
+    .v2m-rollout-preset.active { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-light); }
+    .v2m-rollout-input {
+      background: var(--bg-1); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 5px 10px; font: 500 12.5px var(--font-mono);
+      width: 80px;
+    }
+    .v2m-rollout-dist {
+      font-size: 11.5px; color: var(--text-muted);
+      font-family: var(--font-mono); margin-top: 8px;
+    }
+
+    .v2m-cost-row {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    }
+    .v2m-cost-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px;
+    }
+    .v2m-cost-card h5 { margin: 0 0 8px 0; font-size: 12.5px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .v2m-cost-card .total { font: 700 22px var(--font-sans); color: var(--text-primary); }
+    .v2m-cost-card .breakdown { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono); }
+    .v2m-cost-card .coverage { font-size: 10.5px; color: var(--text-muted); margin-top: 6px; font-style: italic; }
+
+    .v2m-comparison-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .v2m-comparison-col {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px;
+    }
+    .v2m-comparison-col h4 {
+      margin: 0 0 10px 0; font-size: 14px;
+      padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .v2m-comparison-row {
+      display: grid; grid-template-columns: 1fr auto; gap: 8px;
+      align-items: baseline; padding: 6px 0;
+      font-size: 13px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .v2m-comparison-row:last-child { border-bottom: none; }
+    .v2m-comparison-row .label { color: var(--text-secondary); }
+    .v2m-comparison-row .val { font: 600 13px var(--font-mono); color: var(--text-primary); }
+    .v2m-delta {
+      display: inline-block; margin-left: 6px; font-size: 11px;
+      padding: 1px 6px; border-radius: 4px; font-family: var(--font-mono);
+    }
+    /* Setas QUALITATIVAS: green=melhor, red=pior — direção depende da métrica */
+    .v2m-delta.good { background: rgba(76, 175, 80, .14); color: #6fcf97; }
+    .v2m-delta.bad  { background: rgba(255, 100, 100, .14); color: #ff7878; }
+    .v2m-delta.neutral { background: rgba(255,255,255,.06); color: var(--text-muted); }
+
     .v2m-tour-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 9000; display: flex; align-items: center; justify-content: center; }
     .v2m-tour-card { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px; padding: 22px; max-width: 460px; box-shadow: 0 16px 48px rgba(0,0,0,0.5); }
     .v2m-tour-card h3 { margin: 0 0 8px 0; }
@@ -4072,9 +4406,9 @@ router.get('/', (req, res) => {
         <span class="lbl">Métricas</span>
       </div>
 
-      <div class="nav-item admin-only" data-nav="v2-monitor" onclick="switchTab('v2-monitor', this)" title="Monitoramento v2" style="display:none">
+      <div class="nav-item admin-only" data-nav="v2-monitor" onclick="switchTab('v2-monitor', this)" title="Monitor v2 × v3 + rollout + custo" style="display:none">
         <span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
-        <span class="lbl">Monitor v2</span>
+        <span class="lbl">Monitor</span>
         <span class="nav-badge" id="nav-badge-v2-alerts" style="background:var(--danger);display:none">0</span>
       </div>
 
@@ -4469,11 +4803,17 @@ router.get('/', (req, res) => {
   <div id="metrics-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px"></div>
 </div>
 
-<!-- ───────── PR #37 — Monitor v2 (admin only) ───────── -->
+<!-- ───────── PR #37 + PR #66 — Monitor unificado v2 × v3 (admin only) ───────── -->
 <div id="tab-v2-monitor" class="panel">
   <div class="conv-header">
-    <h2>Monitor v2 — janela de validação</h2>
-    <div style="display:flex;gap:8px;align-items:center">
+    <h2>Monitor</h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <!-- PR #66 — segmented de versão. Estado em localStorage. -->
+      <div class="v2m-version-toggle" id="v2m-version-toggle" role="tablist">
+        <button data-version="v2" onclick="v2mSetVersion('v2')" class="active" title="Métricas e conversas v2">v2</button>
+        <button data-version="v3" onclick="v2mSetVersion('v3')" title="Métricas e conversas v3">v3</button>
+        <button data-version="compare" onclick="v2mSetVersion('compare')" title="Comparação v2 × v3 lado a lado">v2 × v3</button>
+      </div>
       <select id="v2m-period" onchange="v2mLoadAll()" title="Período">
         <option value="today">Hoje</option>
         <option value="7d" selected>7 dias</option>
@@ -4484,10 +4824,19 @@ router.get('/', (req, res) => {
     </div>
   </div>
 
+  <!-- PR #66 — Card de rollout v3 (só visível quando env=v3) -->
+  <div id="v2m-rollout" class="v2m-rollout" style="display:none;margin-top:12px"></div>
+
+  <!-- PR #66 — Cards de custo (sempre visível, lado a lado v2 × v3) -->
+  <div id="v2m-cost" class="v2m-cost-row" style="margin-top:12px"></div>
+
   <!-- Banner alertas (se houver) -->
   <div id="v2m-alerts" class="v2m-alerts" style="margin-top:12px"></div>
 
-  <div class="v2m" style="margin-top:14px">
+  <!-- PR #66 — Modo comparação lado-a-lado (oculto por default) -->
+  <div id="v2m-comparison" class="v2m-comparison-grid" style="display:none;margin-top:14px"></div>
+
+  <div class="v2m" id="v2m-single" style="margin-top:14px">
     <!-- Coluna principal: métricas + lista -->
     <div class="v2m-main">
 
@@ -4522,10 +4871,15 @@ router.get('/', (req, res) => {
 
       <!-- Controles -->
       <div class="v2m-controls" id="v2m-controls">
-        <div style="font-size:12px;color:var(--text-muted)">Versão atual: <strong id="v2m-version-badge">—</strong></div>
+        <div style="font-size:12px;color:var(--text-muted)">
+          Versão efetiva: <strong id="v2m-version-badge">—</strong>
+          <span id="v2m-override-badge" style="display:none;margin-left:8px;color:var(--warn,#f9c869)">(override ativo)</span>
+        </div>
         <div class="ctl-row">
-          <button class="v2m-pause-btn" id="v2m-pause-btn" onclick="v2mPauseV2()">⏸ Pausar v2 imediatamente</button>
-          <button class="v2m-resume-btn" id="v2m-resume-btn" onclick="v2mResumeV2()" style="display:none">▶ Retomar (volta pra env)</button>
+          <!-- PR #66 — pause generalizado: aceita v1, v2, v3 -->
+          <button class="v2m-pause-btn" id="v2m-pause-v2-btn" onclick="v2mPauseTo('v2')">⏸ Forçar v2</button>
+          <button class="v2m-pause-btn" id="v2m-pause-v1-btn" onclick="v2mPauseTo('v1')" title="Volta pro prompt monolítico v1">⏸ Forçar v1 (emergência)</button>
+          <button class="v2m-resume-btn" id="v2m-resume-btn" onclick="v2mResumeV2()" style="display:none">▶ Limpar override (volta pra env)</button>
           <a class="v2m-resume-btn" id="v2m-export-btn" href="#" onclick="v2mExportCsv(event)">⬇ Exportar CSV do período</a>
         </div>
       </div>
@@ -8212,6 +8566,7 @@ router.get('/', (req, res) => {
   // PR #37 — Monitor v2 (admin tooling)
   // ─────────────────────────────────────────────────────────────────────
 
+  // PR #66: state ganha 'version' (v2|v3|compare). Persiste em localStorage.
   let v2mState = {
     period: '7d',
     statusFilter: '',
@@ -8219,16 +8574,65 @@ router.get('/', (req, res) => {
     conversations: [],
     pollHandle: null,
     commentDebounce: null,
+    version: localStorage.getItem('v2m_version') || 'v2',
   };
+
+  // Decide qual versão usar nos fetches single (v2 ou v3). Em modo compare
+  // chamamos paralelo nas duas, então essa função não aplica.
+  function v2mActiveVersion() {
+    return v2mState.version === 'compare' ? 'v3' : v2mState.version;
+  }
 
   async function v2mLoadAll() {
     v2mState.period = document.getElementById('v2m-period')?.value || '7d';
-    await Promise.all([v2mLoadAlerts(), v2mLoadMetrics(), v2mLoadConversations(), v2mLoadVersion()]);
+    v2mApplyVersionUI();
+    if (v2mState.version === 'compare') {
+      await Promise.all([
+        v2mLoadAlerts('v3'), // alertas seguem versão "ativa" no compare (v3 é o que está em validação)
+        v2mRenderComparison(),
+        v2mLoadCost(),
+        v2mLoadRollout(),
+      ]);
+    } else {
+      await Promise.all([
+        v2mLoadAlerts(v2mState.version),
+        v2mLoadMetrics(v2mState.version),
+        v2mLoadConversations(v2mState.version),
+        v2mLoadCost(),
+        v2mLoadRollout(),
+      ]);
+    }
   }
 
-  async function v2mLoadAlerts() {
+  // Toggle versão segmented. Persiste, atualiza UI, recarrega tudo.
+  function v2mSetVersion(version) {
+    if (!['v2', 'v3', 'compare'].includes(version)) return;
+    v2mState.version = version;
+    localStorage.setItem('v2m_version', version);
+    v2mApplyVersionUI();
+    v2mLoadAll();
+  }
+
+  // Liga/desliga elementos baseado no modo (single vs compare).
+  function v2mApplyVersionUI() {
+    document.querySelectorAll('#v2m-version-toggle button').forEach(b => {
+      b.classList.toggle('active', b.dataset.version === v2mState.version);
+    });
+    const single = document.getElementById('v2m-single');
+    const compare = document.getElementById('v2m-comparison');
+    if (v2mState.version === 'compare') {
+      single.style.display = 'none';
+      compare.style.display = '';
+    } else {
+      single.style.display = '';
+      compare.style.display = 'none';
+    }
+  }
+
+  async function v2mLoadAlerts(version) {
+    version = version || v2mActiveVersion();
     try {
-      const r = await fetch('/admin/api/v2/alerts');
+      const r = await fetch('/admin/api/monitor/alerts?version=' + encodeURIComponent(version));
       if (!r.ok) return;
       const data = await r.json();
       const c = document.getElementById('v2m-alerts');
@@ -8254,9 +8658,10 @@ router.get('/', (req, res) => {
     } catch (e) { console.error('[v2m] alerts:', e.message); }
   }
 
-  async function v2mLoadMetrics() {
+  async function v2mLoadMetrics(version) {
+    version = version || v2mActiveVersion();
     try {
-      const r = await fetch('/admin/api/v2/metrics?period=' + encodeURIComponent(v2mState.period));
+      const r = await fetch('/admin/api/monitor/metrics?version=' + encodeURIComponent(version) + '&period=' + encodeURIComponent(v2mState.period));
       if (!r.ok) return;
       const m = await r.json();
 
@@ -8264,19 +8669,32 @@ router.get('/', (req, res) => {
         ? (m.tempo_medio_ate_agendou_ms / (1000 * 60 * 60)).toFixed(1) + 'h'
         : '—';
 
+      // Cards comuns às duas versões
       const cards = [
-        { lbl: 'Total leads v2', val: m.total_leads, sub: m.period },
-        { lbl: '% agendou', val: m.pct_agendou.toFixed(1) + '%', sub: m.funil['agendamento_confirmado'] || 0 + ' conversas' },
-        { lbl: '% handoff', val: m.pct_handoff.toFixed(1) + '%', sub: m.funil['handoff_humano'] || 0 + ' conversas' },
+        { lbl: 'Total leads ' + version, val: m.total_leads, sub: m.period },
+        { lbl: '% agendou', val: m.pct_agendou.toFixed(1) + '%', sub: (m.funil['agendamento_confirmado'] || 0) + ' conversas' },
+        { lbl: '% handoff', val: m.pct_handoff.toFixed(1) + '%', sub: (m.funil['handoff_humano'] || 0) + ' conversas' },
         { lbl: '% perdeu (>24h)', val: m.pct_perdeu.toFixed(1) + '%' },
         { lbl: 'Tempo médio até agendar', val: tempoH },
-        { lbl: 'Total turnos', val: m.total_turns, sub: 'tag_ok + tag_esquecida' },
-        { lbl: '% tag esquecida', val: m.pct_tag_esquecida.toFixed(1) + '%', sub: 'limite alerta: 30%', alert: m.pct_tag_esquecida > 30 },
+        { lbl: 'Total turnos', val: m.total_turns, sub: version === 'v3' ? 'turn_ok_v3 + tool_call_ausente' : 'tag_ok + tag_esquecida' },
+        { lbl: version === 'v3' ? '% tool_call_ausente' : '% tag esquecida', val: (m.pct_tag_missing || m.pct_tag_esquecida || 0).toFixed(1) + '%', sub: version === 'v3' ? 'esperado: 0%' : 'limite alerta: 30%', alert: (m.pct_tag_missing || m.pct_tag_esquecida || 0) > (version === 'v3' ? 5 : 30) },
         { lbl: '% router empty', val: m.pct_router_empty.toFixed(1) + '%', sub: 'cobertura insuficiente' },
         { lbl: 'Crashes', val: m.crashes, alert: m.crashes > 0 },
-        { lbl: 'Preço inventado', val: m.preco_inventado, alert: m.preco_inventado > 0 },
-        { lbl: 'Valor antecipado', val: m.valor_antecipado, alert: m.valor_antecipado > 0 },
       ];
+
+      if (version === 'v3') {
+        // PR #66 — cards v3-specific
+        cards.push(
+          { lbl: '% PRECO_FORA_REFERENCIA_V3', val: (m.pct_preco_fora_referencia || 0).toFixed(1) + '%', sub: 'esperado: 0%', alert: (m.preco_fora_referencia || 0) > 0 },
+          { lbl: '% RETRY_V3 acionado', val: (m.pct_retry || 0).toFixed(1) + '%', sub: m.retry_count + ' retries' },
+          { lbl: 'TOOL_CALL_MULTIPLE', val: m.tool_call_multiple || 0, sub: 'canário Anthropic', alert: (m.tool_call_multiple || 0) > 0 },
+        );
+      } else {
+        cards.push(
+          { lbl: 'Preço inventado', val: m.preco_inventado, alert: m.preco_inventado > 0 },
+          { lbl: 'Valor antecipado', val: m.valor_antecipado, alert: m.valor_antecipado > 0 },
+        );
+      }
 
       document.getElementById('v2m-metrics').innerHTML = cards.map(c => \`
         <div class="v2m-card\${c.alert ? ' alert-bg' : ''}">
@@ -8305,9 +8723,10 @@ router.get('/', (req, res) => {
     } catch (e) { console.error('[v2m] metrics:', e.message); }
   }
 
-  async function v2mLoadConversations() {
+  async function v2mLoadConversations(version) {
+    version = version || v2mActiveVersion();
     try {
-      const r = await fetch('/admin/api/v2/conversations?limit=300');
+      const r = await fetch('/admin/api/monitor/conversations?version=' + encodeURIComponent(version) + '&limit=300');
       if (!r.ok) {
         document.getElementById('v2m-list').innerHTML = '<div class="empty" style="padding:30px;text-align:center;color:var(--text-muted)">Erro ao carregar.</div>';
         return;
@@ -8469,57 +8888,206 @@ router.get('/', (req, res) => {
     } catch (e) { alert('Erro: ' + e.message); }
   }
 
-  async function v2mLoadVersion() {
+  // PR #66 — Rollout v3 (hash determinístico phone-locked) + custo + comparação
+
+  async function v2mLoadRollout() {
     try {
-      const r = await fetch('/admin/api/v2/version');
+      const r = await fetch('/admin/api/monitor/rollout');
       if (!r.ok) return;
       const v = await r.json();
+
+      // Badge no rodapé (versão efetiva mostra "qual o env baseline + override").
       const badge = document.getElementById('v2m-version-badge');
       if (badge) {
-        badge.textContent = v.current + (v.override ? ' (override)' : ' (env)');
-        badge.style.color = v.current === 'v2' ? 'var(--brand)' : 'var(--text-muted)';
+        const effective = v.override || (v.rollout_active ? 'v2/v3 (rollout ' + v.rollout_pct + '%)' : v.env);
+        badge.textContent = effective;
+        badge.style.color = 'var(--brand)';
       }
-      const pauseBtn = document.getElementById('v2m-pause-btn');
+      const overrideBadge = document.getElementById('v2m-override-badge');
+      if (overrideBadge) overrideBadge.style.display = v.override ? '' : 'none';
       const resumeBtn = document.getElementById('v2m-resume-btn');
-      if (pauseBtn && resumeBtn) {
-        pauseBtn.style.display = (v.current === 'v2') ? '' : 'none';
-        resumeBtn.style.display = v.override ? '' : 'none';
+      if (resumeBtn) resumeBtn.style.display = v.override ? '' : 'none';
+
+      // Card de rollout: só aparece quando env=v3 (única situação onde % importa).
+      const rolloutEl = document.getElementById('v2m-rollout');
+      if (!rolloutEl) return;
+      if (v.env !== 'v3') {
+        rolloutEl.style.display = 'none';
+        rolloutEl.innerHTML = '';
+        return;
       }
-    } catch (e) { console.error('[v2m] version:', e.message); }
+      rolloutEl.style.display = '';
+      const presets = (v.presets || [0, 5, 10, 25, 50, 100]).map(p => \`
+        <button class="v2m-rollout-preset \${p === v.rollout_pct ? 'active' : ''}" onclick="v2mUpdateRollout(\${p})">\${p}%</button>
+      \`).join('');
+      const distV2 = (v.distribution?.last_24h?.pct_v2 || 0).toFixed(1);
+      const distV3 = (v.distribution?.last_24h?.pct_v3 || 0).toFixed(1);
+      const turnsV2 = v.distribution?.last_24h?.turns_v2 || 0;
+      const turnsV3 = v.distribution?.last_24h?.turns_v3 || 0;
+      rolloutEl.innerHTML = \`
+        <h4>🚦 Rollout v3 — phone-locked via hash determinístico</h4>
+        <div class="v2m-rollout-row">
+          <strong style="font-size:13px;color:var(--text-secondary)">% pra v3:</strong>
+          <div class="v2m-rollout-presets">\${presets}</div>
+          <input type="number" min="0" max="100" step="1" value="\${v.rollout_pct}" class="v2m-rollout-input" id="v2m-rollout-input">
+          <button class="btn-add" onclick="v2mUpdateRolloutCustom()">Aplicar</button>
+        </div>
+        <div class="v2m-rollout-dist">
+          Distribuição efetiva (últimas 24h): \${turnsV2} turnos v2 (\${distV2}%) · \${turnsV3} turnos v3 (\${distV3}%)
+        </div>
+      \`;
+    } catch (e) { console.error('[v2m] rollout:', e.message); }
   }
 
-  async function v2mPauseV2() {
-    if (!confirm('Pausar v2 imediatamente? Próximas mensagens caem em v1.')) return;
+  async function v2mUpdateRollout(pct) {
+    const current = parseInt(document.querySelector('.v2m-rollout-preset.active')?.textContent || '100', 10);
+    const isIncrease = pct > current;
+    if (isIncrease && !confirm(\`Aumentar rollout v3 de \${current}% pra \${pct}%? Mais leads vão pro v3.\`)) return;
+    try {
+      const body = { pct };
+      if (isIncrease) body.confirm = 'AUMENTAR_ROLLOUT_V3';
+      const r = await fetch('/admin/api/monitor/rollout', {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'falhou');
+      v2mLoadRollout();
+      v2mLoadAll();
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+
+  function v2mUpdateRolloutCustom() {
+    const input = document.getElementById('v2m-rollout-input');
+    const pct = parseInt(input?.value, 10);
+    if (Number.isNaN(pct) || pct < 0 || pct > 100) return alert('Valor inválido (0-100).');
+    v2mUpdateRollout(pct);
+  }
+
+  async function v2mLoadCost() {
+    try {
+      const [v2r, v3r] = await Promise.all([
+        fetch('/admin/api/monitor/cost?version=v2&period=' + encodeURIComponent(v2mState.period)),
+        fetch('/admin/api/monitor/cost?version=v3&period=' + encodeURIComponent(v2mState.period)),
+      ]);
+      const v2c = v2r.ok ? await v2r.json() : null;
+      const v3c = v3r.ok ? await v3r.json() : null;
+      const fmt = (n) => '$' + (n || 0).toFixed(2);
+      const fmtConv = (n) => '$' + (n || 0).toFixed(4);
+      const renderCard = (lbl, c) => {
+        if (!c) return \`<div class="v2m-cost-card"><h5>\${lbl}</h5><div class="total">—</div></div>\`;
+        const coverage = c.coverage_pct < 99
+          ? \`<div class="coverage">Cobertura: \${c.coverage_pct.toFixed(0)}% (custo histórico anterior ao Monitor v3 não tem tokens)</div>\`
+          : '';
+        return \`
+          <div class="v2m-cost-card">
+            <h5>\${lbl}</h5>
+            <div class="total">\${fmt(c.cost_usd)}</div>
+            <div class="breakdown">
+              \${c.conversations} conversas · \${c.turns_total} turnos<br>
+              \${fmtConv(c.cost_per_conversation_usd)}/conv · \${fmtConv(c.cost_per_turn_usd)}/turno
+            </div>
+            \${coverage}
+          </div>\`;
+      };
+      const el = document.getElementById('v2m-cost');
+      if (el) el.innerHTML = renderCard('💰 Custo v2 — ' + v2mState.period, v2c) + renderCard('💰 Custo v3 — ' + v2mState.period, v3c);
+    } catch (e) { console.error('[v2m] cost:', e.message); }
+  }
+
+  // Modo lado-a-lado: mesmas métricas em duas colunas com delta semântico.
+  async function v2mRenderComparison() {
+    try {
+      const [v2r, v3r] = await Promise.all([
+        fetch('/admin/api/monitor/metrics?version=v2&period=' + encodeURIComponent(v2mState.period)),
+        fetch('/admin/api/monitor/metrics?version=v3&period=' + encodeURIComponent(v2mState.period)),
+      ]);
+      const m2 = v2r.ok ? await v2r.json() : null;
+      const m3 = v3r.ok ? await v3r.json() : null;
+      const el = document.getElementById('v2m-comparison');
+      if (!el || !m2 || !m3) return;
+
+      // Delta semântico (qualidade-direcionado, não direção literal)
+      // 'up_good': maior é melhor (% agendou). 'up_bad': maior é pior (% perdeu, crashes).
+      const fmtPct = v => (v || 0).toFixed(1) + '%';
+      const fmtNum = v => String(v || 0);
+      const fmtH = ms => ms ? (ms / (1000 * 60 * 60)).toFixed(1) + 'h' : '—';
+      const rows = [
+        { label: 'Total leads',         v2: m2.total_leads,     v3: m3.total_leads,     fmt: fmtNum, dir: 'neutral' },
+        { label: '% agendou',           v2: m2.pct_agendou,     v3: m3.pct_agendou,     fmt: fmtPct, dir: 'up_good' },
+        { label: '% handoff',           v2: m2.pct_handoff,     v3: m3.pct_handoff,     fmt: fmtPct, dir: 'neutral' },
+        { label: '% perdeu',            v2: m2.pct_perdeu,      v3: m3.pct_perdeu,      fmt: fmtPct, dir: 'up_bad' },
+        { label: 'Tempo médio até agendar', v2: m2.tempo_medio_ate_agendou_ms, v3: m3.tempo_medio_ate_agendou_ms, fmt: fmtH, dir: 'up_bad' },
+        { label: 'Total turnos',        v2: m2.total_turns,     v3: m3.total_turns,     fmt: fmtNum, dir: 'neutral' },
+        { label: '% tag/tool ausente',  v2: m2.pct_tag_missing, v3: m3.pct_tag_missing, fmt: fmtPct, dir: 'up_bad' },
+        { label: '% router empty',      v2: m2.pct_router_empty, v3: m3.pct_router_empty, fmt: fmtPct, dir: 'up_bad' },
+        { label: 'Crashes',             v2: m2.crashes,         v3: m3.crashes,         fmt: fmtNum, dir: 'up_bad' },
+      ];
+
+      const renderDelta = (a, b, dir) => {
+        if (a === null || b === null || dir === 'neutral') return '';
+        const num = (typeof a === 'number') ? a : 0;
+        const numB = (typeof b === 'number') ? b : 0;
+        if (num === 0 && numB === 0) return '';
+        const delta = numB - num;
+        if (Math.abs(delta) < 0.01) return '';
+        const better = dir === 'up_good' ? delta > 0 : delta < 0;
+        const arrow = delta > 0 ? '↑' : '↓';
+        const cls = better ? 'good' : 'bad';
+        const pct = num !== 0 ? ((delta / num) * 100).toFixed(0) : '∞';
+        return \`<span class="v2m-delta \${cls}">\${arrow} \${delta > 0 ? '+' : ''}\${pct === '∞' ? '∞' : pct + '%'}</span>\`;
+      };
+
+      const v2Col = rows.map(r => \`<div class="v2m-comparison-row"><span class="label">\${escapeHtml(r.label)}</span><span class="val">\${r.fmt(r.v2)}</span></div>\`).join('');
+      const v3Col = rows.map(r => \`<div class="v2m-comparison-row"><span class="label">\${escapeHtml(r.label)}</span><span class="val">\${r.fmt(r.v3)}\${renderDelta(r.v2, r.v3, r.dir)}</span></div>\`).join('');
+
+      el.innerHTML = \`
+        <div class="v2m-comparison-col">
+          <h4>v2 (núcleo + tags)</h4>
+          \${v2Col}
+        </div>
+        <div class="v2m-comparison-col">
+          <h4>v3 (tool use forçado)</h4>
+          \${v3Col}
+        </div>\`;
+    } catch (e) { console.error('[v2m] comparison:', e.message); }
+  }
+
+  // Pause generalizado: aceita 'v1' ou 'v2' como target.
+  async function v2mPauseTo(target) {
+    const expected = 'PAUSAR_PARA_' + target.toUpperCase();
+    if (!confirm(\`Forçar agente pra \${target.toUpperCase()} imediatamente? Override de admin tem prioridade absoluta sobre rollout.\`)) return;
     if (!confirm('Tem CERTEZA? Confirme novamente.')) return;
     try {
-      const r = await fetch('/admin/api/v2/pause', {
+      const r = await fetch('/admin/api/monitor/pause', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ confirm: 'PAUSAR_V2_AGORA' }),
+        body: JSON.stringify({ target, confirm: expected }),
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'falhou');
-      alert('✅ v2 pausado. Próximas mensagens em v1.');
-      v2mLoadVersion();
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'falhou');
+      alert('✅ Override aplicado. Próximas mensagens em ' + (d.override || d.env || 'env'));
+      v2mLoadAll();
     } catch (e) { alert('Erro: ' + e.message); }
   }
 
   async function v2mResumeV2() {
-    if (!confirm('Remover override e voltar pra env var?')) return;
+    if (!confirm('Remover override e voltar pra env var (e rollout configurado)?')) return;
     try {
-      const r = await fetch('/admin/api/v2/resume', {
+      const r = await fetch('/admin/api/monitor/pause', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ confirm: 'RESUMIR_V2' }),
+        body: JSON.stringify({ target: '', confirm: 'LIMPAR_OVERRIDE' }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'falhou');
-      alert('✅ override removido. Versão atual: ' + data.current);
-      v2mLoadVersion();
+      alert('✅ override removido. Versão atual: ' + (data.env || '?'));
+      v2mLoadAll();
     } catch (e) { alert('Erro: ' + e.message); }
   }
 
   function v2mExportCsv(ev) {
     ev.preventDefault();
-    window.location = '/admin/api/v2/export?period=' + encodeURIComponent(v2mState.period);
+    const v = v2mActiveVersion();
+    window.location = '/admin/api/monitor/export?version=' + encodeURIComponent(v) + '&period=' + encodeURIComponent(v2mState.period);
   }
 
   // ─── Onboarding tour ───
@@ -8559,8 +9127,12 @@ router.get('/', (req, res) => {
   window.v2mReview = v2mReview;
   window.v2mDebounceComment = v2mDebounceComment;
   window.v2mForceResumo = v2mForceResumo;
-  window.v2mPauseV2 = v2mPauseV2;
+  // PR #66 — exposições novas (Monitor unificado v2 × v3)
+  window.v2mSetVersion = v2mSetVersion;
+  window.v2mPauseTo = v2mPauseTo;
   window.v2mResumeV2 = v2mResumeV2;
+  window.v2mUpdateRollout = v2mUpdateRollout;
+  window.v2mUpdateRolloutCustom = v2mUpdateRolloutCustom;
   window.v2mExportCsv = v2mExportCsv;
   window.v2mTourNext = v2mTourNext;
   window.v2mTourSkip = v2mTourSkip;

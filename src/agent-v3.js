@@ -119,6 +119,19 @@ function buildDynamicContextV3({ isFirstMessage, isReturning, daysSinceLast, isA
 // orfão de phone, mas continuam contabilizados pelo Monitor.
 // ─────────────────────────────────────────────────────────────────────
 
+// Soma usage de 1 ou 2 responses Anthropic (call 1 + call 2 quando há retry).
+// Pra Monitor calcular custo agregado por turno.
+function aggUsage(...responses) {
+  return responses.reduce((acc, r) => {
+    if (!r || !r.usage) return acc;
+    acc.tokensInput += r.usage.input_tokens || 0;
+    acc.tokensOutput += r.usage.output_tokens || 0;
+    acc.cacheReadTokens += r.usage.cache_read_input_tokens || 0;
+    acc.cacheCreationTokens += r.usage.cache_creation_input_tokens || 0;
+    return acc;
+  }, { tokensInput: 0, tokensOutput: 0, cacheReadTokens: 0, cacheCreationTokens: 0 });
+}
+
 async function generateAndValidate(callOptions, fromPhone) {
   const planoPrecos = getPlanosCanonicos();
 
@@ -144,6 +157,7 @@ async function generateAndValidate(callOptions, fromPhone) {
       retried: false,
       retrySucceeded: false,
       planoPrecos,
+      usage: aggUsage(r1),
     };
   }
 
@@ -161,6 +175,7 @@ async function generateAndValidate(callOptions, fromPhone) {
       retried: false,
       retrySucceeded: false,
       planoPrecos,
+      usage: aggUsage(r1),
     };
   }
 
@@ -181,6 +196,7 @@ async function generateAndValidate(callOptions, fromPhone) {
     return {
       response: r1, finalToolInput: tool1Input, validation: v1,
       retried: false, retrySucceeded: false, planoPrecos,
+      usage: aggUsage(r1),
     };
   }
 
@@ -219,6 +235,7 @@ async function generateAndValidate(callOptions, fromPhone) {
     return {
       response: r1, finalToolInput: tool1Input, validation: v1,
       retried: true, retrySucceeded: false, planoPrecos,
+      usage: aggUsage(r1, r2),
     };
   }
 
@@ -232,6 +249,7 @@ async function generateAndValidate(callOptions, fromPhone) {
     return {
       response: r2, finalToolInput: tool2Input, validation: v2,
       retried: true, retrySucceeded: true, planoPrecos,
+      usage: aggUsage(r1, r2),
     };
   }
 
@@ -246,6 +264,7 @@ async function generateAndValidate(callOptions, fromPhone) {
   return {
     response: r1, finalToolInput: tool1Input, validation: v1,
     retried: true, retrySucceeded: false, planoPrecos,
+    usage: aggUsage(r1, r2),
   };
 }
 
@@ -346,6 +365,7 @@ async function replyV3Inner(from, text, { isAudio = false } = {}) {
     validation,
     retried,
     retrySucceeded,
+    usage,
   } = await generateAndValidate(callOptions, from);
 
   // 11. Sanity: response sem tool_use block. Não deveria com tool_choice forçado.
@@ -353,6 +373,7 @@ async function replyV3Inner(from, text, { isAudio = false } = {}) {
     db.logV2Event(db.V2_EVENT_TYPES.TOOL_CALL_AUSENTE, from, null, {
       stop_reason: response.stop_reason,
       content_types: (response.content || []).map(b => b?.type).join(','),
+      ...(usage || {}),
     });
     const fallback = 'Opa, deu ruim aqui do meu lado. Pode repetir?';
     db.addMessage(from, 'assistant', fallback, false);
@@ -403,7 +424,12 @@ async function replyV3Inner(from, text, { isAudio = false } = {}) {
   // defesa em profundidade — devem triggar perto de 0% em v3 dado o PR2
   // (validação por enum + retry). Quando triggerarem indica que validador
   // deixou passar — sinal pra revisar regras.
-  db.logV2Event(db.V2_EVENT_TYPES.TURN_OK_V3, from, null, retried ? { retried, retrySucceeded } : null);
+  // PR3: meta inclui tokens (agregados de r1+r2 quando há retry) pra cálculo
+  // de custo no Monitor. Custo histórico anterior ao merge não tem esses
+  // campos — getCostMetrics filtra meta.tokensInput presente.
+  const turnOkMeta = { ...(usage || {}) };
+  if (retried) { turnOkMeta.retried = true; turnOkMeta.retrySucceeded = retrySucceeded; }
+  db.logV2Event(db.V2_EVENT_TYPES.TURN_OK_V3, from, null, turnOkMeta);
   try {
     const valorCheck = detectsValorAntecipado(cleanText, stateNow.insistencias_valor);
     if (valorCheck.triggered) {

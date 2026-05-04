@@ -4,6 +4,78 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-04 — Monitor unificado v2 × v3 + hash determinístico phone-locked + custo + rollout incremental (PR3 do trilho v3)
+
+**Contexto:** Pré-requisito pra ligar `AGENT_VERSION=v3` em produção (mesmo em 5%). Sem Monitor diferenciando tráfego v2 × v3, dono não tem como acompanhar conversas reais e decidir promoção a default no PR4. Precisava: lado a lado v2 × v3, custo separado por versão, rollout % phone-locked com hash determinístico (lead que cai em v3 não migra mid-conv), pause de emergência manual (sem auto-pause — risco de rollback surpresa rejeitado pelo dono).
+
+**Decisões arquiteturais (aprovadas pré-impl):**
+1. **Monitor único com cortes por versão** em vez de tela espelho. Renomeado "Monitor v2" → "Monitor". Toggle segmented `[v2] [v3] [v2 × v3]` no header. Reusa contrato de aggregation existente (PR37) generalizado pra aceitar `version` como parâmetro.
+2. **Hash phone-locked** via SHA256 do phone canonicalizado → bucket [0..99]. Mesmo phone sempre cai no mesmo bucket — mover threshold % NÃO rebucketiza phones individuais. Lead que começou em v3 nunca migra pra v2 mid-conversa. Override de admin (pause force) tem prioridade absoluta sobre rollout.
+3. **Auto-pausa rejeitada.** Dono prefere notificação WhatsApp + decisão manual via botão. Razão: rollback surpresa cria mais ruído operacional do que resolve. Exceção considerada (>3 crashes em 5min) fica pra PR posterior.
+4. **Custo separado v2 vs v3** lado a lado. Total + cost/conversation + cost/turn. Critério PR4 (promoção a default) depende disso.
+5. **Comparação `v2 × v3`** com setas QUALITATIVAS (não direção literal): `% agendou ↑` é verde, `% perdeu ↑` é vermelho, `tempo médio ↑` é vermelho.
+
+**Implementação (8 arquivos modificados, 1 novo, ~700 LOC delta):**
+
+DB ([src/db.js](../src/db.js)):
+- `getMetrics(period, version)` — generaliza `getV2Metrics`. Filtra `TURN_OK` (v2) vs `TURN_OK_V3` (v3) no denominador. Mapeia `TAG_ESQUECIDA` ↔ `TOOL_CALL_AUSENTE`. Métricas v3-specific: `pct_preco_fora_referencia`, `pct_retry`, `tool_call_multiple`. Funil filtrado pelos phones que rodaram aquela versão no período (via `_phoneVersionMap`).
+- `getAlerts(version)` — generaliza `getV2Alerts`. v3 ganha 3 alertas novos: qualquer `PRECO_FORA_REFERENCIA_V3` (esperado 0), qualquer `TOOL_CALL_MULTIPLE` (canário Anthropic), `TOOL_CALL_AUSENTE >5%` (com floor de 20 turnos pra evitar ruído de N pequeno). Reviews "❌ seguidas" filtradas pela versão derivada do phone.
+- `getConversations({status, version, limit})` — adiciona campo `_version` derivado do `_phoneVersionMap` (último `TURN_OK[/V3]` vence). Filtro opcional.
+- `getCostMetrics(period, version)` — agrega tokens dos events `TURN_OK[/V3]` que têm `meta.tokensInput` setado. Conversas (phones distintos) pra calcular cost/conv. `coverage_pct` mostra % dos turnos com dados de custo.
+- `getAgentVersionForPhone(phone, envVersion)` — SHA256 hash do phone canon → bucket. Override > rollout (se env=v3) > env. Phone-locked.
+- `CLAUDE_PRICING_USD_PER_M` — input 3, output 15, cache_read 0.30, cache_creation 3.75. **TODO comentado:** mover pra `agent_config` em PR futuro pra dono editar via painel quando Anthropic mudar tabela (~1x/ano).
+
+Webhook ([src/webhook.js](../src/webhook.js)):
+- `getCurrentAgentVersion(phone)` agora aceita phone e delega pra `getAgentVersionForPhone` quando disponível. Sem phone (sanity calls) mantém caminho legacy global.
+
+Token logging:
+- [src/agent-v2.js](../src/agent-v2.js): `TURN_OK` e `TAG_ESQUECIDA` agora logam meta com `{tokensInput, tokensOutput, cacheReadTokens, cacheCreationTokens}`.
+- [src/agent-v3.js](../src/agent-v3.js): nova função `aggUsage(...responses)` soma tokens de r1+r2 quando há retry. `generateAndValidate` retorna `usage` agregado. `TURN_OK_V3` e `TOOL_CALL_AUSENTE` logam meta com tokens.
+
+Backend ([src/admin.js](../src/admin.js)):
+- 7 endpoints novos: `GET /api/monitor/{metrics,alerts,conversations,cost,rollout,export}`, `PUT /api/monitor/rollout`, `POST /api/monitor/pause`. Endpoints `/api/v2/*` antigos mantidos como aliases pra compat.
+- Pause generalizado: target `v1|v2|v3|null`. Confirmação `PAUSAR_PARA_<TARGET>`. `target=v2` zera rollout pra evitar override+rollout brigando.
+- Rollout PUT: aumentos exigem `confirm: 'AUMENTAR_ROLLOUT_V3'`. Reduções são instantâneas.
+- **Notificação WhatsApp em alerta crítico** (`dispatchAlertNotifications`): roda a cada 60s. Rate-limit 1h por código por versão, EXCETO primeira ocorrência que sempre dispara. Estado em `agent_config['monitor_alert_notifications']` JSON `{[code__version]: {last_notified_at, count}}`. Loop disabled em testes (`DB_PATH` contém `test-`).
+
+Frontend (admin.js HTML+JS+CSS):
+- Renomeado "Monitor v2" → "Monitor". Segmented `[v2] [v3] [v2 × v3]` no header (estado em `localStorage.v2m_version`).
+- Card "Rollout v3" só aparece com env=v3: presets `[0%, 5%, 10%, 25%, 50%, 100%]` + input livre + distribuição efetiva nas últimas 24h.
+- Cards de custo lado-a-lado v2/v3 (sempre visíveis): total + breakdown + coverage (avisa quando histórico não tem tokens).
+- Modo `v2 × v3`: 2 colunas grid. 9 métricas com delta semântico colorido (`good`=verde, `bad`=vermelho).
+- Botões pause: "⏸ Forçar v2", "⏸ Forçar v1 (emergência)", "▶ Limpar override". Confirmação dupla.
+- Cards v3-only quando version=v3: `% PRECO_FORA_REFERENCIA_V3`, `% RETRY_V3`, `TOOL_CALL_MULTIPLE`.
+- CSS novo (~110 LOC): `.v2m-version-toggle`, `.v2m-rollout`, `.v2m-cost-card`, `.v2m-comparison-grid`, `.v2m-delta.{good,bad,neutral}`.
+
+Testes ([scripts/test-monitor-aggregations.js](../scripts/test-monitor-aggregations.js), 19/19 PASS):
+- Hash determinístico: mesmo phone, mesmo bucket sempre.
+- Phone-locked: phone que cai em v3 com pct=20 continua em v3 com pct=50.
+- Distribuição uniforme: 1000 phones com pct=10 caem [85,115].
+- Override admin > rollout > env (precedência).
+- env=v2 ignora rollout (force-rollback total).
+- env=v3 + pct=0/100 (corner cases).
+- `getMetrics(v2)` usa TURN_OK; `getMetrics(v3)` usa TURN_OK_V3 + TOOL_CALL_AUSENTE.
+- `getAlerts(v3)`: `preco_fora_referencia_v3`, `tool_call_multiple`, `tool_call_ausente_alta` (com floor 20 turnos).
+- `getCostMetrics`: agrega tokens só de events com meta válida; retorna 0 quando não tem dados.
+- `getConversations({version})` filtra por phone derivado do último TURN_OK[/V3].
+
+**Suite total offline: 383/383** (19 novos + 17 prompt-modules + 56 persona + 39 router + 72 v3-validators + 126 schema + 33 v2-detectors + 21 regex). Zero regressão. 2 testes pre-existing falham por env var WhatsApp Cloud API (não relacionado).
+
+**Aviso pro PR description:** custo histórico anterior ao merge **NÃO terá tokens** em meta — `coverage_pct` mostrará valor baixo até suficientes turnos novos rodarem. Dashboard mostra dado completo a partir do merge. Eventos antigos sobrevivem mas seu custo aparece como zero (filtrado, não estimado).
+
+**O que NÃO foi tocado (imutável):** schema da tool ([src/v3-tools.js](../src/v3-tools.js)), validador de preço ([src/v3-validators.js](../src/v3-validators.js)), roteador ([src/router-v2.js](../src/router-v2.js)), núcleo ([src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js)), detectors. Endpoints `/api/v2/*` legacy preservados.
+
+**Critério de promoção a default no PR4 (registrado pra futuro):**
+- 50 conversas v3 / 14 dias com:
+  - 0 ocorrências de `PRECO_FORA_REFERENCIA_V3`
+  - 0 ocorrências de `TOOL_CALL_MULTIPLE`
+  - `TOOL_CALL_AUSENTE` em <1% (esperado 0% por design)
+  - 0 reviews ❌ não-justificados pelo dono
+  - Taxa de agendamento v3 ≥ taxa v2 na mesma janela (critério COMERCIAL — técnico perfeito não promove se conversão cair)
+- Custo v3 documentado (positivo ou negativo) — informativo, não bloqueia.
+
+---
+
 ## 2026-05-04 — Editor de módulos no admin: char count, pill custom/default, restaurar default, voltar versão anterior, validação extra do `planos_e_precos`
 
 **Contexto:** Persona já é editável via PR54 (4 caixinhas), mas os 28 módulos de cenário (`info_academia`, `objecao_preco`, `publicos_especificos`, etc.) só mudavam via PR. Cada ajuste de copy virava commit + deploy. Pedido do dono: estender o editor da persona pros 28 módulos sem mexer em tool schema, enum de planos, validadores ou roteador.

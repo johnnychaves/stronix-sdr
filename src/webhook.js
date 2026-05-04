@@ -16,8 +16,19 @@ console.log(`[webhook] agent version (env): ${AGENT_VERSION_ENV}`);
 
 // Resolve a cada request — barato (1 query SQLite indexada). Permite admin
 // flipar instantâneo via UI sem mexer em variável Railway.
-function getCurrentAgentVersion() {
+//
+// PR3 (2026-05-04): roteamento agora é PHONE-LOCKED via hash determinístico
+// quando env=v3 e rollout_pct < 100. Lead que cai em v3 numa conversa NUNCA
+// migra pra v2 mid-conv (mesmo phone, mesmo bucket — mover threshold só
+// afeta novos phones que cruzem a fronteira). Override de admin tem
+// prioridade absoluta (pause force). Sem phone (sanity calls em playground),
+// usa caminho global antigo.
+function getCurrentAgentVersion(phone = null) {
   try {
+    if (phone) {
+      return require('./db').getAgentVersionForPhone(phone, AGENT_VERSION_ENV);
+    }
+    // Sem phone: caminho legacy — só override + env (sem rollout).
     const override = require('./db').getRuntimeFlag('agent_version_override');
     if (override === 'v1' || override === 'v2' || override === 'v3') return override;
   } catch { /* DB pode estar inicializando */ }
@@ -174,12 +185,12 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText, fi
     }
   }
 
-  // Roteamento por versão do agente.
+  // Roteamento por versão do agente. PR3: phone-locked via hash determinístico.
   // v3 usa tool use forçado da Anthropic (PR1 da migração v3, 2026-05-04) — opt-in.
   // v2 usa núcleo + módulos + tags em texto livre — default em produção.
   // v1 é o prompt monolítico antigo — fallback de emergência.
-  // Override via DB flag (admin) ou env var AGENT_VERSION (Railway).
-  const currentVersion = getCurrentAgentVersion();
+  // Override de admin (Monitor → Pausar) > rollout_pct (se env=v3) > env var.
+  const currentVersion = getCurrentAgentVersion(from);
   let result;
   if (currentVersion === 'v3') {
     const { replyV3 } = require('./agent-v3');
