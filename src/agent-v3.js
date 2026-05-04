@@ -53,6 +53,15 @@ const MODEL = 'claude-sonnet-4-5-20250929';
 // ─────────────────────────────────────────────────────────────────────
 // HELPERS LOCAIS — re-implementação minimalista pra não tocar agent-v2.js
 // (que está em modo manutenção durante a janela de validação v3).
+//
+// ⚠️ DÍVIDA TÉCNICA: isOutsideBusinessHours e buildDynamicContextV3 são
+// duplicação das funções equivalentes em src/agent-v2.js (linhas 231 e 241).
+// Se uma mudar (ex: novo horário comercial, nova tag de sistema), a outra
+// PRECISA mudar junto — senão o comportamento divergirá entre v2 e v3.
+//
+// Cleanup planejado em PR pós-PR4: extrair pra src/agent-shared.js
+// (single source of truth) e ambos importam. Aceito agora pra preservar
+// v2 100% intocado durante a janela de validação v3.
 // ─────────────────────────────────────────────────────────────────────
 
 function isOutsideBusinessHours() {
