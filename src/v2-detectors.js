@@ -110,6 +110,44 @@ function extractPrecosOficiaisFromAcademiaInfo(infoMap) {
   return Array.from(valores);
 }
 
+// Extrai TODOS os valores monetários dos módulos do prompt cujo nome
+// indica que tratam de preço/plano/pagamento. Source of truth pra
+// preço passou pra módulos (PR #61) — academia_info pode estar vazio.
+// `modules`: array vindo de db.getAllPromptModules() — [{name, content, ...}]
+const PRICE_MODULE_NAMES = new Set([
+  'planos_e_precos',
+  'apresentacao_planos',
+  'pagamento',
+  'objecao_preco',
+  'objecao_mensal',
+  'objecao_convenio',
+  'transferencia_clube',
+  'tecnicas_persuasao',
+  'cancelamento_congelamento',
+]);
+
+function extractPrecosOficiaisFromModules(modules) {
+  if (!Array.isArray(modules) || !modules.length) return [];
+  const valores = new Set();
+  for (const m of modules) {
+    if (!m || !m.name || !PRICE_MODULE_NAMES.has(m.name)) continue;
+    const content = m.content || '';
+    if (!content) continue;
+    const found = extractMoneyValues(content);
+    for (const v of found) valores.add(v);
+  }
+  return Array.from(valores);
+}
+
+// Combina preços oficiais de academia_info + módulos. Convive com a base
+// antiga (academia_info) sem duplicar — Set dedupe. Use isso como
+// argumento pra detectsPrecoInventado.
+function extractPrecosOficiais({ academiaInfoMap, promptModules }) {
+  const a = extractPrecosOficiaisFromAcademiaInfo(academiaInfoMap);
+  const b = extractPrecosOficiaisFromModules(promptModules);
+  return Array.from(new Set([...a, ...b]));
+}
+
 module.exports = {
   extractMoneyValues,
   isLikelyDerivation,
@@ -117,5 +155,8 @@ module.exports = {
   detectsValorAntecipado,
   detectsTagEsquecida,
   extractPrecosOficiaisFromAcademiaInfo,
+  extractPrecosOficiaisFromModules,
+  extractPrecosOficiais,
+  PRICE_MODULE_NAMES,
   MONEY_RE,
 };
