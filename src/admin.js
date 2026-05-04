@@ -6665,9 +6665,9 @@ router.get('/', (req, res) => {
         const elGp = document.getElementById('ac-persona-girias-proibidas');
         const elFx = document.getElementById('ac-persona-frases-extra');
         if (elAb) elAb.value = p.abertura || '';
-        if (elGq) elGq.value = (p.giriasQuentes || []).join('\n');
-        if (elGp) elGp.value = (p.giriasProibidas || []).join('\n');
-        if (elFx) elFx.value = (p.frasesProibidasExtra || []).join('\n');
+        if (elGq) elGq.value = (p.giriasQuentes || []).join('\\n');
+        if (elGp) elGp.value = (p.giriasProibidas || []).join('\\n');
+        if (elFx) elFx.value = (p.frasesProibidasExtra || []).join('\\n');
         const pill = document.getElementById('persona-status-pill');
         if (pill) {
           pill.textContent = cfg.persona.isCustom ? '(Customizado)' : '(Default)';
