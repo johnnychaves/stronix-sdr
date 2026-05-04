@@ -4,6 +4,53 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-03 — Persona expandida: nome agente + nome negócio + jeito + snapshot/undo
+
+**Contexto:** Depois da persona inicial (4 slots: abertura, gírias, frases proibidas), sócio pediu mais autonomia: "preciso mudar o nome do Johnny e a forma que ele lida com o cliente — quero recepção mais calorosa em vez de séria". 3 slots novos pra cobrir identidade completa (não só tom).
+
+**Slots novos:**
+- `nomeAgente` (default "Johnny") — substitui em "Você é o {X}", "Sou o {X} da", header UPPER
+- `nomeNegocio` (default "STRONIX") — substitui em "dono da {X}", "assistente virtual da {X}", header UPPER
+- `descricaoJeito` (default "genuíno, sério, direto, sem papo de vendedor. Conhece todo mundo pelo nome. STRONIX é família, não academia de fisiculturista, \"gente como a gente\".") — substitui a frase de "Persona: ..."
+
+**Placeholders no [src/prompt-nucleo-v2.js](src/prompt-nucleo-v2.js):**
+- `{{PERSONA_NOME_AGENTE}}` + `{{PERSONA_NOME_AGENTE_UPPER}}`
+- `{{PERSONA_NOME_NEGOCIO}}` + `{{PERSONA_NOME_NEGOCIO_UPPER}}`
+- `{{PERSONA_DESCRICAO_JEITO}}`
+
+**Snapshot/undo** ([src/persona-v2.js](src/persona-v2.js)):
+- A cada `setPersona`, persona ANTERIOR vai pra `agent_config.persona_previous`
+- `revertPersona()` faz swap: previous vira current, current vira previous (undo de undo possível)
+- `resetPersona()` também guarda snapshot da custom antes de resetar
+- 1 nível de undo é suficiente — evita complexidade de histórico longo
+
+**Endpoints novos:**
+- `GET /api/agent-config` agora retorna `persona.hasPrevious` e `persona.previous`
+- `POST /api/agent-config/persona/revert` (admin only) — undo da última edição
+
+**UI na aba Agente:**
+- 3 inputs novos: nome agente, nome negócio, jeito (textarea)
+- Botão "↶ Voltar para versão anterior" — só visível quando `hasPrevious=true`
+- Help text "O que NÃO escrever" expandido com 3 exemplos:
+  - ❌ "Sempre passa o valor" → módulo planos_e_precos
+  - ❌ "Se o lead pedir aula, oferece terça às 9h" → módulo fluxo_aula_experimental
+  - ❌ "Nosso plano custa R$199" → Conhecimento (academia_info)
+
+**Validação intensiva (lição dos hotfix #55/#56):**
+1. **45/45 offline** em [scripts/test-persona-assemble.js](scripts/test-persona-assemble.js) — placeholders, conteúdo default, custom (rename agente/negócio/jeito), clamp/validação, DB roundtrip, **6 testes novos de snapshot/revert** (1ª save sem snapshot, 2ª save cria, swap de revert, null sem previous, reset preserva)
+2. **Grep de segurança** rodou: `grep -nE "(split|join|replace|match|trim|search|indexOf)\\('.n'\\)" src/admin.js` → **0 matches** (lição dos 2 hotfixes)
+3. **Server local end-to-end** subiu, bootstrap admin via curl, fetch `/admin` retornou 308kb. **`new Function(scriptInline)` validou JS de 161kb sem erros** — confirma que TODO o `<script>` rendered tem sintaxe válida (não repete o bug do hotfix)
+4. **Smoke E.4 com Anthropic real** PASS — persona default ainda gera núcleo de 12773 chars (mesmo size pré-persona), bot abre com "Opa beleza! Sou o Johnny da STRONIX 👋", parser limpa tags. Custo $0.02 USD.
+
+**Por quê snapshot 1-nível e não histórico completo:**
+- Resolve 90% do uso (admin edita errado, dá undo)
+- Evita complexidade (tabela de versions, UI de diff)
+- Se aparecer pedido real de "ver versão de 3 saves atrás", evolui depois
+
+**Política mantida:** AGENT_VERSION=v2 default. Persona default produz comportamento idêntico ao pré-persona — migração silenciosa.
+
+---
+
 ## 2026-05-03 — Persona da marca: aba Agente edita voz/tom sem mexer em estrutura
 
 **Contexto:** PR #52 entregou aba Agente com edição do núcleo via textarea. PR #53 removeu o textarea do núcleo porque admin podia quebrar a IA editando estrutura. Faltava um meio-termo: deixar o admin ajustar tom (gírias, abertura, frases) sem expor regras estruturais. Sócio aprovou: "controle de tom antes do lançamento — pequenas coisas que só eu sei se soam Stronix".

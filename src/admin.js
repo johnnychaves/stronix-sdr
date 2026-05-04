@@ -677,6 +677,8 @@ router.get('/api/agent-config', auth.requireAdmin, (req, res) => {
       current: personaModule.getPersona(),
       default: personaModule.DEFAULT_PERSONA,
       isCustom: personaModule.isPersonaCustom(),
+      hasPrevious: personaModule.hasPreviousPersona(),
+      previous: personaModule.getPreviousPersona(),
       limits: personaModule.LIMITS,
     },
     typing_delay_min_ms: db.getAgentConfigNumber('typing_delay_min_ms', TIMING_DEFAULTS.typing_delay_min_ms, 0, 600 * 1000),
@@ -717,9 +719,21 @@ router.delete('/api/agent-config/:key', auth.requireAdmin, (req, res) => {
   const key = req.params.key;
   const allowed = ['nucleo_v2', 'persona', 'typing_delay_min_ms', 'typing_delay_max_ms', 'buffer_window_ms'];
   if (!allowed.includes(key)) return res.status(400).json({ error: 'Chave não permitida' });
-  db.setAgentConfig(key, null, req.user.id);
+  if (key === 'persona') {
+    personaModule.resetPersona(req.user.id);
+  } else {
+    db.setAgentConfig(key, null, req.user.id);
+  }
   console.log(`[admin] agent_config[${key}] restaurado ao default por ${req.user.username}`);
   res.json({ ok: true });
+});
+
+// POST /api/agent-config/persona/revert — restaura persona pra versão anterior (undo)
+router.post('/api/agent-config/persona/revert', auth.requireAdmin, (req, res) => {
+  const reverted = personaModule.revertPersona(req.user.id);
+  if (!reverted) return res.status(404).json({ error: 'Sem versão anterior pra reverter' });
+  console.log(`[admin] persona revertida pra versão anterior por ${req.user.username}`);
+  res.json({ ok: true, persona: reverted });
 });
 
 // Prompt modules (28 módulos do Johnny v2) — leitura pública pra usuários
@@ -4023,11 +4037,29 @@ router.get('/', (req, res) => {
     </div>
   </div>
 
-  <!-- Section: persona (voz e tom da marca) -->
+  <!-- Section: persona (identidade e tom da marca) -->
   <div class="agente-section">
-    <h3 class="agente-section-title">🎭 Voz e tom da marca <span id="persona-status-pill" class="persona-status">(Default)</span></h3>
+    <h3 class="agente-section-title">🎭 Identidade e tom da marca <span id="persona-status-pill" class="persona-status">(Default)</span></h3>
     <div class="student-help" style="margin:0 0 14px">
-      Aqui ajusta <strong>como a IA fala</strong>: gírias, abertura, frases que tu não quer ver. Mexer aqui é seguro, não muda a estrutura nem as regras de venda. Mudança aplica na próxima resposta.
+      Aqui ajusta <strong>quem é o agente e como ele fala</strong>: nome, nome do negócio, jeito, abertura, gírias. Mudança aplica na próxima resposta da IA.
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-nome-agente">Nome do agente</label>
+      <span class="persona-hint">Como ele se apresenta. Aparece em "Sou o {nome} da {negócio}".</span>
+      <input type="text" id="ac-persona-nome-agente" maxlength="60" oninput="onPersonaChange()" placeholder="Ex.: Johnny">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-nome-negocio">Nome do negócio</label>
+      <span class="persona-hint">Como o lugar é chamado. Aparece em vários pontos do prompt.</span>
+      <input type="text" id="ac-persona-nome-negocio" maxlength="60" oninput="onPersonaChange()" placeholder="Ex.: STRONIX">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-descricao-jeito">Jeito do agente (1-3 frases)</label>
+      <span class="persona-hint">Descreve o tom e a personalidade. Ex.: caloroso, próximo, abre conversa com energia, conhece todo mundo pelo nome.</span>
+      <textarea id="ac-persona-descricao-jeito" maxlength="800" oninput="onPersonaChange()" placeholder="Ex.: caloroso, próximo, jeito amigo. Conhece todo mundo pelo nome. Recebe lead com energia, sem papo de vendedor."></textarea>
     </div>
 
     <div class="persona-row">
@@ -4055,15 +4087,18 @@ router.get('/', (req, res) => {
     </div>
 
     <div class="persona-warn">
-      <strong>⚠️ O que NÃO escrever aqui:</strong> esses campos são só de <strong>tom</strong>, não de <strong>regra</strong>. Não coloca regra estrutural aqui, ela vai ser ignorada ou conflita com o núcleo.
+      <strong>⚠️ O que NÃO escrever aqui:</strong> esses campos são de <strong>identidade e tom</strong>, não de <strong>regra ou roteiro</strong>. Regras de venda, scripts e conhecimento factual ficam em outros lugares.
       <br><br>
-      <strong>❌ Não escreve:</strong> <code>"Sempre passa o valor do plano logo no início"</code> — isso é regra de venda, vai em <strong>Módulos do prompt → planos_e_precos</strong>, e contraria a regra dos valores.
+      <strong>❌ Não escreve:</strong> <code>"Sempre passa o valor do plano logo no início"</code> — isso é regra de venda, vai em <strong>Configurações → Módulos do prompt → planos_e_precos</strong>.
       <br>
-      <strong>❌ Não escreve:</strong> <code>"Se o lead pedir aula, oferece terça às 9h"</code> — isso é roteiro, fica no núcleo (estrutura imutável) ou no módulo <strong>fluxo_aula_experimental</strong>.
+      <strong>❌ Não escreve:</strong> <code>"Se o lead pedir aula, oferece terça às 9h"</code> — isso é roteiro, fica no módulo <strong>fluxo_aula_experimental</strong>.
+      <br>
+      <strong>❌ Não escreve:</strong> <code>"Nosso plano custa R$199"</code> — isso é conhecimento factual, vai em <strong>Configurações → Conhecimento</strong>.
     </div>
 
     <div class="persona-actions">
       <button class="persona-restore-btn" type="button" onclick="restorePersona()">↺ Restaurar default</button>
+      <button class="persona-restore-btn" id="persona-revert-btn" type="button" onclick="revertPersona()" style="display:none">↶ Voltar para versão anterior</button>
       <span id="persona-save-status" class="persona-status"></span>
     </div>
   </div>
@@ -6657,13 +6692,19 @@ router.get('/', (req, res) => {
       if (elMax) elMax.value = maxS;
       if (elBuf) elBuf.value = bufS;
 
-      // Persona — voz e tom
+      // Persona — identidade e tom
       if (cfg.persona && cfg.persona.current) {
         const p = cfg.persona.current;
+        const elNa = document.getElementById('ac-persona-nome-agente');
+        const elNn = document.getElementById('ac-persona-nome-negocio');
+        const elDj = document.getElementById('ac-persona-descricao-jeito');
         const elAb = document.getElementById('ac-persona-abertura');
         const elGq = document.getElementById('ac-persona-girias-quentes');
         const elGp = document.getElementById('ac-persona-girias-proibidas');
         const elFx = document.getElementById('ac-persona-frases-extra');
+        if (elNa) elNa.value = p.nomeAgente || '';
+        if (elNn) elNn.value = p.nomeNegocio || '';
+        if (elDj) elDj.value = p.descricaoJeito || '';
         if (elAb) elAb.value = p.abertura || '';
         if (elGq) elGq.value = (p.giriasQuentes || []).join('\\n');
         if (elGp) elGp.value = (p.giriasProibidas || []).join('\\n');
@@ -6673,6 +6714,8 @@ router.get('/', (req, res) => {
           pill.textContent = cfg.persona.isCustom ? '(Customizado)' : '(Default)';
           pill.classList.toggle('custom', !!cfg.persona.isCustom);
         }
+        const revertBtn = document.getElementById('persona-revert-btn');
+        if (revertBtn) revertBtn.style.display = cfg.persona.hasPrevious ? '' : 'none';
       }
     } catch (e) {
       console.error('[agent-config] erro ao carregar:', e.message);
@@ -6690,12 +6733,18 @@ router.get('/', (req, res) => {
   }
 
   function readPersonaInputs() {
+    const elNa = document.getElementById('ac-persona-nome-agente');
+    const elNn = document.getElementById('ac-persona-nome-negocio');
+    const elDj = document.getElementById('ac-persona-descricao-jeito');
     const elAb = document.getElementById('ac-persona-abertura');
     const elGq = document.getElementById('ac-persona-girias-quentes');
     const elGp = document.getElementById('ac-persona-girias-proibidas');
     const elFx = document.getElementById('ac-persona-frases-extra');
     const splitLines = (s) => (s || '').split('\\n').map(x => x.trim()).filter(x => x.length > 0);
     return {
+      nomeAgente: (elNa?.value || '').trim(),
+      nomeNegocio: (elNn?.value || '').trim(),
+      descricaoJeito: (elDj?.value || '').trim(),
       abertura: (elAb?.value || '').trim(),
       giriasQuentes: splitLines(elGq?.value),
       giriasProibidas: splitLines(elGp?.value),
@@ -6721,6 +6770,9 @@ router.get('/', (req, res) => {
       if (status) status.textContent = '✓ Salvo';
       const pill = document.getElementById('persona-status-pill');
       if (pill) { pill.textContent = '(Customizado)'; pill.classList.add('custom'); }
+      // Após salvar, snapshot anterior pode existir → mostra botão revert
+      const revertBtn = document.getElementById('persona-revert-btn');
+      if (revertBtn) revertBtn.style.display = '';
       setTimeout(() => { if (status) status.textContent = ''; }, 2000);
     } catch (e) {
       if (status) status.textContent = '⚠ Sem conexão';
@@ -6729,7 +6781,7 @@ router.get('/', (req, res) => {
   }
 
   async function restorePersona() {
-    if (!confirm('Restaurar voz e tom ao default? Suas customizações serão perdidas.')) return;
+    if (!confirm('Restaurar identidade e tom ao default? Versão atual será guardada como anterior pra dar pra voltar se quiser.')) return;
     try {
       const r = await fetch('/admin/api/agent-config/persona', { method: 'DELETE' });
       if (!r.ok) {
@@ -6738,7 +6790,23 @@ router.get('/', (req, res) => {
         return;
       }
       await loadAgentConfig();
-      showToast({ severity: 'info', title: '↺ Restaurado', message: 'Voz e tom voltou pro default.' });
+      showToast({ severity: 'info', title: '↺ Restaurado', message: 'Voltou pro default. Use "Voltar para versão anterior" se quiser desfazer.' });
+    } catch (e) {
+      showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
+    }
+  }
+
+  async function revertPersona() {
+    if (!confirm('Voltar pra versão anterior da persona? A versão atual fica como "anterior" — dá pra fazer undo de novo.')) return;
+    try {
+      const r = await fetch('/admin/api/agent-config/persona/revert', { method: 'POST' });
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        showToast({ severity: 'warn', title: 'Erro ao reverter', message: data.error || 'Sem versão anterior' });
+        return;
+      }
+      await loadAgentConfig();
+      showToast({ severity: 'info', title: '↶ Revertido', message: 'Voltou pra versão anterior.' });
     } catch (e) {
       showToast({ severity: 'warn', title: 'Sem conexão', message: 'Tenta de novo' });
     }
