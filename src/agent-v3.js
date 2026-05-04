@@ -39,10 +39,17 @@ const {
 const {
   TOOL_NAME,
   buildToolDefinition,
+  findAllToolUseBlocks,
   extractToolInput,
+  extractToolUseId,
   toolInputToParsed,
   ADDENDUM_V3,
 } = require('./v3-tools');
+const {
+  getPlanosCanonicos,
+  validatePrecosNaMensagem,
+  buildRetryHint,
+} = require('./v3-validators');
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -53,6 +60,15 @@ const MODEL = 'claude-sonnet-4-5-20250929';
 // ─────────────────────────────────────────────────────────────────────
 // HELPERS LOCAIS — re-implementação minimalista pra não tocar agent-v2.js
 // (que está em modo manutenção durante a janela de validação v3).
+//
+// ⚠️ DÍVIDA TÉCNICA: isOutsideBusinessHours e buildDynamicContextV3 são
+// duplicação das funções equivalentes em src/agent-v2.js (linhas 231 e 241).
+// Se uma mudar (ex: novo horário comercial, nova tag de sistema), a outra
+// PRECISA mudar junto — senão o comportamento divergirá entre v2 e v3.
+//
+// Cleanup planejado em PR pós-PR4: extrair pra src/agent-shared.js
+// (single source of truth) e ambos importam. Aceito agora pra preservar
+// v2 100% intocado durante a janela de validação v3.
 // ─────────────────────────────────────────────────────────────────────
 
 function isOutsideBusinessHours() {
@@ -88,6 +104,149 @@ function buildDynamicContextV3({ isFirstMessage, isReturning, daysSinceLast, isA
     tagsAtivas.push('[LEAD_RESPONDEU_EM_AUDIO]');
   }
   return { dynamicCtx: ctx, tagsAtivas };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// GERAÇÃO COM VALIDAÇÃO DE PREÇO — call + validate + 1 retry máximo
+//
+// PR2: depois da call inicial, valida que cada R$ na mensagem bate ±5%
+// com o preço oficial dos plano_ids referenciados. Se inválido, retry via
+// `tool_result` (is_error=true) com hint corretivo + tabela de preços.
+// Se segundo retry também falhar: log + envia resposta original (call 1).
+//
+// Side effect: loga PRECO_FORA_REFERENCIA_V3 e RETRY_V3 quando aciona.
+// `fromPhone` pode ser null em playground/simulate — eventos viram log
+// orfão de phone, mas continuam contabilizados pelo Monitor.
+// ─────────────────────────────────────────────────────────────────────
+
+async function generateAndValidate(callOptions, fromPhone) {
+  const planoPrecos = getPlanosCanonicos();
+
+  // Call 1 ──────────────────────────────────────
+  const r1 = await client.messages.create(callOptions);
+
+  // Canário: 2+ blocos tool_use violam contrato Anthropic com disable_parallel_tool_use=true.
+  const tool1Blocks = findAllToolUseBlocks(r1);
+  if (tool1Blocks.length > 1) {
+    db.logV2Event(db.V2_EVENT_TYPES.TOOL_CALL_MULTIPLE, fromPhone, null, {
+      count: tool1Blocks.length,
+      stop_reason: r1.stop_reason,
+      attempt: 1,
+    });
+  }
+
+  const tool1Input = extractToolInput(r1);
+  if (!tool1Input) {
+    return {
+      response: r1,
+      finalToolInput: null,
+      validation: null,
+      retried: false,
+      retrySucceeded: false,
+      planoPrecos,
+    };
+  }
+
+  const v1 = validatePrecosNaMensagem({
+    mensagem: tool1Input.mensagem_ao_lead || '',
+    planosReferenciados: tool1Input.planos_referenciados || [],
+    planoPrecos,
+  });
+
+  if (v1.valid) {
+    return {
+      response: r1,
+      finalToolInput: tool1Input,
+      validation: v1,
+      retried: false,
+      retrySucceeded: false,
+      planoPrecos,
+    };
+  }
+
+  // Call 1 reprovou ──────────────────────────────
+  db.logV2Event(db.V2_EVENT_TYPES.PRECO_FORA_REFERENCIA_V3, fromPhone, null, {
+    attempt: 1,
+    reason: v1.reason,
+    valores: v1.valoresEncontrados,
+    referenciados: v1.referenciados,
+    mismatches: (v1.mismatches || []).slice(0, 3),
+    preview: (tool1Input.mensagem_ao_lead || '').slice(0, 100),
+  });
+
+  // Build messages pro retry: histórico + assistant response (com tool_use) + tool_result (error)
+  const tool1Id = extractToolUseId(r1);
+  if (!tool1Id) {
+    // Sem ID, não consigo fazer retry idiomático. Devolve call 1 como original.
+    return {
+      response: r1, finalToolInput: tool1Input, validation: v1,
+      retried: false, retrySucceeded: false, planoPrecos,
+    };
+  }
+
+  const retryMessages = [
+    ...(callOptions.messages || []),
+    { role: 'assistant', content: r1.content },
+    {
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: tool1Id,
+        content: buildRetryHint(v1, planoPrecos),
+        is_error: true,
+      }],
+    },
+  ];
+
+  db.logV2Event(db.V2_EVENT_TYPES.RETRY_V3, fromPhone, null, { trigger: v1.reason });
+
+  // Call 2 (retry) ──────────────────────────────
+  const r2 = await client.messages.create({ ...callOptions, messages: retryMessages });
+
+  const tool2Blocks = findAllToolUseBlocks(r2);
+  if (tool2Blocks.length > 1) {
+    db.logV2Event(db.V2_EVENT_TYPES.TOOL_CALL_MULTIPLE, fromPhone, null, {
+      count: tool2Blocks.length, stop_reason: r2.stop_reason, attempt: 2,
+    });
+  }
+
+  const tool2Input = extractToolInput(r2);
+  if (!tool2Input) {
+    // Retry sem tool_use — fallback pra call 1
+    db.logV2Event(db.V2_EVENT_TYPES.PRECO_FORA_REFERENCIA_V3, fromPhone, null, {
+      attempt: 2, reason: 'tool_call_ausente_no_retry', using_original: true,
+    });
+    return {
+      response: r1, finalToolInput: tool1Input, validation: v1,
+      retried: true, retrySucceeded: false, planoPrecos,
+    };
+  }
+
+  const v2 = validatePrecosNaMensagem({
+    mensagem: tool2Input.mensagem_ao_lead || '',
+    planosReferenciados: tool2Input.planos_referenciados || [],
+    planoPrecos,
+  });
+
+  if (v2.valid) {
+    return {
+      response: r2, finalToolInput: tool2Input, validation: v2,
+      retried: true, retrySucceeded: true, planoPrecos,
+    };
+  }
+
+  // Call 2 também reprovou — log e envia resposta ORIGINAL (call 1)
+  db.logV2Event(db.V2_EVENT_TYPES.PRECO_FORA_REFERENCIA_V3, fromPhone, null, {
+    attempt: 2,
+    reason: v2.reason,
+    valores: v2.valoresEncontrados,
+    mismatches: (v2.mismatches || []).slice(0, 3),
+    using_original: true,
+  });
+  return {
+    response: r1, finalToolInput: tool1Input, validation: v1,
+    retried: true, retrySucceeded: false, planoPrecos,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -168,21 +327,29 @@ async function replyV3Inner(from, text, { isAudio = false } = {}) {
     resumoBlock,
   });
 
-  // 10. Chama Claude com tool use forçado
-  const response = await client.messages.create({
+  // 10. Chama Claude com tool use forçado + validação de preço cruzada (PR2).
+  // Plano IDs vêm do parser dinâmico do módulo planos_e_precos no DB.
+  const planoPrecos = getPlanosCanonicos();
+  const planoIds = Object.keys(planoPrecos);
+  const callOptions = {
     model: MODEL,
     max_tokens: 1024,
     system: systemBlocks,
     messages: history,
-    tools: [buildToolDefinition()],
+    tools: [buildToolDefinition({ planoIds })],
     tool_choice: { type: 'tool', name: TOOL_NAME, disable_parallel_tool_use: true },
-  });
+  };
 
-  // 11. Extrai tool_use → formato `parsed` compatível com lógica v2
-  const toolInput = extractToolInput(response);
+  const {
+    response,
+    finalToolInput: toolInput,
+    validation,
+    retried,
+    retrySucceeded,
+  } = await generateAndValidate(callOptions, from);
+
+  // 11. Sanity: response sem tool_use block. Não deveria com tool_choice forçado.
   if (!toolInput) {
-    // Sanity check: com tool_choice forçado, isso não deveria acontecer.
-    // Se acontecer, log + mensagem fallback genérica pro lead não ficar sem resposta.
     db.logV2Event(db.V2_EVENT_TYPES.TOOL_CALL_AUSENTE, from, null, {
       stop_reason: response.stop_reason,
       content_types: (response.content || []).map(b => b?.type).join(','),
@@ -228,14 +395,15 @@ async function replyV3Inner(from, text, { isAudio = false } = {}) {
   db.addMessage(from, 'assistant', cleanText, useAudio);
   db.incrementLeadStateCounter(from, 'total_mensagens_johnny', 1);
 
-  console.log(`[agent-v3] ${from} estagio=${stateNow.estagio_atual} insist=${stateNow.insistencias_valor} mod=${moduleNames.join(',') || 'nenhum'} → "${cleanText.slice(0, 60)}..."`);
+  console.log(`[agent-v3] ${from} estagio=${stateNow.estagio_atual} insist=${stateNow.insistencias_valor} mod=${moduleNames.join(',') || 'nenhum'} retried=${retried} → "${cleanText.slice(0, 60)}..."`);
 
   // 15. Instrumentação — tag esquecida não acontece em v3 (tool forçada),
   // mas registramos TURN_OK_V3 pra Monitor diferenciar tráfego v2 × v3.
   // detectsPrecoInventado e detectsValorAntecipado continuam rodando como
-  // defesa em profundidade — esperado triggar perto de 0% em v3 (PR2 adiciona
-  // controle por enum).
-  db.logV2Event(db.V2_EVENT_TYPES.TURN_OK_V3, from, null);
+  // defesa em profundidade — devem triggar perto de 0% em v3 dado o PR2
+  // (validação por enum + retry). Quando triggerarem indica que validador
+  // deixou passar — sinal pra revisar regras.
+  db.logV2Event(db.V2_EVENT_TYPES.TURN_OK_V3, from, null, retried ? { retried, retrySucceeded } : null);
   try {
     const valorCheck = detectsValorAntecipado(cleanText, stateNow.insistencias_valor);
     if (valorCheck.triggered) {
@@ -305,18 +473,30 @@ async function simulateReplyV3(history, userMessage, simulatedState = null) {
     .map(m => ({ role: m.role, content: m.content }));
   cleanHistory.push({ role: 'user', content: userMessage });
 
-  const t0 = Date.now();
-  const response = await client.messages.create({
+  // Mesmo fluxo do replyV3: validação de preço + 1 retry. Em playground não
+  // persistimos eventos no DB (fromPhone=null faz logV2Event escrever sem
+  // phone — admin pode ainda inspecionar), mas a logica é idêntica.
+  const planoPrecos = getPlanosCanonicos();
+  const planoIds = Object.keys(planoPrecos);
+  const callOptions = {
     model: MODEL,
     max_tokens: 1024,
     system: systemBlocks,
     messages: cleanHistory,
-    tools: [buildToolDefinition()],
+    tools: [buildToolDefinition({ planoIds })],
     tool_choice: { type: 'tool', name: TOOL_NAME, disable_parallel_tool_use: true },
-  });
+  };
+
+  const t0 = Date.now();
+  const {
+    response,
+    finalToolInput: toolInput,
+    validation,
+    retried,
+    retrySucceeded,
+  } = await generateAndValidate(callOptions, null);
   const latencyMs = Date.now() - t0;
 
-  const toolInput = extractToolInput(response);
   const parsed = toolInputToParsed(toolInput);
   const cleanText = parsed.cleanText;
 
@@ -334,6 +514,16 @@ async function simulateReplyV3(history, userMessage, simulatedState = null) {
     state: nextState,
     parsed,
     toolCallPresent: toolInput !== null,
+    rawToolInput: toolInput,
+    // PR2: dono pode ver no playground se o validator aprovou direto, retry corrigiu, ou ambos falharam
+    precoValidation: validation ? {
+      valid: validation.valid,
+      reason: validation.reason || null,
+      mismatches: validation.mismatches || [],
+      referenciados: validation.referenciados || [],
+    } : null,
+    retried,
+    retrySucceeded,
     tokensInput: response.usage?.input_tokens || 0,
     tokensOutput: response.usage?.output_tokens || 0,
     cacheReadTokens: response.usage?.cache_read_input_tokens || 0,

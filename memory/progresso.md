@@ -4,6 +4,42 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-04 — PR2 da migração v3: controle de preço via enum + retry single-shot (+ canário do PR1 perdido no squash)
+
+**Contexto:** PR1 mergeou em `b5e3c8f` mas o squash GitHub pegou só o commit inicial — os 2 commits adicionais aprovados (canário `TOOL_CALL_MULTIPLE` em [`cf68401`](https://github.com/johnnychaves/stronix-sdr/commit/cf68401) + comentário de dívida técnica em [`49b4e6b`](https://github.com/johnnychaves/stronix-sdr/commit/49b4e6b)) ficaram fora de main. Bundle no PR2 (decisão do dono — opção A) re-aplica os 3 deliverables + adiciona escopo PR2 (validador de preço).
+
+**Causa raiz endereçada (PR2):** Sonnet às vezes inventa valor fora da tabela oficial — sintoma reportado pelo dono. Detectors do PR37 contavam mas não bloqueavam. Cross-plan confusion ("Pilates Flex R$199" quando pilates_flex é R$319) passava silenciosamente.
+
+**Implementação (3 arquivos novos, ~480 LOC; 4 modificados, ~280 LOC delta):**
+
+Novos:
+- [src/v3-validators.js](../src/v3-validators.js) (~210 LOC): `parsePlanosFromModule(content)` extrai `{plano_id: {price, modalidade, plano_nome}}` do markdown do módulo `planos_e_precos` (regex regular: header de modalidade + linhas `- Plano <Nome>: R$<valor>/mês`). `getPlanosCanonicos()` lê do DB. `validatePrecosNaMensagem({mensagem, planosReferenciados, planoPrecos})` cruza valores ≥R$50 com preços referenciados ±5% — retorna `{valid, reason, mismatches, valoresEncontrados, referenciados}`. `buildRetryHint(validation, planoPrecos)` gera string que vai como `tool_result is_error=true` no retry — inclui valor citado + esperado + tabela completa.
+- [scripts/test-v3-validators.js](../scripts/test-v3-validators.js) (~210 LOC, **72/72 passando**): cobre normalizeId, planoNomeToSuffix, parser real e malformado, isWithinTolerance (±5%), validator caso feliz e 3 reasons de falha (referencia_vazia, plano_id_sem_preco, valor_nao_bate), null safety, retry hint generator.
+- [scripts/smoke-v3-e2e.js](../scripts/smoke-v3-e2e.js) (~140 LOC): 2 cenários reais contra Anthropic. Cenário 1 (PR1 baseline — defletor sem preço). Cenário 2 (PR2 — `apresentacao_planos` + `insistencias_valor=3` força citação de preços).
+
+Modificados:
+- [src/v3-tools.js](../src/v3-tools.js): adiciona campo `planos_referenciados: array<enum>` no input_schema (enum dinâmico via parâmetro `planoIds` em `buildToolDefinition({planoIds})`). Fallback `DEFAULT_PLANO_IDS` quando parser falha. `toolInputToParsed` ganha 8ª key `planosReferenciados` (filtra strings não-vazias). Novos exports: `findAllToolUseBlocks`, `extractToolUseId`, `DEFAULT_PLANO_IDS`. Addendum atualizado com regra do `planos_referenciados`.
+- [src/agent-v3.js](../src/agent-v3.js): nova função `generateAndValidate(callOptions, fromPhone)` faz call → valida → retry idiomático via `tool_result` se inválido → valida de novo → escolhe versão final (call 2 se sucesso, call 1 se ambas falharem). Loga `PRECO_FORA_REFERENCIA_V3`, `RETRY_V3`, `TOOL_CALL_MULTIPLE`. Re-adiciona canário (perdido no squash) + comentário de dívida técnica sobre duplicação de `buildDynamicContext`/`isOutsideBusinessHours`. `replyV3Inner` e `simulateReplyV3` ambos usam `generateAndValidate` (paridade prod/playground).
+- [src/db.js](../src/db.js): novos `V2_EVENT_TYPES.TOOL_CALL_MULTIPLE` (PR1, perdido no squash), `PRECO_FORA_REFERENCIA_V3`, `RETRY_V3`.
+
+**Reuso integral (zero linha mudada):**
+- `src/router-v2.js`, `src/persona-v2.js`, `src/prompt-nucleo-v2.js`, `src/resumo-dinamico.js`, `src/v2-detectors.js` (validador de PR2 reusa `extractMoneyValues`)
+- `src/agent-v2.js` (em modo manutenção desde PR1)
+
+**Suite total: 387/387** (276 prévios + 126 schema + 72 validators + 56 persona). Zero regressão. Smoke E2E PASS em 2/2 cenários (custo $0.05 USD aprox.).
+
+**Validação no smoke real (cenário 2):**
+- Modelo citou: R$199, R$99, R$149, R$99, R$109 (5 valores)
+- Modelo declarou: `planos_referenciados = [musculacao_flex, musculacao_no_limit, musculacao_clube, matricula]`
+- Validador cruzou: 199≈musc_flex(199) ✓, 99≈matricula(99) ✓ (×2), 149≈musc_no_limit(149) ✓, 109≈musc_clube(109) ✓
+- 5/5 aprovado. Validação por construção funciona como projetado.
+
+**Política de flag mantida:** `AGENT_VERSION=v2` continua default em produção. v3 opt-in via env Railway ou DB override. v2 em modo manutenção (só fix de bug crítico). Pré-requisito firme antes de rollout v3 segue: smoke do dono no playground v3, 5-10 cenários reais, 60+ min mínimo.
+
+**Próximo PR:** PR3 — Monitor v3 + comparação v2 × v3 lado a lado.
+
+---
+
 ## 2026-05-04 — PR1 da migração v3: tool use forçado paralelo a v2 (fundação)
 
 **Contexto:** Sonnet esquece a tag `[ESTADO:...]` em 60-80% das baterias E.1/E.2_EXT do v2 (medido em PR36 × 5 runs). Sintoma derivado: respostas longas chegam ao lead sem o backend saber que o estado mudou. Solução estrutural — migrar canal de sinalização de tags em texto livre pra tool use forçada da Anthropic, eliminando a possibilidade do modelo "esquecer".

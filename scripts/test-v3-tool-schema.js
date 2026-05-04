@@ -11,8 +11,11 @@ const {
   DISPONIBILIDADES,
   OBJECOES,
   MODULOS,
+  DEFAULT_PLANO_IDS,
   buildToolDefinition,
+  findAllToolUseBlocks,
   extractToolInput,
+  extractToolUseId,
   toolInputToParsed,
   sanitizeMensagem,
   ADDENDUM_V3,
@@ -93,6 +96,34 @@ assert(
 
 assert(typeof ADDENDUM_V3 === 'string' && ADDENDUM_V3.includes('responder_ao_lead'), 'ADDENDUM_V3 menciona o nome da tool');
 assert(ADDENDUM_V3.includes('NÃO escreva'), 'ADDENDUM_V3 instrui a não emitir tags');
+assert(ADDENDUM_V3.includes('planos_referenciados'), 'ADDENDUM_V3 instrui sobre planos_referenciados (PR2)');
+
+// ─── PR2: planos_referenciados field ───
+assert(props.planos_referenciados, 'planos_referenciados existe no schema');
+assert(props.planos_referenciados.type === 'array', 'planos_referenciados é array');
+assert(props.planos_referenciados.items.type === 'string', 'items são string');
+assert(Array.isArray(props.planos_referenciados.items.enum), 'items.enum é array');
+assert(props.planos_referenciados.items.enum.length >= 9, 'enum tem pelo menos 9 plano_ids (default fallback)');
+assert(!tool.input_schema.required.includes('planos_referenciados'), 'planos_referenciados NÃO é required (default [])');
+
+// DEFAULT_PLANO_IDS (fallback quando parser falha)
+assert(Array.isArray(DEFAULT_PLANO_IDS), 'DEFAULT_PLANO_IDS é array');
+assert(DEFAULT_PLANO_IDS.length === 10, 'DEFAULT_PLANO_IDS tem 10 entries (9 planos + matricula)');
+assert(DEFAULT_PLANO_IDS.includes('musculacao_flex'), 'DEFAULT inclui musculacao_flex');
+assert(DEFAULT_PLANO_IDS.includes('matricula'), 'DEFAULT inclui matricula');
+
+// buildToolDefinition aceita planoIds dinâmicos (caller injeta da DB)
+const customTool = buildToolDefinition({ planoIds: ['custom_a', 'custom_b'] });
+assert(customTool.input_schema.properties.planos_referenciados.items.enum.length === 2, 'planoIds custom respeitado');
+assert(customTool.input_schema.properties.planos_referenciados.items.enum.includes('custom_a'), 'enum tem custom_a');
+
+// planoIds vazio/undefined → fallback DEFAULT_PLANO_IDS
+const fallbackTool = buildToolDefinition({});
+assert(fallbackTool.input_schema.properties.planos_referenciados.items.enum.length === 10, 'planoIds undefined → fallback DEFAULT');
+const fallbackTool2 = buildToolDefinition({ planoIds: [] });
+assert(fallbackTool2.input_schema.properties.planos_referenciados.items.enum.length === 10, 'planoIds [] → fallback DEFAULT');
+const fallbackTool3 = buildToolDefinition({ planoIds: null });
+assert(fallbackTool3.input_schema.properties.planos_referenciados.items.enum.length === 10, 'planoIds null → fallback DEFAULT');
 
 // ─────────────────────────────────────────────────────────────────────
 // 3. EXTRACT TOOL INPUT — caminho feliz + edge cases
@@ -131,6 +162,46 @@ const mistura = {
   ],
 };
 assert(extractToolInput(mistura).mensagem_ao_lead === 'oi', 'extractToolInput pega tool_use mesmo com text block antes');
+
+// ─── findAllToolUseBlocks — canário pra detectar mudança de contrato Anthropic ───
+assert(findAllToolUseBlocks(null).length === 0, 'findAllToolUseBlocks null safe');
+assert(findAllToolUseBlocks({}).length === 0, 'findAllToolUseBlocks sem content é []');
+assert(findAllToolUseBlocks({ content: 'string' }).length === 0, 'findAllToolUseBlocks content não-array é []');
+assert(findAllToolUseBlocks({ content: [] }).length === 0, 'findAllToolUseBlocks content vazio é []');
+assert(
+  findAllToolUseBlocks({ content: [{ type: 'text', text: 'oi' }] }).length === 0,
+  'findAllToolUseBlocks ignora text blocks'
+);
+assert(findAllToolUseBlocks(happyResponse).length === 1, 'findAllToolUseBlocks retorna 1 no caminho feliz');
+assert(
+  findAllToolUseBlocks({ content: [{ type: 'tool_use', name: 'outra_tool', input: {} }] }).length === 0,
+  'findAllToolUseBlocks ignora tool com nome diferente'
+);
+
+// Cenário canário: API hipoteticamente retorna 2 tool_use (não deveria com disable_parallel_tool_use=true)
+const dois = {
+  content: [
+    { type: 'tool_use', name: TOOL_NAME, id: 'toolu_1', input: { estado_atual: {}, mensagem_ao_lead: 'primeiro' } },
+    { type: 'tool_use', name: TOOL_NAME, id: 'toolu_2', input: { estado_atual: {}, mensagem_ao_lead: 'segundo' } },
+  ],
+};
+assert(findAllToolUseBlocks(dois).length === 2, 'findAllToolUseBlocks pega os 2 quando API anômala retorna 2');
+assert(
+  extractToolInput(dois).mensagem_ao_lead === 'primeiro',
+  'extractToolInput pega o PRIMEIRO quando API retorna múltiplos'
+);
+assert(
+  extractToolUseId(dois) === 'toolu_1',
+  'extractToolUseId pega o ID do primeiro bloco (pra retry com tool_result)'
+);
+
+// extractToolUseId edge cases
+assert(extractToolUseId(null) === null, 'extractToolUseId null safe');
+assert(extractToolUseId({ content: [] }) === null, 'extractToolUseId sem tool_use é null');
+assert(
+  extractToolUseId({ content: [{ type: 'tool_use', name: TOOL_NAME, input: {} }] }) === null,
+  'extractToolUseId sem id é null'
+);
 
 // ─────────────────────────────────────────────────────────────────────
 // 4. TOOL INPUT → PARSED — conversão pro formato compat com agent-v2
@@ -249,6 +320,35 @@ for (const k of v2CompatKeys) {
 }
 assert('useAudio' in sample, 'parsed.useAudio existe (extra v3, derivado do bool)');
 assert('askingForAudio' in sample, 'parsed.askingForAudio existe (extra v3)');
+assert('planosReferenciados' in sample, 'parsed.planosReferenciados existe (PR2)');
+assert(Array.isArray(sample.planosReferenciados), 'planosReferenciados é array');
+assert(sample.planosReferenciados.length === 0, 'planosReferenciados default é []');
+
+// PR2: planos_referenciados parsing
+const comPlanos = toolInputToParsed({
+  estado_atual: { estagio: 'apresentacao_planos' },
+  mensagem_ao_lead: 'Flex R$199',
+  planos_referenciados: ['musculacao_flex', 'matricula'],
+});
+assert(comPlanos.planosReferenciados.length === 2, 'planos_referenciados → planosReferenciados (snake → camel)');
+assert(comPlanos.planosReferenciados.includes('musculacao_flex'), 'preserva valores');
+
+// Defesa: filtra entries não-string ou vazias
+const sujoArr = toolInputToParsed({
+  estado_atual: { estagio: 'qualificacao_inicial' },
+  mensagem_ao_lead: 'x',
+  planos_referenciados: ['valido', '', null, 123, '  '],
+});
+assert(sujoArr.planosReferenciados.length === 1, 'filtra strings vazias e tipos errados');
+assert(sujoArr.planosReferenciados[0] === 'valido', 'mantém só strings não-vazias');
+
+// planos_referenciados não-array → []
+const errado = toolInputToParsed({
+  estado_atual: { estagio: 'qualificacao_inicial' },
+  mensagem_ao_lead: 'x',
+  planos_referenciados: 'nao_eh_array',
+});
+assert(errado.planosReferenciados.length === 0, 'planos_referenciados não-array → []');
 
 // ─────────────────────────────────────────────────────────────────────
 console.log(`\n═══════════════════════════════════════════════════════════`);
