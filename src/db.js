@@ -1449,14 +1449,17 @@ function buildAcademiaInfoBlock() {
 
 // Tipos de evento conhecidos. Usado como contrato com agent-v2 e admin UI.
 const V2_EVENT_TYPES = {
-  TAG_ESQUECIDA: 'tag_esquecida',           // parser não achou [ESTADO:] na resposta
+  TAG_ESQUECIDA: 'tag_esquecida',           // parser não achou [ESTADO:] na resposta (v2)
   ROUTER_EMPTY: 'router_empty',             // routeModules() retornou []
   PRECO_INVENTADO: 'preco_inventado',       // bot mencionou preço fora do academia_info
   VALOR_ANTECIPADO: 'valor_antecipado',     // bot passou valor antes de insistencias_valor=3
-  CRASH: 'crash',                           // exception não tratada em replyV2
+  CRASH: 'crash',                           // exception não tratada em replyV2/replyV3
   VERSION_CHANGE: 'version_change',         // pausa/resume v2
   FORCE_RESUMO: 'force_resumo',             // admin forçou geração de resumo
-  TURN_OK: 'turn_ok',                       // turno completo sem flag — denominador pra %
+  TURN_OK: 'turn_ok',                       // turno v2 completo sem flag — denominador pra %
+  // PR1 da migração v3 — eventos pra Monitor diferenciar tráfego v2 × v3
+  TURN_OK_V3: 'turn_ok_v3',                 // turno v3 completo (denominador % v3)
+  TOOL_CALL_AUSENTE: 'tool_call_ausente',   // sanity v3: response sem bloco tool_use (não deveria com tool_choice forçado)
 };
 
 // Append-only log de eventos. Performance OK pra ~10k events/dia.

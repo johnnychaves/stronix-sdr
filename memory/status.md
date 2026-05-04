@@ -1,10 +1,18 @@
 # Status Atual do Projeto
 
-> Última atualização: 2026-05-03
+> Última atualização: 2026-05-04
 
-## Estado: Plataforma feature-complete em Baileys, aguardando troca pro número da academia ✅
+## Estado: PR1 do trilho v3 mergeado em modo paralelo. v2 continua default em produção, v3 opt-in.
 
-Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda: design WhatsApp Web completo, multi-agente, áudio bidirecional com player no painel, real-time via SSE, knowledge base editável, playground de testes, sistema de notificação. **Trocou de Meta Cloud API pra Baileys** pra remover restrição de janela 24h. Hoje rodando via número pessoal pra teste — próximo passo é desconectar e escanear QR com o número da academia (que tá no JetSales hoje).
+Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda. Em 2026-05-04, PR1 da migração v3 entra: tool use forçado da Anthropic (`responder_ao_lead`) substitui o canal de tags em texto livre. v3 paralelo a v2, opt-in via `AGENT_VERSION=v3`. v2 entra em modo manutenção até PR4 mergear ou v3 ser descartado.
+
+**Trilho v3:**
+- ✅ PR1 — Fundação (tool use forçado, single tool atomica, suite 278/278)
+- ⏳ PR2 — Controle de preço via enum em `planos_referenciados` + retry single-shot
+- ⏳ PR3 — Monitor v3 + comparação v2 × v3
+- ⏳ PR4 (condicional) — Promoção a default se técnica + comercial baterem na janela 50 conv / 14 dias
+
+**Pré-requisito firme antes de qualquer rollout v3:** smoke do dono no playground v3 — 5-10 cenários reais, 60+ min mínimo. Bateria automática não substitui.
 
 ---
 

@@ -809,6 +809,42 @@ router.post('/api/playground/v2/message', async (req, res) => {
   }
 });
 
+// Playground v3 — usa replyV3 (tool use forçado) isolado. Espelha v2 em
+// shape de request/response, adiciona `toolCallPresent` pro dono validar
+// que a tool foi mesmo chamada (deve ser sempre true com tool_choice forçado).
+// PR1 da migração v3 (2026-05-04). Pré-requisito do rollout: smoke do dono
+// 5-10 cenários, 60+ min mínimo.
+router.post('/api/playground/v3/message', async (req, res) => {
+  const { history, message, state } = req.body || {};
+  if (!message || typeof message !== 'string') return res.status(400).json({ error: 'message obrigatória' });
+  if (history && !Array.isArray(history)) return res.status(400).json({ error: 'history deve ser array' });
+  if (message.length > 2000) return res.status(400).json({ error: 'message muito longa' });
+  if (Array.isArray(history) && history.length > 50) return res.status(400).json({ error: 'history muito longo' });
+  try {
+    const { simulateReplyV3 } = require('./agent-v3');
+    const result = await simulateReplyV3(history || [], message, state || null);
+    res.json({
+      text: result.text,
+      state: result.state,
+      parsed: result.parsed,
+      toolCallPresent: result.toolCallPresent,
+      tokensInput: result.tokensInput,
+      tokensOutput: result.tokensOutput,
+      cacheReadTokens: result.cacheReadTokens,
+      cacheCreationTokens: result.cacheCreationTokens,
+      latencyMs: result.latencyMs,
+      estimatedCostUSD: (
+        (result.tokensInput - (result.cacheReadTokens || 0)) * 3 / 1_000_000 +
+        (result.cacheReadTokens || 0) * 0.30 / 1_000_000 +
+        (result.tokensOutput) * 15 / 1_000_000
+      ),
+    });
+  } catch (err) {
+    console.error('[playground v3] erro:', err.message);
+    res.status(500).json({ error: err.message || 'falha ao simular v3' });
+  }
+});
+
 // Playground — simulação de conversa sem efeitos colaterais (não toca DB de
 // conversas, não envia WhatsApp). Usa system prompt + knowledge base atuais.
 router.post('/api/playground/message', async (req, res) => {
@@ -4421,6 +4457,7 @@ router.get('/', (req, res) => {
     <div style="display:flex;gap:10px;align-items:center">
       <select id="pg-version" onchange="onPlaygroundVersionChange()" style="background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
         <option value="v2" selected>v2 (núcleo + módulos — em produção)</option>
+        <option value="v3">v3 (tool use forçado — em validação)</option>
         <option value="v1">v1 (prompt monolítico — fallback de emergência)</option>
       </select>
       <select id="pg-cenario" onchange="loadCenario()" style="background:var(--bg-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;display:none">
@@ -7172,7 +7209,8 @@ router.get('/', (req, res) => {
     playgroundVersion = sel ? sel.value : 'v1';
     const cenarioSel = document.getElementById('pg-cenario');
     const debug = document.getElementById('pg-debug');
-    if (playgroundVersion === 'v2') {
+    // v2 e v3 expõem state simulado + cenários (mesmo shape de UI). v1 esconde.
+    if (playgroundVersion === 'v2' || playgroundVersion === 'v3') {
       if (cenarioSel) cenarioSel.style.display = '';
       if (debug) debug.classList.remove('hidden');
     } else {
@@ -7263,10 +7301,17 @@ router.get('/', (req, res) => {
     thread.scrollTop = thread.scrollHeight;
 
     try {
-      const endpoint = playgroundVersion === 'v2' ? '/admin/api/playground/v2/message' : '/admin/api/playground/message';
-      const body = playgroundVersion === 'v2'
-        ? { history: playgroundHistory, message: text, state: playgroundState }
-        : { history: playgroundHistory, message: text };
+      let endpoint, body;
+      if (playgroundVersion === 'v3') {
+        endpoint = '/admin/api/playground/v3/message';
+        body = { history: playgroundHistory, message: text, state: playgroundState };
+      } else if (playgroundVersion === 'v2') {
+        endpoint = '/admin/api/playground/v2/message';
+        body = { history: playgroundHistory, message: text, state: playgroundState };
+      } else {
+        endpoint = '/admin/api/playground/message';
+        body = { history: playgroundHistory, message: text };
+      }
       const r = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -7288,8 +7333,8 @@ router.get('/', (req, res) => {
       thread.appendChild(aiBubble);
       playgroundHistory.push({ role: 'user', content: text });
       playgroundHistory.push({ role: 'assistant', content: data.text });
-      // v2 retorna estado novo
-      if (playgroundVersion === 'v2' && data.state) {
+      // v2 e v3 retornam estado novo (state simulado em memória)
+      if ((playgroundVersion === 'v2' || playgroundVersion === 'v3') && data.state) {
         playgroundState = data.state;
         renderPlaygroundDebug();
       }

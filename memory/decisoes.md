@@ -4,6 +4,48 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-04 — Migração v3: tool use forçado da Anthropic (PR1 — fundação paralela a v2)
+
+**Decisão:** Construir `replyV3()` paralelo a `replyV2()` ([src/agent-v3.js](../src/agent-v3.js)) usando `tool_choice: { type: "tool", name: "responder_ao_lead", disable_parallel_tool_use: true }` no lugar das tags em texto livre (`[ESTADO:...]`, `[MODULO_REQUERIDO:...]`, etc.). Default código permanece `'v2'`. v3 é opt-in via `AGENT_VERSION=v3` (env Railway) ou override em DB.
+
+**Causa raiz endereçada:** Sonnet esquece a tag `[ESTADO:]` em 60-80% das baterias E.1/E.2_EXT (medido em PR36 × 5 runs). Tag em texto é OPCIONAL pra API — modelo pode esquecer. Tool use forçado é OBRIGATÓRIO por design da Anthropic — modelo não pode terminar a resposta sem chamar a tool.
+
+**Por quê single tool atomica em vez das 3 propostas pelo sócio (`update_lead_state`, `apresentar_planos`, `responder_lead`):**
+- Atomicidade: estado novo + mensagem ao lead saem JUNTOS no mesmo input. Impossível ter um sem o outro.
+- Latência: single call vs multi-step orquestrado.
+- Coerência: schema do `responder_ao_lead` espelha 1-pra-1 o `lead_state` do v2 (mesmos enums, mesmos valores). Mapeamento mecânico.
+- 3 tools fariam sentido se houvesse turnos com ações disjuntas (atualizar estado SEM mandar mensagem). Não é o caso aqui — todo turno faz as duas coisas.
+
+**Por quê Sonnet 4.5 mantido (não 4.6) no PR1:**
+- Isolar a variável estrutura (tool use) da variável modelo. Se v3 tiver problema, sabemos que é a estrutura, não o modelo novo.
+- Sonnet 4.6 fica pra avaliação pós-PR4 em PR dedicado.
+
+**Por quê reusar prompt v2 + addendum curto em vez de reescrever:**
+- Prompt v2 de 38k chars está calibrado e validado em produção. Reescrever é alto risco.
+- Addendum (~700 chars, [src/v3-tools.js](../src/v3-tools.js) `ADDENDUM_V3`) instrui o modelo a usar a tool e NÃO emitir tags em texto. Reescrita só pós-PR4 com evidência de que o prompt confunde tool use.
+
+**Por quê NÃO tocar agent-v2.js no PR1 (re-implementei `buildDynamicContext` e `isOutsideBusinessHours` em v3):**
+- v2 entra em modo manutenção até PR4 mergear ou v3 ser descartado. Decisão do sócio: "só fix de bug crítico" durante a janela de validação v3.
+- Re-implementação custou ~25 LOC (DRY violation aceito) — alternativa seria expor mais helpers do v2 (ainda é mudança em arquivo congelado).
+
+**Por quê adicionar event_types `TURN_OK_V3` e `TOOL_CALL_AUSENTE` em [src/db.js](../src/db.js) já no PR1:**
+- Necessário pra Monitor (PR3) diferenciar tráfego v2 × v3. Sem isso, `TURN_OK` mistura os dois e perde-se a leitura por versão.
+- `TOOL_CALL_AUSENTE` é sanity check: com `tool_choice` forçado, response sem `tool_use` block não deveria acontecer. Se acontecer, log + fallback genérico pro lead. Esperado: 0 ocorrências em produção.
+
+**Pré-requisitos pro rollout v3 (acordado com o sócio):**
+1. Smoke do dono no playground v3: 5-10 cenários reais, 60+ min mínimo. **Pré-requisito firme**, sem exceção. Bateria automática não substitui.
+2. Bateria E.1/E.2_EXT × 5 runs em v3 com `tag_esquecida=0%` (esperado por design).
+3. Critério comercial decisivo na promoção (PR4): taxa de agendamento v3 ≥ taxa v2 na mesma janela. Técnica perfeita não promove se conversão cair.
+
+**Reuso intencional zero-mudança:**
+- [src/router-v2.js](../src/router-v2.js) — roteador determinístico (regex), independente de canal de saída
+- [src/persona-v2.js](../src/persona-v2.js) — assembleNucleoV2 usado igual no v3
+- [src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js) — núcleo cacheado idêntico
+- [src/resumo-dinamico.js](../src/resumo-dinamico.js) — Haiku 4.5 fire-and-forget continua igual
+- [src/v2-detectors.js](../src/v2-detectors.js) — viram defesa em profundidade no v3
+
+---
+
 ## 2026-05-03 — Persona da marca: edita TOM via slots, núcleo continua imutável
 
 **Decisão:** Adicionar layer "persona" entre o núcleo (template estrutural) e o prompt final pro Claude. Persona tem 4 slots seguros — `abertura`, `giriasQuentes`, `giriasProibidas`, `frasesProibidasExtra` — substituídos via placeholder no template ([src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js)) por `assembleNucleoV2(persona)` em [src/persona-v2.js](../src/persona-v2.js).
