@@ -51,6 +51,9 @@ const DEFAULT_PERSONA = Object.freeze({
   // Admin customiza só o JEITO de defletir.
   defletorValor1: 'Claro, já chegamos lá. Mas antes me conta...',
   defletorValor2: 'Bem rapidinho antes...',
+  // Em qual insistência passa valor: 1 (imediato), 2 (após 1 defletor), 3 (atual — após 2 defletores).
+  // Range 1-5. Defletor 2 só aparece se passa em 3+.
+  passaValorEmInsistencia: 3,
   giriasQuentes: [
     'Bah',
     'Que legal',
@@ -84,6 +87,8 @@ const LIMITS = {
   BINARIA_MAX: 200,
   ITEM_MAX: 200,
   LIST_MAX_ITEMS: 30,
+  PASSA_VALOR_MIN: 1,
+  PASSA_VALOR_MAX: 5,
 };
 
 function asString(val, fallback, maxLen) {
@@ -91,6 +96,12 @@ function asString(val, fallback, maxLen) {
   const t = val.trim();
   if (!t) return fallback;
   return t.slice(0, maxLen || LIMITS.ABERTURA_MAX);
+}
+
+function asInt(val, fallback, min, max) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
 }
 
 function asStringList(val, fallback) {
@@ -121,6 +132,7 @@ function mergeWithDefaults(personaPartial) {
     binariaHora: asString(p.binariaHora, DEFAULT_PERSONA.binariaHora, LIMITS.BINARIA_MAX),
     defletorValor1: asString(p.defletorValor1, DEFAULT_PERSONA.defletorValor1, LIMITS.BINARIA_MAX),
     defletorValor2: asString(p.defletorValor2, DEFAULT_PERSONA.defletorValor2, LIMITS.BINARIA_MAX),
+    passaValorEmInsistencia: asInt(p.passaValorEmInsistencia, DEFAULT_PERSONA.passaValorEmInsistencia, LIMITS.PASSA_VALOR_MIN, LIMITS.PASSA_VALOR_MAX),
     giriasQuentes: asStringList(p.giriasQuentes, DEFAULT_PERSONA.giriasQuentes.slice()),
     giriasProibidas: asStringList(p.giriasProibidas, DEFAULT_PERSONA.giriasProibidas.slice()),
     frasesProibidasExtra: asStringList(p.frasesProibidasExtra, DEFAULT_PERSONA.frasesProibidasExtra.slice()),
@@ -138,6 +150,32 @@ function formatQuotedList(items) {
 function buildFrasesProibidasExtraBlock(items) {
   if (!items || !items.length) return '';
   return `\n- PROIBIDO TAMBÉM (frases extras da marca): ${formatQuotedList(items)}.`;
+}
+
+// Constrói o bloco da REGRA DOS VALORES baseado em N (passa em qual insistência).
+// N=1: passa imediato, sem defletores.
+// N=2: 1 defletor (defletorValor1), depois apresenta.
+// N=3 (default): 2 defletores, depois apresenta.
+// N=4 e N=5: defletor1 nas iniciais, defletor2 na penúltima, apresenta na N.
+function buildRegraDosValoresBlock(persona) {
+  const N = persona.passaValorEmInsistencia;
+  const apresenta = `→ estagio=apresentacao_planos. Peça [MODULO_REQUERIDO:planos_e_precos]. Apresente do MAIS CARO pro MAIS BARATO.`;
+  const lines = [];
+  if (N === 1) {
+    lines.push(`- insistencias_valor=1 ${apresenta}`);
+  } else if (N === 2) {
+    lines.push(`- insistencias_valor=1 → "${persona.defletorValor1}" + pergunta da fase atual.`);
+    lines.push(`- insistencias_valor=2 ${apresenta}`);
+  } else {
+    // N >= 3: defletor1 nas primeiras (N-2), defletor2 na (N-1), apresenta na N.
+    for (let i = 1; i <= N - 2; i++) {
+      lines.push(`- insistencias_valor=${i} → "${persona.defletorValor1}" + pergunta da fase atual.`);
+    }
+    lines.push(`- insistencias_valor=${N - 1} → "${persona.defletorValor2}" + drill da fase atual.`);
+    lines.push(`- insistencias_valor=${N} ${apresenta}`);
+  }
+  lines.push(`- Lead RESPONDEU as perguntas E NUNCA REPETIU pedido de valor? NÃO PASSE VALOR. Continue o roteiro.`);
+  return lines.join('\n');
 }
 
 // ─── ASSEMBLE ───
@@ -159,8 +197,8 @@ function assembleNucleoV2(personaPartial) {
     .replace(/\{\{PERSONA_BINARIA_TURNO\}\}/g, persona.binariaTurno)
     .replace(/\{\{PERSONA_BINARIA_DIA\}\}/g, persona.binariaDia)
     .replace(/\{\{PERSONA_BINARIA_HORA\}\}/g, persona.binariaHora)
-    .replace(/\{\{PERSONA_DEFLETOR_VALOR_1\}\}/g, persona.defletorValor1)
-    .replace(/\{\{PERSONA_DEFLETOR_VALOR_2\}\}/g, persona.defletorValor2)
+    .replace(/\{\{PERSONA_REGRA_VALORES_BLOCK\}\}/g, buildRegraDosValoresBlock(persona))
+    .replace(/\{\{PERSONA_PASSA_VALOR_EM\}\}/g, String(persona.passaValorEmInsistencia))
     .replace(/\{\{PERSONA_GIRIAS_QUENTES\}\}/g, formatQuotedList(persona.giriasQuentes))
     .replace(/\{\{PERSONA_GIRIAS_PROIBIDAS\}\}/g, formatQuotedList(persona.giriasProibidas))
     .replace(/\{\{PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK\}\}/g, buildFrasesProibidasExtraBlock(persona.frasesProibidasExtra));
