@@ -170,12 +170,14 @@ db.exec(`
 
 // Seed inicial do academia_info — só insere se ainda não existir.
 // Chaves cobrem o que aparece com mais frequência em conversas de lead.
+//
+// IMPORTANTE: Preços de planos NÃO ficam aqui. Single source of truth =
+// módulos do prompt (Configurações → Módulos do prompt → planos_e_precos).
+// Os 4 campos antigos (plano_mensal_valor / plano_trimestral_valor /
+// plano_anual_valor / plano_observacoes) foram removidos pra evitar
+// conflito com o módulo. Migração defensiva abaixo apaga os campos do DB
+// existente SE estiverem vazios (preserva data se admin já preencheu).
 const ACADEMIA_INFO_SEED = [
-  // Planos
-  { key: 'plano_mensal_valor',      label: 'Plano Mensal — valor',      category: 'planos',      order: 1, description: 'Ex: R$ 149,90/mês' },
-  { key: 'plano_trimestral_valor',  label: 'Plano Trimestral — valor',  category: 'planos',      order: 2, description: 'Ex: R$ 119,90/mês' },
-  { key: 'plano_anual_valor',       label: 'Plano Anual — valor',       category: 'planos',      order: 3, description: 'Ex: R$ 99,90/mês' },
-  { key: 'plano_observacoes',       label: 'Observações sobre planos',  category: 'planos',      order: 4, description: 'Cancelamento, fidelidade, etc.' },
   // Modalidades & estrutura
   { key: 'modalidades',             label: 'Modalidades oferecidas',    category: 'estrutura',   order: 1, description: 'Ex: Musculação, Cross Functional, Pilates, Spinning' },
   { key: 'professores_destaque',    label: 'Professores em destaque',   category: 'estrutura',   order: 2, description: 'Nomes que vale mencionar quando lead pergunta' },
@@ -201,6 +203,21 @@ const seedStmt = db.prepare(`
 const seedNow = Date.now();
 for (const r of ACADEMIA_INFO_SEED) {
   seedStmt.run(r.key, r.label, r.description, r.category, r.order, seedNow);
+}
+
+// Migração one-shot: remove campos antigos de preço de planos do
+// academia_info SE estiverem vazios. Source of truth pra preço passou pra
+// módulos do prompt (planos_e_precos). Se admin já preencheu manualmente,
+// preserva — usuário avisado que os campos não estão mais sendo usados.
+const OBSOLETE_PRECO_KEYS = ['plano_mensal_valor', 'plano_trimestral_valor', 'plano_anual_valor', 'plano_observacoes'];
+const deleteEmptyStmt = db.prepare(`DELETE FROM academia_info WHERE key = ? AND (value IS NULL OR value = '')`);
+let removedCount = 0;
+for (const k of OBSOLETE_PRECO_KEYS) {
+  const r = deleteEmptyStmt.run(k);
+  if (r.changes > 0) removedCount++;
+}
+if (removedCount > 0) {
+  console.log(`[db] migração: ${removedCount} campo(s) obsoleto(s) de preço removido(s) do academia_info (source of truth = módulos do prompt)`);
 }
 
 // Migração: adiciona scheduled_hour em bancos que já existiam antes dessa coluna
