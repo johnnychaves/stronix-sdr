@@ -4154,20 +4154,26 @@ router.get('/', (req, res) => {
       <input type="text" id="ac-persona-binaria-hora" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Tem 9h ou 10h, qual prefere?">
     </div>
 
-    <h3 class="agente-section-title" style="margin-top:24px;font-size:13px;border-top:1px solid var(--border-subtle);padding-top:18px">🔁 Defletores quando lead pede valor</h3>
+    <h3 class="agente-section-title" style="margin-top:24px;font-size:13px;border-top:1px solid var(--border-subtle);padding-top:18px">🔁 Quando passar valor</h3>
     <div class="student-help" style="margin:0 0 14px;font-size:12px">
-      Quando o lead pede preço, a IA <strong>defletir 2x</strong> antes de passar valor (passa só na 3ª insistência — essa lógica é fixa). Aqui customiza o JEITO de defletir.
+      Define em qual insistência do lead a IA finalmente passa os preços. Antes disso, a IA defletir usando as frases abaixo. Default 3 (defletir 2x antes); muda pra 2 ou 1 se quer passar valor mais cedo.
     </div>
 
     <div class="persona-row">
-      <label class="persona-label" for="ac-persona-defletor-1">1ª insistência (defletor brando)</label>
-      <span class="persona-hint">Vem antes da pergunta da fase atual. Default: "Claro, já chegamos lá. Mas antes me conta..."</span>
+      <label class="persona-label" for="ac-persona-passa-valor-em">Passa valor na Nª insistência</label>
+      <span class="persona-hint">1 = passa imediato, sem defletor. 2 = 1 defletor antes. 3 = 2 defletores antes (default). Range 1-5.</span>
+      <input type="number" id="ac-persona-passa-valor-em" min="1" max="5" step="1" oninput="onPersonaChange()" style="width:80px;padding:7px 10px;background:var(--bg-3);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:14px;font-weight:600;text-align:center">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-defletor-1">Defletor brando (insistências iniciais)</label>
+      <span class="persona-hint">Vem antes da pergunta da fase atual. Aparece se passa valor &gt;= 2. Default: "Claro, já chegamos lá. Mas antes me conta..."</span>
       <input type="text" id="ac-persona-defletor-1" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Claro, já chegamos lá. Mas antes me conta...">
     </div>
 
     <div class="persona-row">
-      <label class="persona-label" for="ac-persona-defletor-2">2ª insistência (defletor + drill)</label>
-      <span class="persona-hint">Vem antes do drill da fase atual. Default: "Bem rapidinho antes..."</span>
+      <label class="persona-label" for="ac-persona-defletor-2">Defletor + drill (penúltima insistência)</label>
+      <span class="persona-hint">Vem antes do drill da fase atual. Só aparece se passa valor &gt;= 3. Default: "Bem rapidinho antes..."</span>
       <input type="text" id="ac-persona-defletor-2" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Bem rapidinho antes...">
     </div>
   </div>
@@ -6778,6 +6784,7 @@ router.get('/', (req, res) => {
         setVal('ac-persona-binaria-hora', p.binariaHora);
         setVal('ac-persona-defletor-1', p.defletorValor1);
         setVal('ac-persona-defletor-2', p.defletorValor2);
+        setVal('ac-persona-passa-valor-em', p.passaValorEmInsistencia);
         const elGq = document.getElementById('ac-persona-girias-quentes');
         const elGp = document.getElementById('ac-persona-girias-proibidas');
         const elFx = document.getElementById('ac-persona-frases-extra');
@@ -6827,6 +6834,7 @@ router.get('/', (req, res) => {
       binariaHora: getVal('ac-persona-binaria-hora'),
       defletorValor1: getVal('ac-persona-defletor-1'),
       defletorValor2: getVal('ac-persona-defletor-2'),
+      passaValorEmInsistencia: Number(getVal('ac-persona-passa-valor-em')) || 3,
       giriasQuentes: splitLines(elGq?.value),
       giriasProibidas: splitLines(elGp?.value),
       frasesProibidasExtra: splitLines(elFx?.value),

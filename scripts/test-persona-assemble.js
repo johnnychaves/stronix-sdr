@@ -76,8 +76,8 @@ test('NUCLEO_TEMPLATE contém placeholders {{PERSONA_*}}', () => {
     'PERSONA_BINARIA_TURNO',
     'PERSONA_BINARIA_DIA',
     'PERSONA_BINARIA_HORA',
-    'PERSONA_DEFLETOR_VALOR_1',
-    'PERSONA_DEFLETOR_VALOR_2',
+    'PERSONA_REGRA_VALORES_BLOCK',
+    'PERSONA_PASSA_VALOR_EM',
     'PERSONA_GIRIAS_QUENTES',
     'PERSONA_GIRIAS_PROIBIDAS',
     'PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK',
@@ -150,13 +150,13 @@ test('contém todas as 7 binárias do roteiro com defaults exatos', () => {
   }
 });
 
-test('contém defletores de valor com defaults exatos', () => {
+test('contém defletores de valor com defaults exatos (N=3 default)', () => {
   const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
   assert(out.includes('Claro, já chegamos lá. Mas antes me conta...'), 'defletorValor1 default ausente');
   assert(out.includes('Bem rapidinho antes...'), 'defletorValor2 default ausente');
 });
 
-test('custom defletores substituem hardcodes', () => {
+test('custom defletores substituem hardcodes (N=3)', () => {
   const out = personaModule.assembleNucleoV2({
     defletorValor1: 'Vamos chegar lá, mas antes me conta...',
     defletorValor2: 'Antes do valor, só uma última coisa rapidinha...',
@@ -165,6 +165,56 @@ test('custom defletores substituem hardcodes', () => {
   assert(out.includes('Antes do valor, só uma última coisa rapidinha...'), 'defletor2 custom ausente');
   assert(!out.includes('Claro, já chegamos lá'), 'defletor1 default ainda presente');
   assert(!out.includes('Bem rapidinho antes'), 'defletor2 default ainda presente');
+});
+
+// ─── Regra dos valores parametrizada por N ───
+console.log('\n3b. Regra dos valores parametrizada por passaValorEmInsistencia');
+
+test('N=1: passa imediato, sem defletores', () => {
+  const out = personaModule.assembleNucleoV2({ passaValorEmInsistencia: 1 });
+  assert(out.includes('insistencias_valor=1 → estagio=apresentacao_planos'), 'N=1 deveria ir direto pra apresentacao_planos');
+  assert(!out.includes('defletor'), 'N=1 não deveria mencionar defletores');
+  assert(!out.includes('Claro, já chegamos'), 'N=1 não deveria conter defletor1');
+  assert(!out.includes('Bem rapidinho'), 'N=1 não deveria conter defletor2');
+});
+
+test('N=2: 1 defletor (defletor1) antes de apresentar', () => {
+  const out = personaModule.assembleNucleoV2({ passaValorEmInsistencia: 2 });
+  assert(out.includes('insistencias_valor=1 → "Claro, já chegamos lá. Mas antes me conta..."'), 'N=2 deveria usar defletor1 na 1ª');
+  assert(out.includes('insistencias_valor=2 → estagio=apresentacao_planos'), 'N=2 deveria apresentar na 2ª');
+  assert(!out.includes('Bem rapidinho'), 'N=2 não deveria usar defletor2');
+});
+
+test('N=3 (default): 2 defletores antes de apresentar', () => {
+  const out = personaModule.assembleNucleoV2({ passaValorEmInsistencia: 3 });
+  assert(out.includes('insistencias_valor=1 → "Claro, já chegamos lá'), 'N=3 deveria usar defletor1 na 1ª');
+  assert(out.includes('insistencias_valor=2 → "Bem rapidinho antes..."'), 'N=3 deveria usar defletor2 na 2ª');
+  assert(out.includes('insistencias_valor=3 → estagio=apresentacao_planos'), 'N=3 deveria apresentar na 3ª');
+});
+
+test('N=5: defletor1 nas 3 iniciais, defletor2 na 4ª, apresenta na 5ª', () => {
+  const out = personaModule.assembleNucleoV2({ passaValorEmInsistencia: 5 });
+  assert(out.includes('insistencias_valor=1 → "Claro'), 'N=5: 1ª deveria usar defletor1');
+  assert(out.includes('insistencias_valor=2 → "Claro'), 'N=5: 2ª deveria usar defletor1');
+  assert(out.includes('insistencias_valor=3 → "Claro'), 'N=5: 3ª deveria usar defletor1');
+  assert(out.includes('insistencias_valor=4 → "Bem rapidinho'), 'N=5: 4ª deveria usar defletor2');
+  assert(out.includes('insistencias_valor=5 → estagio=apresentacao_planos'), 'N=5: 5ª deveria apresentar');
+});
+
+test('CHECAGEM FINAL menciona o N correto', () => {
+  const out2 = personaModule.assembleNucleoV2({ passaValorEmInsistencia: 2 });
+  assert(out2.includes('insistencias_valor=2?'), 'checagem final deveria mencionar insistencias_valor=2');
+  const out3 = personaModule.assembleNucleoV2({ passaValorEmInsistencia: 3 });
+  assert(out3.includes('insistencias_valor=3?'), 'checagem final deveria mencionar insistencias_valor=3');
+});
+
+test('passaValorEmInsistencia faz clamp no range 1-5', () => {
+  const m0 = personaModule.mergeWithDefaults({ passaValorEmInsistencia: 0 });
+  assert(m0.passaValorEmInsistencia === 1, `0 deveria virar 1, virou ${m0.passaValorEmInsistencia}`);
+  const m100 = personaModule.mergeWithDefaults({ passaValorEmInsistencia: 100 });
+  assert(m100.passaValorEmInsistencia === 5, `100 deveria virar 5, virou ${m100.passaValorEmInsistencia}`);
+  const mNan = personaModule.mergeWithDefaults({ passaValorEmInsistencia: 'abc' });
+  assert(mNan.passaValorEmInsistencia === 3, `string deveria cair pro default 3, virou ${mNan.passaValorEmInsistencia}`);
 });
 
 test('contém todas as gírias quentes do default', () => {
