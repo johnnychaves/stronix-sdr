@@ -1460,6 +1460,10 @@ const V2_EVENT_TYPES = {
   // PR1 da migração v3 — eventos pra Monitor diferenciar tráfego v2 × v3
   TURN_OK_V3: 'turn_ok_v3',                 // turno v3 completo (denominador % v3)
   TOOL_CALL_AUSENTE: 'tool_call_ausente',   // sanity v3: response sem bloco tool_use (não deveria com tool_choice forçado)
+  TOOL_CALL_MULTIPLE: 'tool_call_multiple', // canário v3: response com 2+ blocos tool_use (não deveria com disable_parallel_tool_use=true). Detecta mudança de contrato Anthropic antes de impactar prod.
+  // PR2 da migração v3 — controle de preço via enum em planos_referenciados
+  PRECO_FORA_REFERENCIA_V3: 'preco_fora_referencia_v3', // bot citou valor R$ que não bate ±5% com preço oficial dos planos referenciados
+  RETRY_V3: 'retry_v3',                     // call 2 (retry) acionada após PRECO_FORA_REFERENCIA_V3 na call 1
 };
 
 // Append-only log de eventos. Performance OK pra ~10k events/dia.

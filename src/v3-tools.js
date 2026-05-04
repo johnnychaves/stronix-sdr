@@ -43,13 +43,28 @@ const MODULOS = [
   'audio', 'tecnicas_persuasao',
 ];
 
+// PR2: lista canônica de plano_ids usada quando o parser dinâmico de
+// `prompt_modules.planos_e_precos` falhar. 9 planos × 3 modalidades + matricula.
+// Mantém o schema válido mesmo se o módulo for editado pra formato inválido.
+// Source of truth de PREÇOS: módulo (parsing dinâmico em src/v3-validators.js).
+const DEFAULT_PLANO_IDS = [
+  'musculacao_flex', 'musculacao_no_limit', 'musculacao_clube',
+  'pilates_flex', 'pilates_no_limit', 'pilates_clube',
+  'personalizado_flex', 'personalizado_no_limit', 'personalizado_clube',
+  'matricula',
+];
+
 const TOOL_NAME = 'responder_ao_lead';
 
 // ─────────────────────────────────────────────────────────────────────
 // TOOL DEFINITION — passada em `tools: [...]` na chamada Anthropic
 // ─────────────────────────────────────────────────────────────────────
 
-function buildToolDefinition() {
+// `planoIds`: lista dinâmica vinda do parser de `prompt_modules.planos_e_precos`
+// (src/v3-validators.js). Quando vazio/null, cai no DEFAULT_PLANO_IDS estático.
+// Caller (agent-v3.js) injeta a lista atual; tests passam mocks.
+function buildToolDefinition({ planoIds } = {}) {
+  const ids = Array.isArray(planoIds) && planoIds.length ? planoIds : DEFAULT_PLANO_IDS;
   return {
     name: TOOL_NAME,
     description:
@@ -146,6 +161,19 @@ function buildToolDefinition() {
             modalidade: { type: 'string' },
           },
         },
+        planos_referenciados: {
+          type: 'array',
+          description:
+            'IDs canônicos dos planos cujos VALORES MONETÁRIOS (R$) tu citou em `mensagem_ao_lead`. ' +
+            'Backend valida que cada valor ≥R$50 na mensagem bate ±5% com o preço oficial de algum plano referenciado. ' +
+            'Se omitir/usar [] e a mensagem tiver valor monetário, validação reprova e tu vais ter que regerar a resposta. ' +
+            'Use [] (default) quando NÃO mencionar nenhum valor monetário. ' +
+            'Quando citar matrícula (R$99) junto com plano(s), inclua "matricula" + os plano_ids.',
+          items: {
+            type: 'string',
+            enum: ids,
+          },
+        },
       },
     },
   };
@@ -169,6 +197,7 @@ REGRAS DESTE MODO (sobrescrevem qualquer instrução de tag do prompt principal)
 • \`agendamento\` substitui [AGENDAMENTO:...] — preencha apenas quando confirmado.
 • \`responder_em_audio: true\` substitui o [AUDIO] no início da resposta.
 • \`pedir_audio_ao_lead: true\` substitui [PEDIR_AUDIO].
+• \`planos_referenciados\` (array de plano_ids): SEMPRE preencha quando \`mensagem_ao_lead\` mencionar valor monetário (R$). Liste o(s) plano_id(s) cujos preços tu citou. Backend valida que cada R$ na mensagem bate ±5% com o preço oficial dos planos referenciados — se errar, tu vais ter que regerar. Use [] (default) quando NÃO mencionar valor monetário.
 
 Todo o resto do prompt (regras de ouro, máquina de estado, persona, módulos) continua válido. Só muda o canal de saída.`;
 
@@ -176,15 +205,32 @@ Todo o resto do prompt (regras de ouro, máquina de estado, persona, módulos) c
 // EXTRAÇÃO + CONVERSÃO — tool_use → formato compatível com `parsed` do v2
 // ─────────────────────────────────────────────────────────────────────
 
-// Acha o bloco tool_use da response. Com tool_choice forçado + disable_parallel_tool_use,
-// deve haver exatamente 1. Retorna null se ausente (sanity check pra Monitor).
-function extractToolInput(response) {
-  if (!response || !Array.isArray(response.content)) return null;
-  const block = response.content.find(
+// Acha TODOS os blocos tool_use da response que matchem TOOL_NAME.
+// Com tool_choice forçado + disable_parallel_tool_use, a API garante exatamente 1.
+// Se vier 0, é sanity check (TOOL_CALL_AUSENTE). Se vier 2+, é canário de mudança
+// de contrato da Anthropic (TOOL_CALL_MULTIPLE) — quem chama deve logar pra Monitor
+// detectar regressão antes de impactar prod. Aceita response null/malformado.
+function findAllToolUseBlocks(response) {
+  if (!response || !Array.isArray(response.content)) return [];
+  return response.content.filter(
     b => b && b.type === 'tool_use' && b.name === TOOL_NAME
   );
-  if (!block || typeof block.input !== 'object' || block.input === null) return null;
-  return block.input;
+}
+
+// Pega o input do PRIMEIRO bloco tool_use. Retorna null se ausente.
+// Com a API garantindo 1 bloco único, "primeiro" === "único" em produção normal.
+function extractToolInput(response) {
+  const blocks = findAllToolUseBlocks(response);
+  if (!blocks.length) return null;
+  const first = blocks[0];
+  if (!first || typeof first.input !== 'object' || first.input === null) return null;
+  return first.input;
+}
+
+// Pega o ID do PRIMEIRO bloco tool_use (necessário pro retry com tool_result no PR2).
+function extractToolUseId(response) {
+  const blocks = findAllToolUseBlocks(response);
+  return blocks.length && typeof blocks[0].id === 'string' ? blocks[0].id : null;
 }
 
 // Sanitiza texto: remove tags antigas (defesa contra hábito do prompt v2) + em-dash.
@@ -214,6 +260,10 @@ function toolInputToParsed(input) {
     cleanText: '',
     useAudio: false,
     askingForAudio: false,
+    // PR2: 8ª key — IDs dos planos referenciados pelo bot. Usada por
+    // src/v3-validators.js pra cruzar com valores monetários da mensagem.
+    // Não vai pra computeStateUpdate (não é coluna do lead_state).
+    planosReferenciados: [],
   };
   if (!input || typeof input !== 'object') return out;
 
@@ -269,6 +319,12 @@ function toolInputToParsed(input) {
   out.useAudio = input.responder_em_audio === true;
   out.askingForAudio = input.pedir_audio_ao_lead === true;
 
+  if (Array.isArray(input.planos_referenciados)) {
+    out.planosReferenciados = input.planos_referenciados.filter(
+      s => typeof s === 'string' && s.trim().length > 0
+    );
+  }
+
   return out;
 }
 
@@ -280,8 +336,11 @@ module.exports = {
   DISPONIBILIDADES,
   OBJECOES,
   MODULOS,
+  DEFAULT_PLANO_IDS,
   buildToolDefinition,
+  findAllToolUseBlocks,
   extractToolInput,
+  extractToolUseId,
   toolInputToParsed,
   sanitizeMensagem,
   ADDENDUM_V3,

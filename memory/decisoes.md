@@ -4,6 +4,41 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-04 — Migração v3 PR2: controle de preço por construção via enum + retry single-shot
+
+**Decisão:** Adicionar campo `planos_referenciados: array<plano_id>` no input_schema da tool `responder_ao_lead`. Backend cruza valores monetários ≥R$50 na `mensagem_ao_lead` com os preços oficiais dos plano_ids referenciados (±5% tolerance). Se não bater, dispara 1 retry idiomático via `tool_result is_error=true` com hint corretivo + tabela completa de preços. Se segundo retry também falhar, log + envia resposta original (call 1).
+
+**Causa raiz endereçada:** Sonnet às vezes inventava valor de plano fora da tabela oficial em testes do dono (sintoma observado, sem baseline numérico). Detectors do PR37 ([src/v2-detectors.js](../src/v2-detectors.js)) só CONTAM, não bloqueiam. PR2 mata por construção: schema enum força declaração + validação cruzada captura cross-plan confusion (ex: "Pilates Flex R$199" — pilates_flex é R$319; v2 detector aprovava porque 199 está na tabela oficial; v3 reprova porque 199 ≠ pilates_flex).
+
+**Por quê single forced enum em vez de detector regex aprimorado:**
+- Detector é POST-FACTO: já gerou a mensagem errada, só conta pra Monitor.
+- Enum é CONSTRUTIVO: modelo declara qual plano está citando ANTES de mensagem ir pro lead. Backend valida + corrige via retry.
+- Detector não pega cross-plan (R$199 está na tabela mas é musculacao_flex, NÃO pilates_flex). Enum pega.
+
+**Por quê 1 retry máximo (não loop):**
+- Aprovado pelo dono explicitamente: "Falhou 2x → loga PRECO_FORA_REFERENCIA e segue com resposta original."
+- Loop infinito = risco de custo descontrolado + travar conversa. 1 retry é trade-off entre auto-correção e timeout.
+- Custo extra do retry: ~$0.01 USD por turno acionado (cache hit no segundo call). Aceitável.
+
+**Por quê tool_result is_error=true (idioma Anthropic) e não "regenerar do zero":**
+- Idioma canônico da Anthropic API. Modelo recebe mensagem de erro estruturada como contexto natural.
+- Reusa cache do system prompt + history (não invalida).
+- Modelo entende que precisa CORRIGIR (não inventar nova resposta). Hint inclui valores esperados + tabela completa pra reduzir ambiguidade.
+
+**Por quê plano_ids dinâmicos do módulo (não estáticos no código):**
+- Source of truth de PREÇO é o módulo `prompt_modules.planos_e_precos` desde PR61. Hardcode no código duplicaria fonte e drift.
+- Parser em [src/v3-validators.js](../src/v3-validators.js) `parsePlanosFromModule()` extrai `{plano_id: {price, modalidade, plano_nome}}` da string markdown do módulo.
+- Fallback estático `DEFAULT_PLANO_IDS` (10 entries) em [src/v3-tools.js](../src/v3-tools.js) cobre o caso do parser falhar (módulo deletado, formato inválido, etc.) — schema continua válido, validador pula validação (fail-safe).
+
+**Por quê +5% tolerance:**
+- Acomoda arredondamento ("199 ≈ 200") + LLM imprecisão.
+- Mesma constante usada em v2-detectors.js (`detectsPrecoInventado` linha 42 — `isLikelyDerivation`).
+- 5% no R$199 = ±R$10 (177-211). 199 vs 209 ainda passa. Valor "150" cobrado errado dispara.
+
+**Smoke E2E pré-merge confirmou:** com `estagio=apresentacao_planos` + `insistencias_valor=3`, modelo citou 5 valores (R$199, R$99, R$149, R$99, R$109) e declarou correctamente `planos_referenciados=[musculacao_flex, musculacao_no_limit, musculacao_clube, matricula]`. Validador aprovou 5/5. Cache hit no segundo cenário (cache_read=7115 tokens reaproveitado do primeiro).
+
+---
+
 ## 2026-05-04 — Migração v3: tool use forçado da Anthropic (PR1 — fundação paralela a v2)
 
 **Decisão:** Construir `replyV3()` paralelo a `replyV2()` ([src/agent-v3.js](../src/agent-v3.js)) usando `tool_choice: { type: "tool", name: "responder_ao_lead", disable_parallel_tool_use: true }` no lugar das tags em texto livre (`[ESTADO:...]`, `[MODULO_REQUERIDO:...]`, etc.). Default código permanece `'v2'`. v3 é opt-in via `AGENT_VERSION=v3` (env Railway) ou override em DB.
