@@ -176,15 +176,26 @@ Todo o resto do prompt (regras de ouro, máquina de estado, persona, módulos) c
 // EXTRAÇÃO + CONVERSÃO — tool_use → formato compatível com `parsed` do v2
 // ─────────────────────────────────────────────────────────────────────
 
-// Acha o bloco tool_use da response. Com tool_choice forçado + disable_parallel_tool_use,
-// deve haver exatamente 1. Retorna null se ausente (sanity check pra Monitor).
-function extractToolInput(response) {
-  if (!response || !Array.isArray(response.content)) return null;
-  const block = response.content.find(
+// Acha TODOS os blocos tool_use da response que matchem TOOL_NAME.
+// Com tool_choice forçado + disable_parallel_tool_use, a API garante exatamente 1.
+// Se vier 0, é sanity check (TOOL_CALL_AUSENTE). Se vier 2+, é canário de mudança
+// de contrato da Anthropic (TOOL_CALL_MULTIPLE) — quem chama deve logar pra Monitor
+// detectar regressão antes de impactar prod. Aceita response null/malformado.
+function findAllToolUseBlocks(response) {
+  if (!response || !Array.isArray(response.content)) return [];
+  return response.content.filter(
     b => b && b.type === 'tool_use' && b.name === TOOL_NAME
   );
-  if (!block || typeof block.input !== 'object' || block.input === null) return null;
-  return block.input;
+}
+
+// Pega o input do PRIMEIRO bloco tool_use. Retorna null se ausente.
+// Com a API garantindo 1 bloco único, "primeiro" === "único" em produção normal.
+function extractToolInput(response) {
+  const blocks = findAllToolUseBlocks(response);
+  if (!blocks.length) return null;
+  const first = blocks[0];
+  if (!first || typeof first.input !== 'object' || first.input === null) return null;
+  return first.input;
 }
 
 // Sanitiza texto: remove tags antigas (defesa contra hábito do prompt v2) + em-dash.
@@ -281,6 +292,7 @@ module.exports = {
   OBJECOES,
   MODULOS,
   buildToolDefinition,
+  findAllToolUseBlocks,
   extractToolInput,
   toolInputToParsed,
   sanitizeMensagem,

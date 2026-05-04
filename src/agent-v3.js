@@ -39,6 +39,7 @@ const {
 const {
   TOOL_NAME,
   buildToolDefinition,
+  findAllToolUseBlocks,
   extractToolInput,
   toolInputToParsed,
   ADDENDUM_V3,
@@ -187,7 +188,19 @@ async function replyV3Inner(from, text, { isAudio = false } = {}) {
     tool_choice: { type: 'tool', name: TOOL_NAME, disable_parallel_tool_use: true },
   });
 
-  // 11. Extrai tool_use → formato `parsed` compatível com lógica v2
+  // 11. Canário de contrato Anthropic: com tool_choice forçado + disable_parallel_tool_use
+  // a API garante exatamente 1 bloco tool_use. Se vier 2+, contrato mudou — log pra
+  // Monitor detectar antes de impactar produção. Pegamos o primeiro pra continuar.
+  const toolBlocks = findAllToolUseBlocks(response);
+  if (toolBlocks.length > 1) {
+    db.logV2Event(db.V2_EVENT_TYPES.TOOL_CALL_MULTIPLE, from, null, {
+      count: toolBlocks.length,
+      stop_reason: response.stop_reason,
+      content_types: (response.content || []).map(b => b?.type).join(','),
+    });
+  }
+
+  // Extrai tool_use → formato `parsed` compatível com lógica v2
   const toolInput = extractToolInput(response);
   if (!toolInput) {
     // Sanity check: com tool_choice forçado, isso não deveria acontecer.

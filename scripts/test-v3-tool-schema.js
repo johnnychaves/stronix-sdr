@@ -12,6 +12,7 @@ const {
   OBJECOES,
   MODULOS,
   buildToolDefinition,
+  findAllToolUseBlocks,
   extractToolInput,
   toolInputToParsed,
   sanitizeMensagem,
@@ -131,6 +132,43 @@ const mistura = {
   ],
 };
 assert(extractToolInput(mistura).mensagem_ao_lead === 'oi', 'extractToolInput pega tool_use mesmo com text block antes');
+
+// ─── findAllToolUseBlocks — canário pra detectar mudança de contrato Anthropic ───
+assert(findAllToolUseBlocks(null).length === 0, 'findAllToolUseBlocks null safe (response null)');
+assert(findAllToolUseBlocks({}).length === 0, 'findAllToolUseBlocks sem content é []');
+assert(findAllToolUseBlocks({ content: 'string' }).length === 0, 'findAllToolUseBlocks content não-array é []');
+assert(findAllToolUseBlocks({ content: [] }).length === 0, 'findAllToolUseBlocks content vazio é []');
+assert(
+  findAllToolUseBlocks({ content: [{ type: 'text', text: 'oi' }] }).length === 0,
+  'findAllToolUseBlocks ignora text blocks'
+);
+assert(findAllToolUseBlocks(happyResponse).length === 1, 'findAllToolUseBlocks retorna 1 no caminho feliz');
+assert(
+  findAllToolUseBlocks({ content: [{ type: 'tool_use', name: 'outra_tool', input: {} }] }).length === 0,
+  'findAllToolUseBlocks ignora tool com nome diferente'
+);
+
+// Cenário canário: API hipoteticamente retorna 2 tool_use (não deveria com disable_parallel_tool_use=true)
+const dois = {
+  content: [
+    { type: 'tool_use', name: TOOL_NAME, input: { estado_atual: {}, mensagem_ao_lead: 'primeiro' } },
+    { type: 'tool_use', name: TOOL_NAME, input: { estado_atual: {}, mensagem_ao_lead: 'segundo' } },
+  ],
+};
+assert(findAllToolUseBlocks(dois).length === 2, 'findAllToolUseBlocks pega os 2 quando API anômala retorna 2');
+assert(
+  extractToolInput(dois).mensagem_ao_lead === 'primeiro',
+  'extractToolInput pega o PRIMEIRO quando API retorna múltiplos (canário acionado em separado)'
+);
+
+// Misto: 1 tool_use nosso + 1 tool_use com nome diferente (não deveria, mas defensivo)
+const misto = {
+  content: [
+    { type: 'tool_use', name: 'outra', input: {} },
+    { type: 'tool_use', name: TOOL_NAME, input: { estado_atual: {}, mensagem_ao_lead: 'meu' } },
+  ],
+};
+assert(findAllToolUseBlocks(misto).length === 1, 'findAllToolUseBlocks só conta blocos do TOOL_NAME');
 
 // ─────────────────────────────────────────────────────────────────────
 // 4. TOOL INPUT → PARSED — conversão pro formato compat com agent-v2

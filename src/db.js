@@ -1460,6 +1460,7 @@ const V2_EVENT_TYPES = {
   // PR1 da migração v3 — eventos pra Monitor diferenciar tráfego v2 × v3
   TURN_OK_V3: 'turn_ok_v3',                 // turno v3 completo (denominador % v3)
   TOOL_CALL_AUSENTE: 'tool_call_ausente',   // sanity v3: response sem bloco tool_use (não deveria com tool_choice forçado)
+  TOOL_CALL_MULTIPLE: 'tool_call_multiple', // canário v3: response com 2+ blocos tool_use (não deveria com disable_parallel_tool_use=true). Detecta mudança de contrato Anthropic antes de impactar prod.
 };
 
 // Append-only log de eventos. Performance OK pra ~10k events/dia.
