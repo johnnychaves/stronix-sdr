@@ -62,6 +62,11 @@ console.log('\n[test-persona-assemble] iniciando\n');
 // ─── 1. Default assemble ───
 console.log('1. Default assemble');
 test('NUCLEO_TEMPLATE contém placeholders {{PERSONA_*}}', () => {
+  assert(/\{\{PERSONA_NOME_AGENTE\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_AGENTE}}');
+  assert(/\{\{PERSONA_NOME_AGENTE_UPPER\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_AGENTE_UPPER}}');
+  assert(/\{\{PERSONA_NOME_NEGOCIO\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_NEGOCIO}}');
+  assert(/\{\{PERSONA_NOME_NEGOCIO_UPPER\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_NEGOCIO_UPPER}}');
+  assert(/\{\{PERSONA_DESCRICAO_JEITO\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_DESCRICAO_JEITO}}');
   assert(/\{\{PERSONA_ABERTURA\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_ABERTURA}}');
   assert(/\{\{PERSONA_GIRIAS_QUENTES\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_GIRIAS_QUENTES}}');
   assert(/\{\{PERSONA_GIRIAS_PROIBIDAS\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_GIRIAS_PROIBIDAS}}');
@@ -98,6 +103,22 @@ test('contém abertura "Opa beleza! Sou o Johnny da STRONIX"', () => {
   assert(out.includes('Opa beleza! Sou o Johnny da STRONIX'), 'abertura default ausente');
 });
 
+test('contém nomeAgente "Johnny" no quem-você-é', () => {
+  const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
+  assert(out.includes('Você é o Johnny'), 'nome do agente default ausente em "Você é o..."');
+});
+
+test('contém nomeNegocio "STRONIX" e versão UPPER', () => {
+  const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
+  assert(out.includes('STRONIX'), 'nome do negócio default ausente');
+  assert(out.includes('JOHNNY — STRONIX ACADEMIA'), 'header com UPPER ausente');
+});
+
+test('contém descricaoJeito default "genuíno, sério, direto..."', () => {
+  const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
+  assert(out.includes('genuíno, sério, direto, sem papo de vendedor'), 'descrição do jeito default ausente');
+});
+
 test('contém todas as gírias quentes do default', () => {
   const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
   for (const g of personaModule.DEFAULT_PERSONA.giriasQuentes) {
@@ -119,6 +140,29 @@ test('NÃO contém bloco "frases extras" quando lista vazia (default)', () => {
 
 // ─── 3. Custom persona ───
 console.log('\n3. Custom persona substitui corretamente');
+test('custom nomeAgente substitui Johnny em todas as ocorrências', () => {
+  const out = personaModule.assembleNucleoV2({ nomeAgente: 'Bruno' });
+  assert(out.includes('Você é o Bruno'), 'nome custom não substituiu em "Você é o..."');
+  assert(out.includes('Sou o Bruno da'), 'nome custom não substituiu na abertura do exemplo');
+  assert(out.includes('BRUNO —'), 'nome custom UPPER não apareceu no header');
+  assert(!out.includes('Você é o Johnny'), 'nome default ainda apareceu onde deveria ter sido substituído');
+});
+
+test('custom nomeNegocio substitui STRONIX em todas ocorrências relevantes', () => {
+  const out = personaModule.assembleNucleoV2({ nomeNegocio: 'TopFit' });
+  assert(out.includes('dono da TopFit'), 'nome do negócio custom não substituiu em "dono da..."');
+  assert(out.includes('assistente virtual da TopFit'), 'nome custom não substituiu no handoff IA');
+  assert(out.includes('TOPFIT'), 'nome custom UPPER não apareceu');
+});
+
+test('custom descricaoJeito substitui frase do jeito', () => {
+  const out = personaModule.assembleNucleoV2({
+    descricaoJeito: 'caloroso, próximo, jeito amigo de bairro'
+  });
+  assert(out.includes('caloroso, próximo, jeito amigo de bairro'), 'descrição custom não foi injetada');
+  assert(!out.includes('genuíno, sério, direto'), 'descrição default ainda presente quando deveria ter sumido');
+});
+
 test('custom abertura aparece na linha "ABERTURA PADRÃO" do núcleo', () => {
   const out = personaModule.assembleNucleoV2({
     abertura: 'E aí parça, tô na escuta!',
@@ -217,6 +261,59 @@ test('resetPersona() volta pro default', () => {
   personaModule.setPersona({ abertura: 'temp' });
   personaModule.resetPersona();
   assert(!personaModule.isPersonaCustom(), 'após reset, isCustom deveria ser false');
+});
+
+// ─── 5b. Snapshot / undo ───
+console.log('\n5b. Snapshot e undo (revertPersona)');
+test('hasPreviousPersona() é false sem save anterior', () => {
+  mockStorage = {};
+  assert(personaModule.hasPreviousPersona() === false, 'sem save anterior, deveria ser false');
+});
+
+test('save 1ª vez NÃO cria snapshot (não há custom anterior pra guardar)', () => {
+  mockStorage = {};
+  personaModule.setPersona({ nomeAgente: 'Bruno' });
+  assert(!personaModule.hasPreviousPersona(), '1º save sem custom anterior não deveria gerar snapshot');
+});
+
+test('save 2ª vez cria snapshot da 1ª save', () => {
+  mockStorage = {};
+  personaModule.setPersona({ nomeAgente: 'Bruno' });
+  personaModule.setPersona({ nomeAgente: 'Carlos' });
+  assert(personaModule.hasPreviousPersona(), '2º save deveria criar snapshot');
+  const prev = personaModule.getPreviousPersona();
+  assert(prev.nomeAgente === 'Bruno', `previous deveria ser Bruno, é "${prev.nomeAgente}"`);
+});
+
+test('revertPersona() troca current ↔ previous (undo de undo possível)', () => {
+  mockStorage = {};
+  personaModule.setPersona({ nomeAgente: 'Bruno' });
+  personaModule.setPersona({ nomeAgente: 'Carlos' });
+  // Atual: Carlos, anterior: Bruno
+  const reverted = personaModule.revertPersona();
+  assert(reverted.nomeAgente === 'Bruno', 'revert deveria voltar pro Bruno');
+  assert(personaModule.getPersona().nomeAgente === 'Bruno', 'persona atual deveria ser Bruno');
+  // Agora anterior deveria ser Carlos (undo de undo)
+  const prev = personaModule.getPreviousPersona();
+  assert(prev?.nomeAgente === 'Carlos', `previous após revert deveria ser Carlos, é "${prev?.nomeAgente}"`);
+});
+
+test('revertPersona() retorna null se não tem previous', () => {
+  mockStorage = {};
+  const result = personaModule.revertPersona();
+  assert(result === null, 'revert sem previous deveria retornar null');
+});
+
+test('resetPersona() preserva snapshot do custom anterior', () => {
+  mockStorage = {};
+  personaModule.setPersona({ nomeAgente: 'Bruno' });
+  personaModule.resetPersona();
+  assert(personaModule.hasPreviousPersona(), 'resetPersona deveria ter guardado snapshot do Bruno');
+  const prev = personaModule.getPreviousPersona();
+  assert(prev.nomeAgente === 'Bruno', 'previous após reset deveria ser Bruno');
+  // Revert depois do reset
+  const reverted = personaModule.revertPersona();
+  assert(reverted.nomeAgente === 'Bruno', 'revert pós-reset deveria trazer Bruno de volta');
 });
 
 // ─── 6. Estabilidade ───
