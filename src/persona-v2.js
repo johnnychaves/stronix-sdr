@@ -47,6 +47,10 @@ const DEFAULT_PERSONA = Object.freeze({
   binariaTurno: 'manhã ou final do dia?',
   binariaDia: 'Posso te encaixar terça ou quarta, qual rola pra ti?',
   binariaHora: 'Tem 9h ou 10h, qual prefere?',
+  // Defletores quando lead pede valor (lógica fica fixa: passa só na 3ª).
+  // Admin customiza só o JEITO de defletir.
+  defletorValor1: 'Claro, já chegamos lá. Mas antes me conta...',
+  defletorValor2: 'Bem rapidinho antes...',
   giriasQuentes: [
     'Bah',
     'Que legal',
@@ -115,6 +119,8 @@ function mergeWithDefaults(personaPartial) {
     binariaTurno: asString(p.binariaTurno, DEFAULT_PERSONA.binariaTurno, LIMITS.BINARIA_MAX),
     binariaDia: asString(p.binariaDia, DEFAULT_PERSONA.binariaDia, LIMITS.BINARIA_MAX),
     binariaHora: asString(p.binariaHora, DEFAULT_PERSONA.binariaHora, LIMITS.BINARIA_MAX),
+    defletorValor1: asString(p.defletorValor1, DEFAULT_PERSONA.defletorValor1, LIMITS.BINARIA_MAX),
+    defletorValor2: asString(p.defletorValor2, DEFAULT_PERSONA.defletorValor2, LIMITS.BINARIA_MAX),
     giriasQuentes: asStringList(p.giriasQuentes, DEFAULT_PERSONA.giriasQuentes.slice()),
     giriasProibidas: asStringList(p.giriasProibidas, DEFAULT_PERSONA.giriasProibidas.slice()),
     frasesProibidasExtra: asStringList(p.frasesProibidasExtra, DEFAULT_PERSONA.frasesProibidasExtra.slice()),
@@ -153,6 +159,8 @@ function assembleNucleoV2(personaPartial) {
     .replace(/\{\{PERSONA_BINARIA_TURNO\}\}/g, persona.binariaTurno)
     .replace(/\{\{PERSONA_BINARIA_DIA\}\}/g, persona.binariaDia)
     .replace(/\{\{PERSONA_BINARIA_HORA\}\}/g, persona.binariaHora)
+    .replace(/\{\{PERSONA_DEFLETOR_VALOR_1\}\}/g, persona.defletorValor1)
+    .replace(/\{\{PERSONA_DEFLETOR_VALOR_2\}\}/g, persona.defletorValor2)
     .replace(/\{\{PERSONA_GIRIAS_QUENTES\}\}/g, formatQuotedList(persona.giriasQuentes))
     .replace(/\{\{PERSONA_GIRIAS_PROIBIDAS\}\}/g, formatQuotedList(persona.giriasProibidas))
     .replace(/\{\{PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK\}\}/g, buildFrasesProibidasExtraBlock(persona.frasesProibidasExtra));

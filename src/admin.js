@@ -4153,6 +4153,23 @@ router.get('/', (req, res) => {
       <span class="persona-hint">Default: "Tem 9h ou 10h, qual prefere?"</span>
       <input type="text" id="ac-persona-binaria-hora" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Tem 9h ou 10h, qual prefere?">
     </div>
+
+    <h3 class="agente-section-title" style="margin-top:24px;font-size:13px;border-top:1px solid var(--border-subtle);padding-top:18px">🔁 Defletores quando lead pede valor</h3>
+    <div class="student-help" style="margin:0 0 14px;font-size:12px">
+      Quando o lead pede preço, a IA <strong>defletir 2x</strong> antes de passar valor (passa só na 3ª insistência — essa lógica é fixa). Aqui customiza o JEITO de defletir.
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-defletor-1">1ª insistência (defletor brando)</label>
+      <span class="persona-hint">Vem antes da pergunta da fase atual. Default: "Claro, já chegamos lá. Mas antes me conta..."</span>
+      <input type="text" id="ac-persona-defletor-1" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Claro, já chegamos lá. Mas antes me conta...">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-defletor-2">2ª insistência (defletor + drill)</label>
+      <span class="persona-hint">Vem antes do drill da fase atual. Default: "Bem rapidinho antes..."</span>
+      <input type="text" id="ac-persona-defletor-2" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Bem rapidinho antes...">
+    </div>
   </div>
 
   <!-- Aviso: pra editar o conteúdo do prompt, vai em Módulos do prompt -->
@@ -6759,6 +6776,8 @@ router.get('/', (req, res) => {
         setVal('ac-persona-binaria-turno', p.binariaTurno);
         setVal('ac-persona-binaria-dia', p.binariaDia);
         setVal('ac-persona-binaria-hora', p.binariaHora);
+        setVal('ac-persona-defletor-1', p.defletorValor1);
+        setVal('ac-persona-defletor-2', p.defletorValor2);
         const elGq = document.getElementById('ac-persona-girias-quentes');
         const elGp = document.getElementById('ac-persona-girias-proibidas');
         const elFx = document.getElementById('ac-persona-frases-extra');
@@ -6806,6 +6825,8 @@ router.get('/', (req, res) => {
       binariaTurno: getVal('ac-persona-binaria-turno'),
       binariaDia: getVal('ac-persona-binaria-dia'),
       binariaHora: getVal('ac-persona-binaria-hora'),
+      defletorValor1: getVal('ac-persona-defletor-1'),
+      defletorValor2: getVal('ac-persona-defletor-2'),
       giriasQuentes: splitLines(elGq?.value),
       giriasProibidas: splitLines(elGp?.value),
       frasesProibidasExtra: splitLines(elFx?.value),

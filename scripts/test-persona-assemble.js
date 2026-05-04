@@ -76,6 +76,8 @@ test('NUCLEO_TEMPLATE contém placeholders {{PERSONA_*}}', () => {
     'PERSONA_BINARIA_TURNO',
     'PERSONA_BINARIA_DIA',
     'PERSONA_BINARIA_HORA',
+    'PERSONA_DEFLETOR_VALOR_1',
+    'PERSONA_DEFLETOR_VALOR_2',
     'PERSONA_GIRIAS_QUENTES',
     'PERSONA_GIRIAS_PROIBIDAS',
     'PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK',
@@ -146,6 +148,23 @@ test('contém todas as 7 binárias do roteiro com defaults exatos', () => {
   for (const e of expected) {
     assert(out.includes(e), `binária default "${e}" ausente no assemble`);
   }
+});
+
+test('contém defletores de valor com defaults exatos', () => {
+  const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
+  assert(out.includes('Claro, já chegamos lá. Mas antes me conta...'), 'defletorValor1 default ausente');
+  assert(out.includes('Bem rapidinho antes...'), 'defletorValor2 default ausente');
+});
+
+test('custom defletores substituem hardcodes', () => {
+  const out = personaModule.assembleNucleoV2({
+    defletorValor1: 'Vamos chegar lá, mas antes me conta...',
+    defletorValor2: 'Antes do valor, só uma última coisa rapidinha...',
+  });
+  assert(out.includes('Vamos chegar lá, mas antes me conta...'), 'defletor1 custom ausente');
+  assert(out.includes('Antes do valor, só uma última coisa rapidinha...'), 'defletor2 custom ausente');
+  assert(!out.includes('Claro, já chegamos lá'), 'defletor1 default ainda presente');
+  assert(!out.includes('Bem rapidinho antes'), 'defletor2 default ainda presente');
 });
 
 test('contém todas as gírias quentes do default', () => {
