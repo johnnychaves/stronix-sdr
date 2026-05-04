@@ -4093,7 +4093,7 @@ router.get('/', (req, res) => {
       <br>
       <strong>❌ Não escreve:</strong> <code>"Se o lead pedir aula, oferece terça às 9h"</code> — isso é roteiro, fica no módulo <strong>fluxo_aula_experimental</strong>.
       <br>
-      <strong>❌ Não escreve:</strong> <code>"Nosso plano custa R$199"</code> — isso é conhecimento factual, vai em <strong>Configurações → Conhecimento</strong>.
+      <strong>❌ Não escreve:</strong> <code>"Nosso plano custa R$199"</code> — isso é conhecimento factual, vai em <strong>Configurações → Módulos do prompt → planos_e_precos</strong>.
     </div>
 
     <div class="persona-actions">
@@ -4182,7 +4182,7 @@ router.get('/', (req, res) => {
   <div class="agente-section">
     <h3 class="agente-section-title">📚 Editar conteúdo do agente</h3>
     <div class="student-help" style="margin:0">
-      O <strong>conteúdo do agente</strong> (regras de venda, knowledge base, objeções, situações) é editado em <strong>Configurações → Módulos do prompt</strong> (28 módulos sob demanda) e <strong>Configurações → Conhecimento</strong> (preços, horários, modalidades). Esse é o jeito oficial de personalizar o que o agente fala.
+      O <strong>conteúdo do agente</strong> (regras de venda, valores, objeções, situações) é editado em <strong>Configurações → Módulos do prompt</strong> (28 módulos — incluindo <code>planos_e_precos</code>, único lugar pra valores). Dados como horário, modalidades e promo do mês ficam em <strong>Configurações → Conhecimento</strong>.
     </div>
   </div>
 </div>
@@ -4405,8 +4405,10 @@ router.get('/', (req, res) => {
     <button class="refresh-btn" onclick="loadKnowledge()">↻ Atualizar</button>
   </div>
   <div class="student-help">
-    Edite aqui os <strong>dados que a IA usa</strong> nas conversas (planos, horários, modalidades, promo do mês). Mudança aqui aparece <strong>na próxima resposta da IA</strong> sem precisar mexer no prompt. Salva automático ao sair do campo.
+    Edite aqui os <strong>dados</strong> que a IA usa nas conversas (horários, modalidades, promo do mês, contato). Mudança aparece <strong>na próxima resposta da IA</strong> sem precisar mexer no prompt. Salva automático ao sair do campo.
     <br>Deixa o campo <strong>vazio</strong> pra a IA não mencionar aquela informação.
+    <br><br>
+    <strong>💰 Valores de planos NÃO ficam aqui.</strong> Pra editar preços, vai em <strong>Configurações → Módulos do prompt → planos_e_precos</strong>. Esse é o único lugar pra editar valores — evita conflito.
   </div>
   <div id="kb-list">
     <div class="skeleton-list"><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div></div>
