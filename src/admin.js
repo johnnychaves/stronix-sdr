@@ -4103,6 +4103,58 @@ router.get('/', (req, res) => {
     </div>
   </div>
 
+  <!-- Section: perguntas do roteiro (binárias) -->
+  <div class="agente-section">
+    <h3 class="agente-section-title">💬 Perguntas do roteiro</h3>
+    <div class="student-help" style="margin:0 0 14px">
+      Aqui ajusta <strong>como cada pergunta do roteiro é feita</strong>. A estrutura (qual pergunta vem em cada estágio) NÃO muda — só o jeito de abordar.
+      <br><br>
+      <strong>⚠️ Regra de ouro:</strong> mantém formato <strong>binário (A ou B)</strong>. Pergunta aberta tipo "qual seu objetivo?" quebra a qualificação porque o lead diverge.
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-binaria-treinando">1. Qualificação inicial — está treinando?</label>
+      <span class="persona-hint">Primeira binária, logo após a saudação. Default: "Tu tá treinando ou parado?"</span>
+      <input type="text" id="ac-persona-binaria-treinando" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Tu tá treinando ou parado?">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-binaria-objetivo">2. Qualificação do objetivo</label>
+      <span class="persona-hint">Default: "Mais resultado físico ou mais qualidade de vida no dia a dia?"</span>
+      <input type="text" id="ac-persona-binaria-objetivo" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Mais resultado físico ou mais qualidade de vida no dia a dia?">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-binaria-objetivo-drill">2.1 Drill se "resultado físico"</label>
+      <span class="persona-hint">Default: "ganhar massa ou emagrecer?"</span>
+      <input type="text" id="ac-persona-binaria-objetivo-drill" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: ganhar massa ou emagrecer?">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-binaria-nome">3. Captura de nome</label>
+      <span class="persona-hint">Não é binária — pergunta aberta de informação. Default: "A propósito, como é teu nome?"</span>
+      <input type="text" id="ac-persona-binaria-nome" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: A propósito, como é teu nome?">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-binaria-turno">4. Disponibilidade — turno</label>
+      <span class="persona-hint">Default: "manhã ou final do dia?"</span>
+      <input type="text" id="ac-persona-binaria-turno" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: manhã ou final do dia?">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-binaria-dia">5. Proposta de visita — dia</label>
+      <span class="persona-hint">Default: "Posso te encaixar terça ou quarta, qual rola pra ti?"</span>
+      <input type="text" id="ac-persona-binaria-dia" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Posso te encaixar terça ou quarta, qual rola pra ti?">
+    </div>
+
+    <div class="persona-row">
+      <label class="persona-label" for="ac-persona-binaria-hora">6. Drill de hora</label>
+      <span class="persona-hint">Default: "Tem 9h ou 10h, qual prefere?"</span>
+      <input type="text" id="ac-persona-binaria-hora" maxlength="200" oninput="onPersonaChange()" placeholder="Ex.: Tem 9h ou 10h, qual prefere?">
+    </div>
+  </div>
+
   <!-- Aviso: pra editar o conteúdo do prompt, vai em Módulos do prompt -->
   <div class="agente-section">
     <h3 class="agente-section-title">📚 Editar conteúdo do agente</h3>
@@ -6692,20 +6744,24 @@ router.get('/', (req, res) => {
       if (elMax) elMax.value = maxS;
       if (elBuf) elBuf.value = bufS;
 
-      // Persona — identidade e tom
+      // Persona — identidade, tom e perguntas do roteiro
       if (cfg.persona && cfg.persona.current) {
         const p = cfg.persona.current;
-        const elNa = document.getElementById('ac-persona-nome-agente');
-        const elNn = document.getElementById('ac-persona-nome-negocio');
-        const elDj = document.getElementById('ac-persona-descricao-jeito');
-        const elAb = document.getElementById('ac-persona-abertura');
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+        setVal('ac-persona-nome-agente', p.nomeAgente);
+        setVal('ac-persona-nome-negocio', p.nomeNegocio);
+        setVal('ac-persona-descricao-jeito', p.descricaoJeito);
+        setVal('ac-persona-abertura', p.abertura);
+        setVal('ac-persona-binaria-treinando', p.binariaTreinando);
+        setVal('ac-persona-binaria-objetivo', p.binariaObjetivo);
+        setVal('ac-persona-binaria-objetivo-drill', p.binariaObjetivoDrill);
+        setVal('ac-persona-binaria-nome', p.binariaNome);
+        setVal('ac-persona-binaria-turno', p.binariaTurno);
+        setVal('ac-persona-binaria-dia', p.binariaDia);
+        setVal('ac-persona-binaria-hora', p.binariaHora);
         const elGq = document.getElementById('ac-persona-girias-quentes');
         const elGp = document.getElementById('ac-persona-girias-proibidas');
         const elFx = document.getElementById('ac-persona-frases-extra');
-        if (elNa) elNa.value = p.nomeAgente || '';
-        if (elNn) elNn.value = p.nomeNegocio || '';
-        if (elDj) elDj.value = p.descricaoJeito || '';
-        if (elAb) elAb.value = p.abertura || '';
         if (elGq) elGq.value = (p.giriasQuentes || []).join('\\n');
         if (elGp) elGp.value = (p.giriasProibidas || []).join('\\n');
         if (elFx) elFx.value = (p.frasesProibidasExtra || []).join('\\n');
@@ -6733,19 +6789,23 @@ router.get('/', (req, res) => {
   }
 
   function readPersonaInputs() {
-    const elNa = document.getElementById('ac-persona-nome-agente');
-    const elNn = document.getElementById('ac-persona-nome-negocio');
-    const elDj = document.getElementById('ac-persona-descricao-jeito');
-    const elAb = document.getElementById('ac-persona-abertura');
+    const getVal = (id) => (document.getElementById(id)?.value || '').trim();
     const elGq = document.getElementById('ac-persona-girias-quentes');
     const elGp = document.getElementById('ac-persona-girias-proibidas');
     const elFx = document.getElementById('ac-persona-frases-extra');
     const splitLines = (s) => (s || '').split('\\n').map(x => x.trim()).filter(x => x.length > 0);
     return {
-      nomeAgente: (elNa?.value || '').trim(),
-      nomeNegocio: (elNn?.value || '').trim(),
-      descricaoJeito: (elDj?.value || '').trim(),
-      abertura: (elAb?.value || '').trim(),
+      nomeAgente: getVal('ac-persona-nome-agente'),
+      nomeNegocio: getVal('ac-persona-nome-negocio'),
+      descricaoJeito: getVal('ac-persona-descricao-jeito'),
+      abertura: getVal('ac-persona-abertura'),
+      binariaTreinando: getVal('ac-persona-binaria-treinando'),
+      binariaObjetivo: getVal('ac-persona-binaria-objetivo'),
+      binariaObjetivoDrill: getVal('ac-persona-binaria-objetivo-drill'),
+      binariaNome: getVal('ac-persona-binaria-nome'),
+      binariaTurno: getVal('ac-persona-binaria-turno'),
+      binariaDia: getVal('ac-persona-binaria-dia'),
+      binariaHora: getVal('ac-persona-binaria-hora'),
       giriasQuentes: splitLines(elGq?.value),
       giriasProibidas: splitLines(elGp?.value),
       frasesProibidasExtra: splitLines(elFx?.value),

@@ -38,6 +38,15 @@ const DEFAULT_PERSONA = Object.freeze({
   nomeNegocio: 'STRONIX',
   descricaoJeito: 'genuíno, sério, direto, sem papo de vendedor. Conhece todo mundo pelo nome. STRONIX é família, não academia de fisiculturista, "gente como a gente".',
   abertura: 'Opa beleza! Sou o Johnny da STRONIX 👋',
+  // Binárias do roteiro — admin pode ajustar como cada pergunta é abordada,
+  // mas a ESTRUTURA (sempre A ou B, sempre nesse estágio) continua fixa.
+  binariaTreinando: 'Tu tá treinando ou parado?',
+  binariaObjetivo: 'Mais resultado físico ou mais qualidade de vida no dia a dia?',
+  binariaObjetivoDrill: 'ganhar massa ou emagrecer?',
+  binariaNome: 'A propósito, como é teu nome?',
+  binariaTurno: 'manhã ou final do dia?',
+  binariaDia: 'Posso te encaixar terça ou quarta, qual rola pra ti?',
+  binariaHora: 'Tem 9h ou 10h, qual prefere?',
   giriasQuentes: [
     'Bah',
     'Que legal',
@@ -68,6 +77,7 @@ const LIMITS = {
   NOME_NEGOCIO_MAX: 60,
   DESCRICAO_JEITO_MAX: 800,
   ABERTURA_MAX: 200,
+  BINARIA_MAX: 200,
   ITEM_MAX: 200,
   LIST_MAX_ITEMS: 30,
 };
@@ -98,6 +108,13 @@ function mergeWithDefaults(personaPartial) {
     nomeNegocio: asString(p.nomeNegocio, DEFAULT_PERSONA.nomeNegocio, LIMITS.NOME_NEGOCIO_MAX),
     descricaoJeito: asString(p.descricaoJeito, DEFAULT_PERSONA.descricaoJeito, LIMITS.DESCRICAO_JEITO_MAX),
     abertura: asString(p.abertura, DEFAULT_PERSONA.abertura, LIMITS.ABERTURA_MAX),
+    binariaTreinando: asString(p.binariaTreinando, DEFAULT_PERSONA.binariaTreinando, LIMITS.BINARIA_MAX),
+    binariaObjetivo: asString(p.binariaObjetivo, DEFAULT_PERSONA.binariaObjetivo, LIMITS.BINARIA_MAX),
+    binariaObjetivoDrill: asString(p.binariaObjetivoDrill, DEFAULT_PERSONA.binariaObjetivoDrill, LIMITS.BINARIA_MAX),
+    binariaNome: asString(p.binariaNome, DEFAULT_PERSONA.binariaNome, LIMITS.BINARIA_MAX),
+    binariaTurno: asString(p.binariaTurno, DEFAULT_PERSONA.binariaTurno, LIMITS.BINARIA_MAX),
+    binariaDia: asString(p.binariaDia, DEFAULT_PERSONA.binariaDia, LIMITS.BINARIA_MAX),
+    binariaHora: asString(p.binariaHora, DEFAULT_PERSONA.binariaHora, LIMITS.BINARIA_MAX),
     giriasQuentes: asStringList(p.giriasQuentes, DEFAULT_PERSONA.giriasQuentes.slice()),
     giriasProibidas: asStringList(p.giriasProibidas, DEFAULT_PERSONA.giriasProibidas.slice()),
     frasesProibidasExtra: asStringList(p.frasesProibidasExtra, DEFAULT_PERSONA.frasesProibidasExtra.slice()),
@@ -129,6 +146,13 @@ function assembleNucleoV2(personaPartial) {
     .replace(/\{\{PERSONA_NOME_NEGOCIO\}\}/g, persona.nomeNegocio)
     .replace(/\{\{PERSONA_DESCRICAO_JEITO\}\}/g, persona.descricaoJeito)
     .replace(/\{\{PERSONA_ABERTURA\}\}/g, persona.abertura)
+    .replace(/\{\{PERSONA_BINARIA_TREINANDO\}\}/g, persona.binariaTreinando)
+    .replace(/\{\{PERSONA_BINARIA_OBJETIVO_DRILL\}\}/g, persona.binariaObjetivoDrill)
+    .replace(/\{\{PERSONA_BINARIA_OBJETIVO\}\}/g, persona.binariaObjetivo)
+    .replace(/\{\{PERSONA_BINARIA_NOME\}\}/g, persona.binariaNome)
+    .replace(/\{\{PERSONA_BINARIA_TURNO\}\}/g, persona.binariaTurno)
+    .replace(/\{\{PERSONA_BINARIA_DIA\}\}/g, persona.binariaDia)
+    .replace(/\{\{PERSONA_BINARIA_HORA\}\}/g, persona.binariaHora)
     .replace(/\{\{PERSONA_GIRIAS_QUENTES\}\}/g, formatQuotedList(persona.giriasQuentes))
     .replace(/\{\{PERSONA_GIRIAS_PROIBIDAS\}\}/g, formatQuotedList(persona.giriasProibidas))
     .replace(/\{\{PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK\}\}/g, buildFrasesProibidasExtraBlock(persona.frasesProibidasExtra));
