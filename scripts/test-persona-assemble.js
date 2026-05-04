@@ -62,15 +62,28 @@ console.log('\n[test-persona-assemble] iniciando\n');
 // ─── 1. Default assemble ───
 console.log('1. Default assemble');
 test('NUCLEO_TEMPLATE contém placeholders {{PERSONA_*}}', () => {
-  assert(/\{\{PERSONA_NOME_AGENTE\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_AGENTE}}');
-  assert(/\{\{PERSONA_NOME_AGENTE_UPPER\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_AGENTE_UPPER}}');
-  assert(/\{\{PERSONA_NOME_NEGOCIO\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_NEGOCIO}}');
-  assert(/\{\{PERSONA_NOME_NEGOCIO_UPPER\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_NOME_NEGOCIO_UPPER}}');
-  assert(/\{\{PERSONA_DESCRICAO_JEITO\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_DESCRICAO_JEITO}}');
-  assert(/\{\{PERSONA_ABERTURA\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_ABERTURA}}');
-  assert(/\{\{PERSONA_GIRIAS_QUENTES\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_GIRIAS_QUENTES}}');
-  assert(/\{\{PERSONA_GIRIAS_PROIBIDAS\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_GIRIAS_PROIBIDAS}}');
-  assert(/\{\{PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK\}\}/.test(NUCLEO_TEMPLATE), 'template sem {{PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK}}');
+  const required = [
+    'PERSONA_NOME_AGENTE',
+    'PERSONA_NOME_AGENTE_UPPER',
+    'PERSONA_NOME_NEGOCIO',
+    'PERSONA_NOME_NEGOCIO_UPPER',
+    'PERSONA_DESCRICAO_JEITO',
+    'PERSONA_ABERTURA',
+    'PERSONA_BINARIA_TREINANDO',
+    'PERSONA_BINARIA_OBJETIVO',
+    'PERSONA_BINARIA_OBJETIVO_DRILL',
+    'PERSONA_BINARIA_NOME',
+    'PERSONA_BINARIA_TURNO',
+    'PERSONA_BINARIA_DIA',
+    'PERSONA_BINARIA_HORA',
+    'PERSONA_GIRIAS_QUENTES',
+    'PERSONA_GIRIAS_PROIBIDAS',
+    'PERSONA_FRASES_PROIBIDAS_EXTRA_BLOCK',
+  ];
+  for (const ph of required) {
+    const re = new RegExp('\\{\\{' + ph + '\\}\\}');
+    assert(re.test(NUCLEO_TEMPLATE), `template sem {{${ph}}}`);
+  }
 });
 
 test('assembleNucleoV2(DEFAULT) não tem placeholders sobrando', () => {
@@ -119,6 +132,22 @@ test('contém descricaoJeito default "genuíno, sério, direto..."', () => {
   assert(out.includes('genuíno, sério, direto, sem papo de vendedor'), 'descrição do jeito default ausente');
 });
 
+test('contém todas as 7 binárias do roteiro com defaults exatos', () => {
+  const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
+  const expected = [
+    'Tu tá treinando ou parado?',
+    'Mais resultado físico ou mais qualidade de vida no dia a dia?',
+    'ganhar massa ou emagrecer?',
+    'A propósito, como é teu nome?',
+    'manhã ou final do dia?',
+    'Posso te encaixar terça ou quarta, qual rola pra ti?',
+    'Tem 9h ou 10h, qual prefere?',
+  ];
+  for (const e of expected) {
+    assert(out.includes(e), `binária default "${e}" ausente no assemble`);
+  }
+});
+
 test('contém todas as gírias quentes do default', () => {
   const out = personaModule.assembleNucleoV2(personaModule.DEFAULT_PERSONA);
   for (const g of personaModule.DEFAULT_PERSONA.giriasQuentes) {
@@ -161,6 +190,40 @@ test('custom descricaoJeito substitui frase do jeito', () => {
   });
   assert(out.includes('caloroso, próximo, jeito amigo de bairro'), 'descrição custom não foi injetada');
   assert(!out.includes('genuíno, sério, direto'), 'descrição default ainda presente quando deveria ter sumido');
+});
+
+test('custom binárias substituem todas as 7 perguntas do roteiro', () => {
+  const out = personaModule.assembleNucleoV2({
+    binariaTreinando: 'Cê tá na ativa ou meio sumido?',
+    binariaObjetivo: 'Foco mais em forma ou em saúde mesmo?',
+    binariaObjetivoDrill: 'crescer mais ou emagrecer mais?',
+    binariaNome: 'Como tu se chama?',
+    binariaTurno: 'cedo ou de tardezinha?',
+    binariaDia: 'Que tal terça ou quinta?',
+    binariaHora: '8h ou 11h?',
+  });
+  // Customs aparecem
+  assert(out.includes('Cê tá na ativa ou meio sumido?'), 'binariaTreinando custom ausente');
+  assert(out.includes('Foco mais em forma ou em saúde mesmo?'), 'binariaObjetivo custom ausente');
+  assert(out.includes('crescer mais ou emagrecer mais?'), 'binariaObjetivoDrill custom ausente');
+  assert(out.includes('Como tu se chama?'), 'binariaNome custom ausente');
+  assert(out.includes('cedo ou de tardezinha?'), 'binariaTurno custom ausente');
+  assert(out.includes('Que tal terça ou quinta?'), 'binariaDia custom ausente');
+  assert(out.includes('8h ou 11h?'), 'binariaHora custom ausente');
+  // Defaults sumiram
+  assert(!out.includes('Tu tá treinando ou parado?'), 'default Treinando ainda presente');
+  assert(!out.includes('Mais resultado físico ou mais qualidade'), 'default Objetivo ainda presente');
+});
+
+test('placeholder PERSONA_BINARIA_OBJETIVO não é prefix-ambíguo com OBJETIVO_DRILL', () => {
+  // Regression: garante que substituir OBJETIVO antes de OBJETIVO_DRILL não quebra
+  const out = personaModule.assembleNucleoV2({
+    binariaObjetivo: 'XXX',
+    binariaObjetivoDrill: 'YYY',
+  });
+  assert(out.includes('"XXX"'), 'OBJETIVO custom não substituiu');
+  assert(out.includes('"YYY"'), 'OBJETIVO_DRILL custom não substituiu');
+  assert(!out.includes('XXX_DRILL'), 'OBJETIVO substituiu DENTRO do OBJETIVO_DRILL — ordem de replace está errada');
 });
 
 test('custom abertura aparece na linha "ABERTURA PADRÃO" do núcleo', () => {
