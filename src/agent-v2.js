@@ -37,6 +37,7 @@ const {
 } = require('./resumo-dinamico');
 const {
   detectsPrecoInventado,
+  extractPrecosOficiais,
   detectsValorAntecipado,
   detectsTagEsquecida,
   extractPrecosOficiaisFromAcademiaInfo,
@@ -447,7 +448,13 @@ async function replyV2Inner(from, text, { isAudio = false } = {}) {
     if (valorCheck.triggered) {
       db.logV2Event(db.V2_EVENT_TYPES.VALOR_ANTECIPADO, from, null, valorCheck.context);
     }
-    const precosOficiais = extractPrecosOficiaisFromAcademiaInfo(db.getAcademiaInfoMap());
+    // Source of truth combinada: academia_info (legado) + módulos do prompt (PR #61).
+    // Módulos passaram a ser fonte oficial de preço. Detector pega ambos pra evitar
+    // false positive em DBs antigos que ainda têm preço em academia_info.
+    const precosOficiais = extractPrecosOficiais({
+      academiaInfoMap: db.getAcademiaInfoMap(),
+      promptModules: db.getAllPromptModules(),
+    });
     const precoCheck = detectsPrecoInventado(cleanText, precosOficiais);
     if (precoCheck.triggered) {
       db.logV2Event(db.V2_EVENT_TYPES.PRECO_INVENTADO, from, null, precoCheck.context);
