@@ -738,21 +738,103 @@ router.post('/api/agent-config/persona/revert', auth.requireAdmin, (req, res) =>
 
 // Prompt modules (28 módulos do Johnny v2) — leitura pública pra usuários
 // logados, escrita só admin
+
+// Char limits por módulo (PR65 — editor de cenários no admin).
+// Default 5000. Override pros 4 módulos que já passam de 2.3k chars no
+// seed atual — dá folga sem ficar permissivo demais nos pequenos.
+const PROMPT_MODULE_LIMIT_DEFAULT = 5000;
+const PROMPT_MODULE_LIMITS = {
+  publicos_especificos: 8000,
+  cenarios_borda: 8000,
+  info_academia: 8000,
+  tecnicas_persuasao: 8000,
+};
+const VALID_PROMPT_MODULE_CATEGORIES = new Set(['conhecimento', 'objecoes', 'situacionais', 'sistema']);
+
+function promptModuleLimit(name) {
+  return PROMPT_MODULE_LIMITS[name] || PROMPT_MODULE_LIMIT_DEFAULT;
+}
+
 router.get('/api/prompt-modules', (req, res) => {
-  res.json(db.getAllPromptModules());
+  const rows = db.getAllPromptModules();
+  // Anota cada módulo com limite de chars e flag isCustom (difere do seed).
+  const annotated = rows.map((m) => {
+    const def = db.getDefaultPromptModuleContent(m.name);
+    return {
+      ...m,
+      limit: promptModuleLimit(m.name),
+      isCustom: def !== null && def !== m.content,
+      hasPrevious: !!m.content_previous,
+    };
+  });
+  res.json(annotated);
 });
 
 router.get('/api/prompt-modules/:name', (req, res) => {
   const m = db.getPromptModule(req.params.name);
   if (!m) return res.status(404).json({ error: 'Módulo não encontrado' });
-  res.json(m);
+  const def = db.getDefaultPromptModuleContent(m.name);
+  res.json({
+    ...m,
+    limit: promptModuleLimit(m.name),
+    isCustom: def !== null && def !== m.content,
+    hasPrevious: !!m.content_previous,
+  });
+});
+
+// Conteúdo default do seed — pra UI mostrar diff/preview.
+router.get('/api/prompt-modules/:name/default', auth.requireAdmin, (req, res) => {
+  const def = db.getDefaultPromptModule(req.params.name);
+  if (!def) return res.status(404).json({ error: 'Módulo não existe no seed' });
+  res.json({ name: def.name, title: def.title, category: def.category, content: def.content });
 });
 
 router.put('/api/prompt-modules/:name', auth.requireAdmin, (req, res) => {
-  const { content, title, category } = req.body || {};
-  if (!content) return res.status(400).json({ error: 'content obrigatório' });
+  const { content, title, category, force } = req.body || {};
+  const name = req.params.name;
+
+  // Validação 1: content presente e não-vazio (após trim).
+  if (typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'content obrigatório (não pode ficar vazio)' });
+  }
+
+  // Validação 2: char limit.
+  const limit = promptModuleLimit(name);
+  if (content.length > limit) {
+    return res.status(400).json({ error: `Conteúdo excede limite de ${limit} chars (atual: ${content.length})` });
+  }
+
+  // Validação 3: category no enum (se enviada).
+  if (category !== undefined && category !== null && !VALID_PROMPT_MODULE_CATEGORIES.has(category)) {
+    return res.status(400).json({ error: `category inválida — use: ${[...VALID_PROMPT_MODULE_CATEGORIES].join(', ')}` });
+  }
+
+  // Validação 4 (especial pro planos_e_precos): roda parser do v3-validators.
+  // Se quebrar (0 planos extraídos), bloqueia salvo se force=true.
+  if (name === 'planos_e_precos') {
+    try {
+      const { parsePlanosFromModule } = require('./v3-validators');
+      const planos = parsePlanosFromModule(content);
+      const planoCount = Object.keys(planos || {}).length;
+      if (planoCount === 0 && !force) {
+        return res.status(400).json({
+          error: 'Formato de preços não reconhecido — agente não conseguiria validar valores. Salvar mesmo assim?',
+          requiresConfirmation: true,
+        });
+      }
+      if (planoCount === 0 && force) {
+        console.warn(`[admin] planos_e_precos salvo com parser quebrado (force=true) por ${req.user.username}`);
+      }
+    } catch (e) {
+      console.error('[admin] erro ao validar planos_e_precos:', e.message);
+      // Falha do parser em si (não conteúdo) é bloqueante sem opção de force.
+      return res.status(500).json({ error: 'Falha ao validar formato de preços: ' + e.message });
+    }
+  }
+
   try {
-    db.upsertPromptModule({ name: req.params.name, content, title, category }, req.user.id);
+    db.upsertPromptModule({ name, content, title, category }, req.user.id);
+    console.log(`[admin] prompt_modules[${name}] atualizado por ${req.user.username}`);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -763,6 +845,25 @@ router.patch('/api/prompt-modules/:name/active', auth.requireAdmin, (req, res) =
   const { active } = req.body || {};
   db.setPromptModuleActive(req.params.name, !!active, req.user.id);
   res.json({ ok: true });
+});
+
+// Restaurar conteúdo default do seed. Mantém active intacto, apaga snapshot.
+router.delete('/api/prompt-modules/:name', auth.requireAdmin, (req, res) => {
+  try {
+    const updated = db.resetPromptModule(req.params.name, req.user.id);
+    console.log(`[admin] prompt_modules[${req.params.name}] restaurado ao default por ${req.user.username}`);
+    res.json({ ok: true, module: updated });
+  } catch (e) {
+    res.status(404).json({ error: e.message });
+  }
+});
+
+// Reverter pro snapshot anterior (1 nível de undo).
+router.post('/api/prompt-modules/:name/revert', auth.requireAdmin, (req, res) => {
+  const reverted = db.revertPromptModule(req.params.name, req.user.id);
+  if (!reverted) return res.status(404).json({ error: 'Sem versão anterior pra reverter' });
+  console.log(`[admin] prompt_modules[${req.params.name}] revertido pra versão anterior por ${req.user.username}`);
+  res.json({ ok: true, module: reverted });
 });
 
 // Lead state (debug — playground e admin podem ver/resetar)
@@ -3159,7 +3260,38 @@ router.get('/', (req, res) => {
     }
     .modulo-textarea:focus { border-color: var(--brand); }
     .modulo-actions {
-      display: flex; gap: 10px; align-items: center; margin-top: 10px;
+      display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap;
+    }
+    .modulo-pill {
+      display: inline-block; margin-left: 8px;
+      padding: 1px 7px; border-radius: 10px;
+      font: 500 10.5px var(--font-sans); vertical-align: middle;
+    }
+    .modulo-pill.default {
+      background: rgba(255,255,255,.06); color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+    }
+    .modulo-pill.custom {
+      background: rgba(249, 200, 105, .14); color: #f9c869;
+      border: 1px solid rgba(249, 200, 105, .35);
+    }
+    .modulo-charline {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 6px; font-size: 11.5px; color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+    .modulo-charcount { transition: color var(--t-fast); }
+    .modulo-charcount.over { color: var(--danger); font-weight: 600; }
+    .modulo-updated { opacity: .7; }
+    .btn-secondary {
+      background: transparent; color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md, 6px);
+      padding: 6px 12px; font-size: 12.5px; cursor: pointer;
+      transition: all var(--t-fast);
+    }
+    .btn-secondary:hover {
+      background: var(--bg-3); color: var(--text-primary); border-color: var(--brand);
     }
 
     /* ════════════════════════════════════════════════
@@ -7051,6 +7183,8 @@ router.get('/', (req, res) => {
 
   // ─────────────────────────────────────────────────────────────────
   // Aba Módulos do prompt (28 módulos editáveis do Johnny v2)
+  // PR65: char count, pill custom/default, restaurar default, voltar
+  // versão anterior, validação extra do planos_e_precos.
   // ─────────────────────────────────────────────────────────────────
   const CAT_LABELS_MOD = {
     conhecimento: '📚 Conhecimento factual',
@@ -7082,19 +7216,36 @@ router.get('/', (req, res) => {
           const safeName = escapeHtml(m.name);
           const safeTitle = escapeHtml(m.title || m.name);
           const charCount = (m.content || '').length;
+          const limit = m.limit || 5000;
+          const overLimit = charCount > limit;
           const activeCls = m.active ? '' : ' inactive';
-          html += '<div class="modulo-item' + activeCls + '">';
+          const customPill = m.isCustom
+            ? '<span class="modulo-pill custom" title="Conteúdo diferente do default original">Customizado</span>'
+            : '<span class="modulo-pill default" title="Igual ao default original">Default</span>';
+          html += '<div class="modulo-item' + activeCls + '" data-name="' + safeName + '">';
           html += '<div class="modulo-head" onclick="toggleModulo(this)">';
-          html += '<div>';
-          html += '<div class="modulo-title">' + safeTitle + '</div>';
-          html += '<div class="modulo-meta">' + safeName + ' · ' + charCount + ' chars · ' + (m.active ? 'ativo' : 'desativado') + '</div>';
+          html += '<div style="flex:1;min-width:0">';
+          html += '<div class="modulo-title">' + safeTitle + ' ' + customPill + '</div>';
+          html += '<div class="modulo-meta"><span class="modulo-meta-name">' + safeName + '</span> · <span class="modulo-meta-chars" id="mod-meta-chars-' + safeName + '">' + charCount + '/' + limit + ' chars</span> · ' + (m.active ? 'ativo' : 'desativado') + '</div>';
           html += '</div>';
           html += '<svg class="modulo-chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>';
           html += '</div>';
           html += '<div class="modulo-body" style="display:none">';
-          html += '<textarea class="modulo-textarea" data-name="' + safeName + '" oninput="onModuloEdit(this)">' + escapeHtml(m.content) + '</textarea>';
+          html += '<textarea class="modulo-textarea" data-name="' + safeName + '" data-limit="' + limit + '" oninput="onModuloEdit(this)">' + escapeHtml(m.content) + '</textarea>';
+          html += '<div class="modulo-charline">';
+          html += '<span class="modulo-charcount' + (overLimit ? ' over' : '') + '" id="mod-charcount-' + safeName + '">' + charCount + ' / ' + limit + ' chars</span>';
+          if (m.updated_at) {
+            const d = new Date(m.updated_at);
+            const fmt = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            html += '<span class="modulo-updated">Atualizado em ' + fmt + '</span>';
+          }
+          html += '</div>';
           html += '<div class="modulo-actions">';
           html += '<button class="btn-add" onclick="saveModulo(\\'' + safeName + '\\')">💾 Salvar</button>';
+          html += '<button class="btn-secondary" onclick="restoreModulo(\\'' + safeName + '\\')" title="Volta pro conteúdo default original">↺ Restaurar default</button>';
+          if (m.hasPrevious) {
+            html += '<button class="btn-secondary" onclick="revertModulo(\\'' + safeName + '\\')" title="Volta pra versão anterior (1 nível de undo)">↶ Voltar versão anterior</button>';
+          }
           html += '<button class="btn-clear" onclick="toggleModuloActive(\\'' + safeName + '\\', ' + (m.active ? 'false' : 'true') + ')">' + (m.active ? '🚫 Desativar' : '✓ Ativar') + '</button>';
           html += '<span class="kb-saving" id="mod-saving-' + safeName + '"></span>';
           html += '</div>';
@@ -7116,32 +7267,58 @@ router.get('/', (req, res) => {
   }
 
   function onModuloEdit(el) {
-    const status = document.getElementById('mod-saving-' + el.dataset.name);
+    const name = el.dataset.name;
+    const limit = parseInt(el.dataset.limit, 10) || 5000;
+    const len = el.value.length;
+    const cc = document.getElementById('mod-charcount-' + name);
+    const ccMeta = document.getElementById('mod-meta-chars-' + name);
+    if (cc) {
+      cc.textContent = len + ' / ' + limit + ' chars';
+      cc.classList.toggle('over', len > limit);
+    }
+    if (ccMeta) ccMeta.textContent = len + '/' + limit + ' chars';
+    const status = document.getElementById('mod-saving-' + name);
     if (status) { status.textContent = 'Não salvo'; status.className = 'kb-saving err'; }
   }
 
-  async function saveModulo(name) {
+  async function saveModulo(name, opts = {}) {
     const ta = document.querySelector('.modulo-textarea[data-name="' + name + '"]');
     const status = document.getElementById('mod-saving-' + name);
     if (!ta) return;
+    const limit = parseInt(ta.dataset.limit, 10) || 5000;
+    if (ta.value.length > limit) {
+      if (status) { status.textContent = 'Excede ' + limit + ' chars'; status.className = 'kb-saving err'; }
+      return;
+    }
+    if (!ta.value.trim()) {
+      if (status) { status.textContent = 'Conteúdo vazio'; status.className = 'kb-saving err'; }
+      return;
+    }
     if (status) { status.textContent = 'Salvando...'; status.className = 'kb-saving'; }
     try {
-      const cached = modulosCache.find(m => m.name === name);
       const r = await fetch('/admin/api/prompt-modules/' + encodeURIComponent(name), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           content: ta.value,
-          title: cached?.title || name,
-          category: cached?.category || null,
+          force: !!opts.force,
         }),
       });
+      const d = await r.json().catch(() => ({}));
       if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
+        if (d.requiresConfirmation) {
+          if (window.confirm(d.error + '\\n\\nClique OK pra salvar mesmo assim, Cancelar pra revisar.')) {
+            return saveModulo(name, { force: true });
+          }
+          if (status) { status.textContent = 'Cancelado'; status.className = 'kb-saving err'; }
+          return;
+        }
         throw new Error(d.error || 'falha');
       }
       if (status) { status.textContent = '✓ Salvo'; status.className = 'kb-saving ok'; }
       setTimeout(() => { if (status) status.textContent = ''; }, 2000);
+      // Recarrega pra atualizar pill custom/default e botão "voltar versão anterior".
+      loadModulos();
     } catch (e) {
       if (status) { status.textContent = 'Erro: ' + e.message; status.className = 'kb-saving err'; }
     }
@@ -7154,6 +7331,26 @@ router.get('/', (req, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: !!makeActive }),
       });
+      loadModulos();
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+
+  async function restoreModulo(name) {
+    if (!window.confirm('Restaurar conteúdo default de "' + name + '"? A edição atual e o snapshot anterior serão descartados.')) return;
+    try {
+      const r = await fetch('/admin/api/prompt-modules/' + encodeURIComponent(name), { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'falha');
+      loadModulos();
+    } catch (e) { alert('Erro: ' + e.message); }
+  }
+
+  async function revertModulo(name) {
+    if (!window.confirm('Voltar "' + name + '" pra versão anterior? A edição atual será descartada.')) return;
+    try {
+      const r = await fetch('/admin/api/prompt-modules/' + encodeURIComponent(name) + '/revert', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'falha');
       loadModulos();
     } catch (e) { alert('Erro: ' + e.message); }
   }

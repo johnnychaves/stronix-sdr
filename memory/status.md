@@ -12,6 +12,9 @@ Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda
 - ⏳ PR3 — Monitor v3 + comparação v2 × v3
 - ⏳ PR4 (condicional) — Promoção a default se técnica + comercial baterem na janela 50 conv / 14 dias
 
+**Trilho admin (paralelo):**
+- ✅ PR65 — Editor de módulos com char count, pill custom/default, restaurar default, voltar versão anterior, validação extra do `planos_e_precos`. Coluna `content_previous` na tabela. 17 testes novos, 364/364 offline PASS.
+
 **Pré-requisito firme antes de qualquer rollout v3:** smoke do dono no playground v3 — 5-10 cenários reais, 60+ min mínimo. Bateria automática não substitui.
 
 ---

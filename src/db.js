@@ -227,6 +227,14 @@ if (!apptCols.find(c => c.name === 'scheduled_hour')) {
   console.log('[db] migração: coluna scheduled_hour adicionada em appointments');
 }
 
+// Migração: snapshot de 1 nível pro editor de módulos no admin (PR65).
+// content_previous guarda o conteúdo anterior pra "↶ voltar versão anterior".
+const promptModulesCols = db.prepare('PRAGMA table_info(prompt_modules)').all();
+if (!promptModulesCols.find(c => c.name === 'content_previous')) {
+  db.exec('ALTER TABLE prompt_modules ADD COLUMN content_previous TEXT');
+  console.log('[db] migração: coluna content_previous adicionada em prompt_modules');
+}
+
 // Migração: simplifica rating de 3 valores ('good','bad','flagged') pra 2 ('good','bad')
 // Converte qualquer 'flagged' existente em 'bad'
 const flaggedCount = db.prepare("SELECT COUNT(*) as c FROM conversation_reviews WHERE rating = 'flagged'").get();
@@ -1346,8 +1354,17 @@ function getPromptModuleContents(names) {
   `).all(...names);
 }
 
-function upsertPromptModule({ name, title, content, category }, userId = null) {
+// `snapshot=true` (default) guarda content atual em content_previous antes de
+// sobrescrever. Seed inicial passa snapshot=false pra não criar histórico
+// fantasma de boot.
+function upsertPromptModule({ name, title, content, category }, userId = null, { snapshot = true } = {}) {
   if (!name || !content) throw new Error('name e content obrigatórios');
+  if (snapshot) {
+    const prev = db.prepare('SELECT content FROM prompt_modules WHERE name = ?').get(name);
+    if (prev && prev.content !== content) {
+      db.prepare('UPDATE prompt_modules SET content_previous = ? WHERE name = ?').run(prev.content, name);
+    }
+  }
   db.prepare(`
     INSERT INTO prompt_modules (name, title, content, category, active, updated_at, updated_by)
     VALUES (?, ?, ?, ?, 1, ?, ?)
@@ -1363,6 +1380,48 @@ function upsertPromptModule({ name, title, content, category }, userId = null) {
 function setPromptModuleActive(name, active, userId = null) {
   db.prepare('UPDATE prompt_modules SET active = ?, updated_at = ?, updated_by = ? WHERE name = ?')
     .run(active ? 1 : 0, Date.now(), userId, name);
+}
+
+// Default vem do seed (single source of truth).
+let _seedCache = null;
+function _getSeed() {
+  if (_seedCache) return _seedCache;
+  _seedCache = require('./prompt-modules-seed');
+  return _seedCache;
+}
+function getDefaultPromptModuleContent(name) {
+  const m = _getSeed().find((s) => s.name === name);
+  return m ? m.content : null;
+}
+function getDefaultPromptModule(name) {
+  return _getSeed().find((s) => s.name === name) || null;
+}
+
+// Swap atomico content ↔ content_previous. Retorna a linha após swap, ou null
+// se sem snapshot.
+function revertPromptModule(name, userId = null) {
+  const row = db.prepare('SELECT content, content_previous FROM prompt_modules WHERE name = ?').get(name);
+  if (!row || !row.content_previous) return null;
+  db.prepare(`
+    UPDATE prompt_modules
+    SET content = ?, content_previous = ?, updated_at = ?, updated_by = ?
+    WHERE name = ?
+  `).run(row.content_previous, row.content, Date.now(), userId, name);
+  return db.prepare('SELECT * FROM prompt_modules WHERE name = ?').get(name);
+}
+
+// Volta pro conteúdo do seed. Mantém active intacto. Apaga snapshot (decisão
+// do dono: não dá pra reverter um restore — se foi restaurado é porque queria
+// começar do zero).
+function resetPromptModule(name, userId = null) {
+  const def = getDefaultPromptModule(name);
+  if (!def) throw new Error(`Módulo '${name}' não existe no seed`);
+  db.prepare(`
+    UPDATE prompt_modules
+    SET content = ?, content_previous = NULL, updated_at = ?, updated_by = ?
+    WHERE name = ?
+  `).run(def.content, Date.now(), userId, name);
+  return db.prepare('SELECT * FROM prompt_modules WHERE name = ?').get(name);
 }
 
 // Seed inicial dos módulos — popula só se a tabela estiver vazia.
@@ -1858,6 +1917,10 @@ module.exports = {
   upsertPromptModule,
   setPromptModuleActive,
   seedPromptModulesIfEmpty,
+  getDefaultPromptModuleContent,
+  getDefaultPromptModule,
+  revertPromptModule,
+  resetPromptModule,
   // metrics
   getMetrics,
   // PR #37 — V2 monitoring
