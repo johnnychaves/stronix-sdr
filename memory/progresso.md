@@ -4,6 +4,47 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-04 — Editor de módulos no admin: char count, pill custom/default, restaurar default, voltar versão anterior, validação extra do `planos_e_precos`
+
+**Contexto:** Persona já é editável via PR54 (4 caixinhas), mas os 28 módulos de cenário (`info_academia`, `objecao_preco`, `publicos_especificos`, etc.) só mudavam via PR. Cada ajuste de copy virava commit + deploy. Pedido do dono: estender o editor da persona pros 28 módulos sem mexer em tool schema, enum de planos, validadores ou roteador.
+
+**Achado durante exploração:** aba "Módulos do prompt" já existia no admin (`tab-modulos`) com CRUD básico (lista accordion + textarea + salvar + toggle ativo). Decisão: **evoluir** em vez de criar aba nova "Cenários" — sem duplicação.
+
+**Salvaguardas adicionadas (decisões do dono confirmadas via AskUserQuestion):**
+
+1. **Char limit escalonado:** 5000 default; 8000 pros 4 grandes (`publicos_especificos`, `cenarios_borda`, `info_academia`, `tecnicas_persuasao` — todos já passam de 2.3k no seed). Validado no backend (PUT bloqueia) e UI (counter vermelho ao estourar).
+2. **Validação especial do `planos_e_precos`:** PUT roda `parsePlanosFromModule` ([src/v3-validators.js](../src/v3-validators.js)) no save. Se 0 planos, retorna 400 com `requiresConfirmation:true`. UI mostra `confirm()` "salvar mesmo assim". Force-save loga warning.
+3. **Title/category travados:** UI não envia esses campos no PUT. Backend continua aceitando (compat). Reduz superfície de erro.
+4. **Toggle ativo/inativo:** exposto na UI (já tinha — preservado).
+
+**Implementação (1 PR, 4 arquivos modificados, 1 novo):**
+
+Modificados:
+- [src/db.js](../src/db.js): nova coluna `content_previous TEXT` em `prompt_modules` via `ALTER TABLE` idempotente (pattern já usado na codebase). `upsertPromptModule` aceita opt `{snapshot:true}` (default) que salva content atual antes de sobrescrever (skip se conteúdo idêntico). Novos helpers exportados: `getDefaultPromptModuleContent(name)`, `getDefaultPromptModule(name)`, `revertPromptModule(name, userId)` (swap content↔previous, retorna null se sem snapshot), `resetPromptModule(name, userId)` (volta pro seed, zera snapshot, mantém active).
+- [src/admin.js](../src/admin.js): 3 endpoints novos — `GET /api/prompt-modules/:name/default` (admin), `DELETE /api/prompt-modules/:name` (restaura), `POST /api/prompt-modules/:name/revert` (undo). PUT existente endurecido: rejeita content vazio/só-espaços, valida char limit por módulo, valida enum de category, roda parser do `planos_e_precos`. GET lista anota cada módulo com `{limit, isCustom, hasPrevious}`. Frontend reescrito: pill `Default`/`Customizado`, char counter inline (vermelho se >limit), botões "↺ Restaurar default" / "↶ Voltar versão anterior" (oculto se sem snapshot), confirm() pra ações destrutivas, modal pro `planos_e_precos` quebrado, `loadModulos()` chamado pós-save pra refresh do pill.
+- CSS novo: `.modulo-pill.default/.custom`, `.modulo-charline`, `.modulo-charcount.over`, `.modulo-updated`, `.btn-secondary`.
+
+Novo:
+- [scripts/test-prompt-modules-edit.js](../scripts/test-prompt-modules-edit.js) (~180 LOC, **17/17 passando**): cobre defaults batem com seed, snapshot acumula corretamente (segunda edição empilha), edição com mesmo conteúdo NÃO atualiza snapshot, revert swap, revert sem snapshot retorna null, reset volta pro seed e zera snapshot, reset em nome inexistente lança erro, runtime smoke (`getPromptModuleContents` reflete edição na hora), parser do `planos_e_precos` defensivo contra null/undefined/lixo, cobertura 28 módulos no seed, limites batendo (todos os grandes <=8000, todos não-grandes <=5000).
+
+**Suite total: 364/364 testes que rodam offline passam** (256 prévios + 56 persona + 17 prompt-modules + 35 outros). Zero regressão. 2 testes (state-update, resumo-dinamico) falham por env var WhatsApp Cloud API faltante — pre-existing, não relacionado.
+
+**O que NÃO foi tocado (imutável):** schema da tool ([src/v3-tools.js](../src/v3-tools.js) — enum `MODULOS` continua hardcoded), validador de preço ([src/v3-validators.js](../src/v3-validators.js) — só importado), roteador ([src/router-v2.js](../src/router-v2.js)), núcleo ([src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js)), detectors. Editor só mexe em texto; arquitetura da escolha-de-módulo + tool use + validação cruzada continuam blindadas.
+
+**Verificação manual (passos pro dono validar):**
+1. Login admin → Configurações → Módulos do prompt.
+2. Cada módulo mostra pill "Default" ou "Customizado" + chars/limite.
+3. Editar `objecao_preco`, salvar → pill vira "Customizado", botão "↶ Voltar versão anterior" aparece.
+4. Mandar mensagem no playground v3 que dispare objeção de preço — texto novo aparece (sem reboot).
+5. Clicar "↶ Voltar versão anterior" → conteúdo volta. Clicar de novo (após nova edição) → último snapshot.
+6. Editar `planos_e_precos` quebrando formato (ex: "blá" vazio) → modal "Formato inválido — salvar mesmo assim?". Cancelar mantém edição local mas não salva. OK força save com warning no log.
+7. "↺ Restaurar default" → confirm, volta pro seed do código, snapshot some.
+8. Smoke do dono (cenários 5, 6, 11 do roteiro v2) deve continuar passando.
+
+**Próximo PR:** PR3 da migração v3 (Monitor + comparação v2×v3) — separado deste, conforme planejado.
+
+---
+
 ## 2026-05-04 — PR2 da migração v3: controle de preço via enum + retry single-shot (+ canário do PR1 perdido no squash)
 
 **Contexto:** PR1 mergeou em `b5e3c8f` mas o squash GitHub pegou só o commit inicial — os 2 commits adicionais aprovados (canário `TOOL_CALL_MULTIPLE` em [`cf68401`](https://github.com/johnnychaves/stronix-sdr/commit/cf68401) + comentário de dívida técnica em [`49b4e6b`](https://github.com/johnnychaves/stronix-sdr/commit/49b4e6b)) ficaram fora de main. Bundle no PR2 (decisão do dono — opção A) re-aplica os 3 deliverables + adiciona escopo PR2 (validador de preço).

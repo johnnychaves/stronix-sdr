@@ -4,6 +4,22 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-04 — Snapshot de 1 nível em coluna ao lado do dado (não em tabela separada)
+
+**Contexto:** Editor de módulos (PR65) precisava de "↶ voltar versão anterior" igual persona, mas persona usa `agent_config.persona_previous` (1 key separado) porque persona é 1 JSON único. Módulos são 28 linhas — replicar o mesmo padrão viraria 28 keys no agent_config ou tabela `prompt_modules_history` separada.
+
+**Padrão aplicado:** **Coluna `content_previous TEXT` na própria tabela `prompt_modules`.** Migração `ALTER TABLE` idempotente (checa `PRAGMA table_info` antes). Snapshot localizado no mesmo lugar do dado: queries de undo são single-row, atomic via `UPDATE` com 2 `SET`. Sem JOIN, sem segunda tabela pra manter sincronizada.
+
+**`upsertPromptModule({...}, userId, {snapshot:true})`** — opt explícito. Default `true` (admin), seed inicial passa `false` pra não criar histórico fantasma do boot. **Skip do snapshot se conteúdo idêntico** ao atual (`prev.content !== content`) — evita overwrite do snapshot real por uma re-save no-op.
+
+**`revertPromptModule(name)`** — swap atomico: `UPDATE SET content=?, content_previous=?` com os 2 valores trocados. Retorna `null` se snapshot vazio. **`resetPromptModule(name)`** — volta pro `getDefaultPromptModule(name).content` (vem do seed.js — single source of truth) e zera `content_previous`. Decisão consciente: depois de restore não dá pra reverter; se restaurou, queria começar do zero.
+
+**Trade-off aceito:** 1 nível só de undo (igual persona). Se quiser histórico maior, vira tabela `prompt_modules_history` separada — mas pra editor de copy o "desfazer última edição errada" cobre 95% dos casos.
+
+**Quando reusar:** qualquer entidade editável que precise de undo simples. Coluna `<campo>_previous` ao lado do `<campo>`. Helper `revert<Entity>` que faz swap. Não cria tabela nova — é overkill pra 1 nível.
+
+---
+
 ## 2026-05-03 — Persona via placeholders no núcleo + assemble pure function
 
 **Contexto:** Sócio queria controlar tom (gírias, abertura, frases proibidas) sem expor o núcleo inteiro pra edição via painel (PR #53 já tinha tirado o textarea do núcleo justamente porque admin podia quebrar a estrutura). Solução: subset SEGURO de slots de TOM.
