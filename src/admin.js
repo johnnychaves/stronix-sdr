@@ -6694,7 +6694,7 @@ router.get('/', (req, res) => {
     const elGq = document.getElementById('ac-persona-girias-quentes');
     const elGp = document.getElementById('ac-persona-girias-proibidas');
     const elFx = document.getElementById('ac-persona-frases-extra');
-    const splitLines = (s) => (s || '').split('\n').map(x => x.trim()).filter(x => x.length > 0);
+    const splitLines = (s) => (s || '').split('\\n').map(x => x.trim()).filter(x => x.length > 0);
     return {
       abertura: (elAb?.value || '').trim(),
       giriasQuentes: splitLines(elGq?.value),
