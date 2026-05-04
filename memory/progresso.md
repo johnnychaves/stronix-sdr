@@ -4,6 +4,50 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-04 — PR1 da migração v3: tool use forçado paralelo a v2 (fundação)
+
+**Contexto:** Sonnet esquece a tag `[ESTADO:...]` em 60-80% das baterias E.1/E.2_EXT do v2 (medido em PR36 × 5 runs). Sintoma derivado: respostas longas chegam ao lead sem o backend saber que o estado mudou. Solução estrutural — migrar canal de sinalização de tags em texto livre pra tool use forçada da Anthropic, eliminando a possibilidade do modelo "esquecer".
+
+**Arquitetura escolhida:** single forced tool `responder_ao_lead` com `tool_choice` forçado + `disable_parallel_tool_use: true`. Schema espelha 1-pra-1 o `lead_state` do v2 (mesmos enums, mesmos valores). Estado novo + mensagem ao lead saem JUNTOS no mesmo input → atomicidade por construção. Justificativa completa em [decisoes.md](decisoes.md).
+
+**Implementação (4 arquivos novos, ~700 LOC; 4 arquivos modificados, ~70 LOC delta):**
+
+Novos:
+- [src/v3-tools.js](../src/v3-tools.js) (~250 LOC): definição da tool, enums (10 estágios + 28 módulos + 4 enums de campos do lead_state), `buildToolDefinition()`, `extractToolInput()` (parse do `response.content[].tool_use`), `toolInputToParsed()` (converte tool input no formato `parsed` do v2 — preserva contrato com `computeStateUpdate`), `sanitizeMensagem()` (remove tags antigas + em-dash como defesa), `ADDENDUM_V3` (instrução curta sobre tool use, vai junto com dynamic ctx).
+- [src/agent-v3.js](../src/agent-v3.js) (~280 LOC): `replyV3()` paralelo a `replyV2()`, `simulateReplyV3()` pra playground. Reusa `buildSystemBlocks`, `computeStateUpdate`, `computeInsistenciasValor` do agent-v2. Re-implementa `buildDynamicContextV3` e `isOutsideBusinessHours` localmente pra não tocar agent-v2.js (em modo manutenção).
+- [scripts/test-v3-tool-schema.js](../scripts/test-v3-tool-schema.js) (~210 LOC, **89/89 passando**): cobre enums, shape da tool definition, `extractToolInput` happy path + edge cases (null, content vazio, tool errada, text antes do tool_use), `toolInputToParsed` (clamps de insistencias_valor, agendamento parcial, módulo "nenhum" → null, useAudio bool, null safety), `sanitizeMensagem` (em-dash, tags, null safety), contrato com agent-v2 (`stateFields`/`nameFromTag`/`requiredModule`/`agendamento`/`cleanText` compatíveis).
+
+Modificados:
+- [src/webhook.js](../src/webhook.js): `getCurrentAgentVersion()` aceita `'v3'`. Routing condicional em `processBatch` carrega `agent-v3` lazy quando versão === 'v3'. Default código continua `'v2'`. Produção (Railway com `AGENT_VERSION=v2`) não toca v3.
+- [src/admin.js](../src/admin.js): novo endpoint `POST /admin/api/playground/v3/message` espelhando v2 + retornando `toolCallPresent` (sanity check pro dono validar que tool foi chamada). UI playground ganha `<option value="v3">v3 (tool use forçado — em validação)</option>` no select de versão. `onPlaygroundVersionChange()` trata v3 como v2 pra UI (mostra debug + cenários). Endpoint routing em `sendPlayground()` adiciona branch v3.
+- [src/db.js](../src/db.js): novos `V2_EVENT_TYPES.TURN_OK_V3` (denominador de % v3) e `V2_EVENT_TYPES.TOOL_CALL_AUSENTE` (sanity check — esperado 0 com tool_choice forçado).
+
+**Reuso integral (zero linha mudada):**
+- [src/router-v2.js](../src/router-v2.js), [src/persona-v2.js](../src/persona-v2.js), [src/prompt-nucleo-v2.js](../src/prompt-nucleo-v2.js), [src/resumo-dinamico.js](../src/resumo-dinamico.js), [src/v2-detectors.js](../src/v2-detectors.js)
+
+**Suite total: 278/278** (189 prévios + 89 novos). Zero regressão:
+- test-regex-valor.js: 21/21
+- test-state-update.js: 14/14
+- test-router-v2.js: 39/39
+- test-resumo-dinamico.js: 26/26
+- test-v2-detectors.js: 33/33
+- test-persona-assemble.js: 56/56
+- test-v3-tool-schema.js: 89/89 (NOVO)
+
+**Política de flag mantida:** `AGENT_VERSION=v2` continua default em produção (Railway env). v3 é opt-in via override env ou DB. Modo manutenção do v2 ativo: só fix de bug crítico até PR4 mergear ou v3 ser descartado. Comunicado na primeira linha do PR.
+
+**Pré-requisitos antes de qualquer rollout v3:**
+1. Smoke do dono no playground v3: 5-10 cenários reais, 60+ min mínimo. Pré-requisito firme, sem exceção.
+2. Bateria E.1/E.2_EXT × 5 runs em v3 com `tag_esquecida=0%` esperado.
+3. Critério comercial: taxa de agendamento v3 ≥ taxa v2 na mesma janela (PR4).
+
+**Próximos PRs do trilho v3:**
+- PR2: controle de preço via enum em `planos_referenciados` + retry single-shot. Mata hallucination de preço por construção.
+- PR3: Monitor v3 + comparação v2 × v3 lado a lado. Dashboard pra janela de validação.
+- PR4 (condicional): promoção de v3 a default se métricas técnicas + comercial baterem.
+
+---
+
 ## 2026-05-03 — Persona expandida: nome agente + nome negócio + jeito + snapshot/undo
 
 **Contexto:** Depois da persona inicial (4 slots: abertura, gírias, frases proibidas), sócio pediu mais autonomia: "preciso mudar o nome do Johnny e a forma que ele lida com o cliente — quero recepção mais calorosa em vez de séria". 3 slots novos pra cobrir identidade completa (não só tom).

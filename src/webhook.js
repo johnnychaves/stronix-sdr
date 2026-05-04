@@ -4,8 +4,10 @@ const { reply, isAffirmative, isNegative, getContact, setAudioFlags } = require(
 const { replyV2 } = require('./agent-v2');
 const wa = require('./whatsapp');
 
-// Toggle entre Johnny v1 (prompt monolítico) e v2 (núcleo + módulos).
+// Toggle entre Johnny v1 (prompt monolítico), v2 (núcleo + módulos) e v3 (tool use forçado).
 // Default v2 desde 2026-05-03 — v1 fica como fallback de emergência.
+// PR1 da migração v3 (2026-05-04): v3 é opt-in via AGENT_VERSION=v3 (env Railway) ou
+// override em DB. Default código continua 'v2'. v3 só entra rota com override explícito.
 // Se v2 quebrar em prod, admin pausa via Monitor v2 (DB flag) que vira pra v1
 // instantâneo sem precisar restart. Pra reverter permanentemente: setar
 // AGENT_VERSION=v1 na env do Railway.
@@ -13,11 +15,11 @@ const AGENT_VERSION_ENV = (process.env.AGENT_VERSION || 'v2').toLowerCase();
 console.log(`[webhook] agent version (env): ${AGENT_VERSION_ENV}`);
 
 // Resolve a cada request — barato (1 query SQLite indexada). Permite admin
-// flipar pra v1 instantâneo via UI sem mexer em variável Railway.
+// flipar instantâneo via UI sem mexer em variável Railway.
 function getCurrentAgentVersion() {
   try {
     const override = require('./db').getRuntimeFlag('agent_version_override');
-    if (override === 'v1' || override === 'v2') return override;
+    if (override === 'v1' || override === 'v2' || override === 'v3') return override;
   } catch { /* DB pode estar inicializando */ }
   return AGENT_VERSION_ENV;
 }
@@ -172,13 +174,21 @@ async function processBatch(from, { text, anyAudio, explicitAudio, firstText, fi
     }
   }
 
-  // Roteamento por versão do agente. v2 usa núcleo + lead_state; v1 é o
-  // prompt monolítico antigo. Default v1 (rollout controlado por env var,
-  // override por v2_runtime_flags pra pausa instantânea via admin).
+  // Roteamento por versão do agente.
+  // v3 usa tool use forçado da Anthropic (PR1 da migração v3, 2026-05-04) — opt-in.
+  // v2 usa núcleo + módulos + tags em texto livre — default em produção.
+  // v1 é o prompt monolítico antigo — fallback de emergência.
+  // Override via DB flag (admin) ou env var AGENT_VERSION (Railway).
   const currentVersion = getCurrentAgentVersion();
-  const result = currentVersion === 'v2'
-    ? await replyV2(from, text, { isAudio: anyAudio })
-    : await reply(from, text, { isAudio: anyAudio, forceAudio });
+  let result;
+  if (currentVersion === 'v3') {
+    const { replyV3 } = require('./agent-v3');
+    result = await replyV3(from, text, { isAudio: anyAudio });
+  } else if (currentVersion === 'v2') {
+    result = await replyV2(from, text, { isAudio: anyAudio });
+  } else {
+    result = await reply(from, text, { isAudio: anyAudio, forceAudio });
+  }
   const shouldSendAudio = forceAudio || result.useAudio;
 
   // Lead's incoming audio: agent.reply já salvou a msg user com was_audio=true mas
