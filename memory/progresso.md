@@ -4,6 +4,23 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-05 — ADDENDUM_V3 aprovado pelo dono, [PR #66](https://github.com/johnnychaves/stronix-sdr/pull/66) aberto. Próximo: PR3 Monitor
+
+**Smoke real validou o fix do bug "fora de contexto"** em 2 rodadas independentes (13/13 PASS, ~$0.22 USD). Cenário 4 (literal do bug) NÃO reproduziu — modelo respondeu corretamente sem citar R\$ nem inventar "sobre os valores que tu pediu". Cenário 6 (não-regressão da virada apresentar+visita) preservado — apresentação com valores corretos + virada obrigatória + validador PR2 aprovou.
+
+**Branch artefato `feature/prompt-modules-editor`** deletada (local + remote) — conteúdo já estava em main via squash do [PR #65](https://github.com/johnnychaves/stronix-sdr/pull/65).
+
+**[PR #67](https://github.com/johnnychaves/stronix-sdr/pull/67) Monitor unificado v2 × v3** aberto em paralelo, baseado em `feature/monitor-v3-comparacao` (commit `5badaf6`). Aguarda PR #66 mergear primeiro pro smoke do dono pós-merge ter o fix valendo.
+
+**Status do trilho v3 atualizado:**
+- ✅ PR1 — Fundação tool use ([#63](https://github.com/johnnychaves/stronix-sdr/pull/63))
+- ✅ PR2 — Validação de preço por enum ([#64](https://github.com/johnnychaves/stronix-sdr/pull/64))
+- 🔄 PR ADDENDUM_V3 — guardas de fluxo, aprovado, [#66](https://github.com/johnnychaves/stronix-sdr/pull/66) aberto, aguardando merge
+- 🔄 PR3 Monitor v3 — [#67](https://github.com/johnnychaves/stronix-sdr/pull/67) aberto, aguardando merge sequencial pós-#66
+- ⏳ PR4 (condicional) — Promoção a default se técnica + comercial baterem na janela 50 conv / 14 dias
+
+---
+
 ## 2026-05-05 — ADDENDUM_V3 ganha guardas de fluxo (Regra 1 + Regra 2 refinada) — fix do bug "fora de contexto"
 
 **Bug original (smoke do dono no playground v3):** Lead respondeu pergunta de qualificação ("Seria no final do dia mesmo"); agente apresentou planos com valores **+** propôs visita na mesma mensagem; frase **"Sobre os valores que tu pediu"** foi inventada — lead nunca pediu valor.

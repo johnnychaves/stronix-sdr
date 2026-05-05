@@ -4,6 +4,36 @@ Padrões, trechos de código e abordagens confirmadas em produção/testes. Reut
 
 ---
 
+## 2026-05-05 — Reforçar no ADDENDUM o que está perdido no núcleo cacheado (anti-LITM cirúrgico)
+
+**Contexto:** Bug "fora de contexto" no playground v3 mostrou que regra crítica (`passa valor SÓ em insistencias_valor=N`, definida em `buildRegraDosValoresBlock`) estava sendo ignorada pelo modelo mesmo presente no núcleo cacheado de 12k chars. Lost-in-the-middle clássico em prompts longos.
+
+**Padrão aplicado:** quando uma regra estrutural está se perdendo no núcleo, NÃO reescrever o núcleo (caro, alto risco, invalida cache). REFORÇAR no addendum:
+- ADDENDUM_V3 vai NO FIM do system prompt (após blocos cacheados, antes do dynamic ctx).
+- Não-cacheado por design (re-enviado a cada turno, custo trivial: ~$0.01/turno).
+- Atenção máxima do modelo: posição final + não-cacheado = re-leitura por turno.
+- Permite regras + exceções nomeadas explicitamente — LLMs lidam bem com isso.
+
+**Receita:**
+1. Identifique a regra que está sendo ignorada e onde ela vive (provavelmente núcleo cacheado).
+2. Escreva versão CONDENSADA da regra no addendum (não copia inteira — extrai a obrigação operacional).
+3. Se há conflito com outra regra/módulo, documente a exceção POR NOME (`o módulo planos_e_precos define que...`) em vez de deixar conflito implícito.
+4. Valida com smoke real, 2 rodadas independentes (variabilidade Sonnet ≥ 1 run não comprova).
+5. Inclui cenário de NÃO-regressão pra confirmar que a exceção preservou comportamento que já funcionava.
+
+**Por quê funciona:**
+- Modelo lê o addendum a cada turno (cache miss intencional). Atenção alta.
+- Posição final do prompt = mais peso na próxima geração.
+- Exceções nomeadas reduzem ambiguidade. "Em geral X, exceto quando Y → fazer Z" é mais robusto do que regra absoluta que entra em conflito silencioso.
+
+**Quando NÃO usar:** se o problema é que o modelo IGNORA tudo (não específico a uma regra), o caminho é trocar modelo (Haiku → Sonnet, princípio sócio-mode "1 linha antes de 1 semana"). ADDENDUM resolve "regra específica esquecida no meio do prompt", não "modelo não obedece".
+
+**Validação experimental:** PR ADDENDUM_V3 (2026-05-05) reforçou Regra 1 (gate de R\$) + Regra 2 com exceção ("apresentar+virar é UMA ação"). Smoke real 2 rodadas independentes contra Anthropic, 13/13 PASS. Bug original NÃO reproduziu. Estratégia comercial (virada obrigatória do módulo planos_e_precos) preservada.
+
+**Custo:** ADDENDUM cresceu de 700 → 3.1k chars (+2.4k tokens não-cacheados por turno). $0.01/turno em produção. Trivial perto do valor de cada lead correto.
+
+---
+
 ## 2026-05-04 — Snapshot de 1 nível em coluna ao lado do dado (não em tabela separada)
 
 **Contexto:** Editor de módulos (PR65) precisava de "↶ voltar versão anterior" igual persona, mas persona usa `agent_config.persona_previous` (1 key separado) porque persona é 1 JSON único. Módulos são 28 linhas — replicar o mesmo padrão viraria 28 keys no agent_config ou tabela `prompt_modules_history` separada.
