@@ -98,6 +98,19 @@ assert(typeof ADDENDUM_V3 === 'string' && ADDENDUM_V3.includes('responder_ao_lea
 assert(ADDENDUM_V3.includes('NÃO escreva'), 'ADDENDUM_V3 instrui a não emitir tags');
 assert(ADDENDUM_V3.includes('planos_referenciados'), 'ADDENDUM_V3 instrui sobre planos_referenciados (PR2)');
 
+// PR — guardas de fluxo (regras 1 e 2, 2026-05-04). Bug "fora de contexto" do
+// dono: agente apresentou planos com valores inventados quando lead respondeu
+// pergunta de qualificação sem pedir preço.
+assert(ADDENDUM_V3.includes('GUARDAS DE FLUXO'), 'ADDENDUM_V3 tem seção de guardas de fluxo');
+assert(ADDENDUM_V3.includes('REGRA 1'), 'ADDENDUM_V3 tem REGRA 1 (citação de valor)');
+assert(ADDENDUM_V3.includes('apresentacao_planos'), 'REGRA 1 cita estágio apresentacao_planos como gate');
+assert(ADDENDUM_V3.includes('REGRA 2'), 'ADDENDUM_V3 tem REGRA 2 (uma ação por turno)');
+assert(ADDENDUM_V3.includes('UMA AÇÃO POR TURNO'), 'REGRA 2 declara explicitamente "uma ação por turno"');
+assert(ADDENDUM_V3.includes('EXCEÇÃO ÚNICA'), 'ADDENDUM_V3 documenta exceção única (virada apresentar+propor visita)');
+assert(ADDENDUM_V3.includes('planos_e_precos'), 'EXCEÇÃO referencia o módulo planos_e_precos');
+// Sanity: addendum não pode crescer descontroladamente — fica fora do cache.
+assert(ADDENDUM_V3.length < 5000, 'ADDENDUM_V3 < 5k chars (overhead não-cacheado por turno aceitável)');
+
 // ─── PR2: planos_referenciados field ───
 assert(props.planos_referenciados, 'planos_referenciados existe no schema');
 assert(props.planos_referenciados.type === 'array', 'planos_referenciados é array');
