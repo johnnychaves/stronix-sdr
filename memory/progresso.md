@@ -4,6 +4,67 @@ Registro cronológico de avanços importantes. Adicione entradas no topo (mais r
 
 ---
 
+## 2026-05-05 — ADDENDUM_V3 aprovado pelo dono, [PR #66](https://github.com/johnnychaves/stronix-sdr/pull/66) aberto. Próximo: PR3 Monitor
+
+**Smoke real validou o fix do bug "fora de contexto"** em 2 rodadas independentes (13/13 PASS, ~$0.22 USD). Cenário 4 (literal do bug) NÃO reproduziu — modelo respondeu corretamente sem citar R\$ nem inventar "sobre os valores que tu pediu". Cenário 6 (não-regressão da virada apresentar+visita) preservado — apresentação com valores corretos + virada obrigatória + validador PR2 aprovou.
+
+**Branch artefato `feature/prompt-modules-editor`** deletada (local + remote) — conteúdo já estava em main via squash do [PR #65](https://github.com/johnnychaves/stronix-sdr/pull/65).
+
+**[PR #67](https://github.com/johnnychaves/stronix-sdr/pull/67) Monitor unificado v2 × v3** aberto em paralelo, baseado em `feature/monitor-v3-comparacao` (commit `5badaf6`). Aguarda PR #66 mergear primeiro pro smoke do dono pós-merge ter o fix valendo.
+
+**Status do trilho v3 atualizado:**
+- ✅ PR1 — Fundação tool use ([#63](https://github.com/johnnychaves/stronix-sdr/pull/63))
+- ✅ PR2 — Validação de preço por enum ([#64](https://github.com/johnnychaves/stronix-sdr/pull/64))
+- 🔄 PR ADDENDUM_V3 — guardas de fluxo, aprovado, [#66](https://github.com/johnnychaves/stronix-sdr/pull/66) aberto, aguardando merge
+- 🔄 PR3 Monitor v3 — [#67](https://github.com/johnnychaves/stronix-sdr/pull/67) aberto, aguardando merge sequencial pós-#66
+- ⏳ PR4 (condicional) — Promoção a default se técnica + comercial baterem na janela 50 conv / 14 dias
+
+---
+
+## 2026-05-05 — ADDENDUM_V3 ganha guardas de fluxo (Regra 1 + Regra 2 refinada) — fix do bug "fora de contexto"
+
+**Bug original (smoke do dono no playground v3):** Lead respondeu pergunta de qualificação ("Seria no final do dia mesmo"); agente apresentou planos com valores **+** propôs visita na mesma mensagem; frase **"Sobre os valores que tu pediu"** foi inventada — lead nunca pediu valor.
+
+**Diagnóstico confirmado pela exploração:**
+- Módulo `planos_e_precos` NÃO foi carregado pelo router-v2 (sem keyword de preço, sem `objecao_ativa='preco'`, estágio ainda em qualificação). Modelo inventou valores do conhecimento prévio do prompt v2.
+- Persona já define `passa valor SÓ em insistencias_valor=N (default 3)` em `buildRegraDosValoresBlock` ([src/persona-v2.js:160](../src/persona-v2.js:160)), mas vive dentro do núcleo cacheado de 12k chars. Lost-in-the-middle — modelo ignorou.
+- ADDENDUM_V3 antigo cobria só estrutura tool use. Não reforçava regras de fluxo da máquina de estado.
+
+**Conflito identificado e resolvido (Opção A aprovada pelo dono):**
+- Módulo `planos_e_precos` ordena: `DEPOIS de apresentar: VIRADA OBRIGATÓRIA pra aula experimental` (frase incluída no módulo). Regra 2 literal "uma ação por turno" quebraria isso.
+- Solução: regra 2 documenta a **EXCEÇÃO ÚNICA** explicitamente, atacando só o sintoma (qualificação misturada com apresentação inventada). Strategy comercial deliberada (apresentar+virar) preservada.
+
+**Implementação (3 arquivos modificados, 1 novo):**
+
+Modificados:
+- [src/v3-tools.js](../src/v3-tools.js): `ADDENDUM_V3` ganhou seção `═══ GUARDAS DE FLUXO ═══` com:
+  - **REGRA 1** — Citar R$ só quando estagio_atual='apresentacao_planos' OU objecao_ativa='preco' OU já citou antes nessa conversa. Em outros estágios (qualificacao_*, captura_nome, recomendacao_modalidade, proposta_visita, drill_horario, agendamento_confirmado, handoff_humano), proibido. Exemplo do bug ("sobre os valores que tu pediu") explicitamente nomeado como alucinação.
+  - **REGRA 2** — Uma ação por turno (qualificação OU drill OU apresentação OU proposta visita). EXCEÇÃO ÚNICA: apresentação termina sempre com a virada obrigatória (definida pelo módulo `planos_e_precos`) — encadeamento "apresentar+virar" conta como UMA ação só e é OBRIGATÓRIO.
+  - Tamanho: 700 → 3.1k chars (+2.4k não-cacheados). Custo extra ~$0.01/turno em produção, irrelevante.
+
+- [scripts/test-v3-tool-schema.js](../scripts/test-v3-tool-schema.js): +8 asserts (134/134 PASS, antes 126). Cobre: presença das seções GUARDAS, REGRA 1 cita apresentacao_planos como gate, REGRA 2 cita "UMA AÇÃO POR TURNO", EXCEÇÃO ÚNICA referencia o módulo planos_e_precos, tamanho < 5k chars (sanity).
+
+Novo:
+- [scripts/smoke-v3-fluxo.js](../scripts/smoke-v3-fluxo.js): 6 cenários contra Anthropic API real (Sonnet 4.5). Cenários 1-5 cobrem qualificação sem pedir valor; cenário 6 cobre 3-turn cumulativo (lead pede valor 3x, na 3ª insist=3 → apresentação + virada obrigatória).
+
+**Smoke real — 2 rodadas independentes, 13/13 PASS:**
+- Cenário 4 (literal do bug do dono) NÃO reproduziu: modelo respondeu drill de dia/proposta visita SEM citar R$ e SEM inventar "sobre os valores que tu pediu". Reprodutibilidade confirmada.
+- Cenário 6 (não-regressão da virada): modelo apresentou os 3 valores corretos (R$199 musc Flex, R$149 No Limit, R$109 Clube +), declarou `planos_referenciados=[musculacao_*, matricula]` corretamente, validador de PR2 aprovou, virada obrigatória presente ("Mas antes de fechar plano, vale conhecer pessoalmente, primeira aula é gratuita. Posso te encaixar terça ou quarta?"), NÃO terminou com "qual plano faz mais sentido". Exceção da regra 2 funcionou — apresentar+virar coexistiu como UMA ação.
+- Custo total das 2 rodadas: ~$0.22 USD. Estimativa inicial era $0.06; turnos cumulativos do cenário 6 + cache misses iniciais inflaram. Ainda trivial.
+- Latência: ~50s por rodada (8 calls Sonnet 4.5).
+
+**1 falso negativo do TESTE corrigido na 2ª rodada:** regex do cenário 5 só capturava `9h|10h|11h`. Modelo respondeu corretamente "Tem 14h ou 15h, qual prefere?" (módulo `fluxo_aula_experimental` define faixas 8h-16h). Regex generalizado pra `\d{1,2}h(?:\d{2})?` aceitar qualquer hora exata. Comportamento da IA estava certo — bug do teste, não do agent.
+
+**Suite offline: 372/372 PASS.** Zero regressão (134 schema + 72 validators + 39 router + 56 persona + 17 prompt-modules + 33 detectors + 21 regex).
+
+**O que NÃO foi tocado:** módulos de produção (`planos_e_precos`, `apresentacao_planos`, `fluxo_aula_experimental`), persona-v2, router-v2, núcleo, agent-v3 (estrutura de generateAndValidate intacta). Apenas o ADDENDUM_V3 (instrução não-cacheada que vai no fim do system prompt) foi ampliado.
+
+**Branch:** `feature/v3-addendum-fluxo` (de origin/main, independente do PR3 Monitor que continua em `feature/monitor-v3-comparacao`). Aguardando autorização do dono pra merge.
+
+**Limpeza colateral:** branch artefato `feature/prompt-modules-editor` deletada de local + remote (já estava em main via squash do PR #65, ficou pra trás).
+
+---
+
 ## 2026-05-04 — Editor de módulos no admin: char count, pill custom/default, restaurar default, voltar versão anterior, validação extra do `planos_e_precos`
 
 **Contexto:** Persona já é editável via PR54 (4 caixinhas), mas os 28 módulos de cenário (`info_academia`, `objecao_preco`, `publicos_especificos`, etc.) só mudavam via PR. Cada ajuste de copy virava commit + deploy. Pedido do dono: estender o editor da persona pros 28 módulos sem mexer em tool schema, enum de planos, validadores ou roteador.

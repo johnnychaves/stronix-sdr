@@ -4,6 +4,31 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-05 — ADDENDUM_V3 como camada anti-lost-in-the-middle + exceção explícita pra preservar estratégia comercial
+
+**Contexto:** Smoke do dono no playground v3 detectou bug "fora de contexto" — lead respondeu pergunta de qualificação, agente apresentou planos com valores inventados + propôs visita na mesma mensagem. Diagnóstico: persona já define o gate ("passa valor SÓ em insistencias_valor=N", default 3) em `buildRegraDosValoresBlock` ([src/persona-v2.js:160](../src/persona-v2.js:160)) — mas a regra vive **dentro do núcleo cacheado de 12k chars**. Lost-in-the-middle: modelo perdeu atenção, ignorou a regra.
+
+**Decisão 1: Reforçar no ADDENDUM_V3 (não no núcleo).** ADDENDUM vai NO FIM do system prompt (após blocos cacheados, antes do dynamic ctx). Posição final do prompt + não-cacheado = atenção máxima do modelo. Pattern já documentado no projeto: regras críticas no TOPO BLINDADO + LEMBRETE FINAL atacam lost-in-the-middle por construção. ADDENDUM é o lugar certo pra reforçar guardas que estão se diluindo no núcleo. Custo extra: ~$0.01/turno (700 → 3.1k chars não-cacheados). Trivial.
+
+**Decisão 2: Documentar a exceção explicitamente em vez de modificar o módulo.** Conflito identificado: módulo `planos_e_precos` ordena `DEPOIS de apresentar: VIRADA OBRIGATÓRIA pra aula experimental` (estratégia comercial deliberada — lead apresentado a valor sem proposta de visita fecha conversa em "vou pensar"). Regra 2 literal "uma ação por turno" quebraria isso.
+
+3 opções consideradas:
+- **(A) Documentar exceção no ADDENDUM** — ataca só o sintoma novo (qualificação misturada com apresentação), preserva módulo intacto.
+- **(B) Modificar módulo `planos_e_precos`** removendo "VIRADA OBRIGATÓRIA" — alto risco, toca módulo de produção que está performando.
+- **(C) Não adicionar regra 2** — evita conflito mas deixa parte do bug aberto (modelo poderia continuar combinando perguntas indevidamente).
+
+**Escolhida: (A).** Princípio sócio-mode aplicado: "trocar 1 linha antes de construir 1 semana de arquitetura". Adicionar texto no addendum > reescrever módulo de produção. Estratégia comercial preservada.
+
+**Por quê é OK ter exceção textual:** o modelo lê o addendum por extenso a cada turno. Exceção explicada com referência ao módulo (`o módulo planos_e_precos define que...`) é mais robusta do que assumir que regra geral "vai funcionar". LLMs lidam bem com regras + exceções nomeadas; mal com regras absolutas que entram em conflito silencioso com outras instruções.
+
+**Validação experimental (smoke real, 2 rodadas, 13/13 PASS):**
+- Cenário 4 (bug literal do dono): NÃO reproduziu em nenhuma rodada.
+- Cenário 6 (não-regressão da virada): apresentação + virada obrigatória coexistiram em ambas. Validador PR2 aprovou. Estratégia comercial intacta.
+
+**Princípio acumulado:** quando uma regra estrutural (no núcleo cacheado) está sendo ignorada pelo modelo, a primeira tentativa é REFORÇAR no addendum (camada externa não-cacheada com atenção máxima), não REESCREVER o núcleo. Núcleo cacheado é caro de mexer (cache miss + risco de quebrar outras regras). Addendum é barato e cirúrgico.
+
+---
+
 ## 2026-05-04 — Migração v3 PR2: controle de preço por construção via enum + retry single-shot
 
 **Decisão:** Adicionar campo `planos_referenciados: array<plano_id>` no input_schema da tool `responder_ao_lead`. Backend cruza valores monetários ≥R$50 na `mensagem_ao_lead` com os preços oficiais dos plano_ids referenciados (±5% tolerance). Se não bater, dispara 1 retry idiomático via `tool_result is_error=true` com hint corretivo + tabela completa de preços. Se segundo retry também falhar, log + envia resposta original (call 1).
