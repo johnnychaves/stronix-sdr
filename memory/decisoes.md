@@ -4,6 +4,45 @@ Registro de decisões importantes, com contexto e motivação. Consulte antes de
 
 ---
 
+## 2026-05-04 — Migração v3 PR3 (Monitor unificado): hash phone-locked + Monitor único com cortes por versão
+
+**Decisão 1: hash determinístico por phone (não por turno, não random):**
+SHA256 do phone canonicalizado → bucket [0..99]. Lead que cai em v3 com `rollout_pct=20` continua em v3 mesmo se threshold subir pra 50% ou voltar pra 10% — bucket é fixo. Mover threshold só afeta novos phones que cruzam a fronteira.
+
+**Por quê:**
+- Coerência de conversa: lead não pode começar em v2 (com tags em texto livre) e mid-conv pular pra v3 (tool use forçado). State machine quebra. Persona quebra. Mensagens anteriores no contexto referenciam tags que v3 não emite.
+- Reproducibilidade pra debug: dono reporta "lead X teve resposta estranha" — basta perguntar versão, todas as respostas daquele phone foram pelo mesmo agent.
+- Reversão segura: aumentar % é ação consciente; reduzir não rebucketiza ninguém (rollback imperfeito mas previsível).
+
+**Trade-off aceito:** dono não consegue testar v3 com lead específico (que já caiu em v2) sem usar override admin. Override existe (`agent_version_override`).
+
+**Decisão 2: Monitor unificado (1 tela com toggle), não Monitor v3 espelho:**
+Renomeei `tab-v2-monitor` → painel "Monitor" com segmented `[v2] [v3] [v2 × v3]`. Funções de aggregation (`getMetrics`, `getAlerts`, `getConversations`) viraram parametrizáveis por versão. Endpoints `/api/v2/*` mantidos como aliases.
+
+**Por quê:**
+- Tela espelho duplicaria 500 linhas de UI pra mostrar 95% da mesma coisa. Manter em sincronia entre v2 e v3 vira fonte de bug.
+- Toggle de versão é trivial em select/segmented. Estado em localStorage por consultor.
+- Modo `v2 × v3` lado a lado é o uso central pro PR4 (decisão de promoção). Tela espelho dificultaria comparar.
+
+**Decisão 3: Auto-pausa em alertas críticos REJEITADA:**
+Sócio pediu explicitamente: alertas críticos só notificam (WhatsApp pro `OWNER_PHONE_NUMBER`); pausa fica manual via botão. Razão dele: "auto-pause sem aprovação humana cria rollback surpresa." Notificação tem rate-limit 1h por código (exceto primeira ocorrência sempre dispara).
+
+**Trade-off aceito:** se PRECO_FORA_REFERENCIA_V3 disparar 50x em 5min antes do dono ver notificação, ele vai precisar pausar manual. Aceito como risco operacional vs custo de auto-pausa errada.
+
+**Decisão futura (não esse PR):** considerar auto-pause por critério forte (ex: >3 crashes em 5min). Sócio aprovou avaliar quando sentir necessidade.
+
+**Decisão 4: pricing hardcoded em const (não em DB):**
+`CLAUDE_PRICING_USD_PER_M = { input: 3, output: 15, cache_read: 0.30, cache_creation: 3.75 }` em [src/db.js](../src/db.js). TODO comentado pra futuro: mover pra `agent_config` quando dono quiser editar via painel.
+
+**Por quê hardcode agora:** Anthropic atualiza tabela ~1x/ano. Dono atualiza commit + deploy quando acontecer. UI editável é gold-plating sem demanda real.
+
+**Decisão 5: token logging no meta de TURN_OK[/V3] (não tabela separada):**
+Cada `logV2Event(TURN_OK[/V3])` ganha `meta.tokensInput/Output/cacheRead/cacheCreation`. `getCostMetrics` filtra events com meta válida. Custo histórico (antes do PR3) sai zerado mas eventos sobrevivem — `coverage_pct` na UI avisa.
+
+**Por quê não tabela separada:** infra de log já existe, não precisa schema novo. Custo é derivado de turnos efetivos — manter mesma fonte simplifica join. Conta com 10k events/dia rodando full table scan na agregação é OK até 1M events.
+
+---
+
 ## 2026-05-04 — Migração v3 PR2: controle de preço por construção via enum + retry single-shot
 
 **Decisão:** Adicionar campo `planos_referenciados: array<plano_id>` no input_schema da tool `responder_ao_lead`. Backend cruza valores monetários ≥R$50 na `mensagem_ao_lead` com os preços oficiais dos plano_ids referenciados (±5% tolerance). Se não bater, dispara 1 retry idiomático via `tool_result is_error=true` com hint corretivo + tabela completa de preços. Se segundo retry também falhar, log + envia resposta original (call 1).

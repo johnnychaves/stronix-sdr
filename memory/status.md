@@ -9,11 +9,11 @@ Maratona de implementação 2026-05-01 → 2026-05-02 entregou a plataforma toda
 **Trilho v3:**
 - ✅ PR1 — Fundação (tool use forçado, single tool atomica, suite 278/278)
 - ✅ PR2 — Controle de preço via enum em `planos_referenciados` + retry single-shot (suite 387/387, smoke E2E 2/2 PASS) [bundle: re-aplica canário TOOL_CALL_MULTIPLE perdido no squash do PR1]
-- ⏳ PR3 — Monitor v3 + comparação v2 × v3
+- ✅ PR3 — Monitor unificado v2 × v3 com hash phone-locked + custo separado + rollout incremental + notificação WhatsApp em alerta crítico (suite 383/383). Aguardando validação local + merge.
 - ⏳ PR4 (condicional) — Promoção a default se técnica + comercial baterem na janela 50 conv / 14 dias
 
 **Trilho admin (paralelo):**
-- ✅ PR65 — Editor de módulos com char count, pill custom/default, restaurar default, voltar versão anterior, validação extra do `planos_e_precos`. Coluna `content_previous` na tabela. 17 testes novos, 364/364 offline PASS.
+- ✅ PR65 — Editor de módulos com char count, pill custom/default, restaurar default, voltar versão anterior, validação extra do `planos_e_precos`. Coluna `content_previous` na tabela. 17 testes novos.
 
 **Pré-requisito firme antes de qualquer rollout v3:** smoke do dono no playground v3 — 5-10 cenários reais, 60+ min mínimo. Bateria automática não substitui.
 

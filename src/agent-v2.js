@@ -433,12 +433,19 @@ async function replyV2Inner(from, text, { isAudio = false } = {}) {
   // ─── Instrumentação PR #37 — eventos pra métricas e alertas ───
   // tag_esquecida: parser não achou [ESTADO:] na resposta (limitação intrínseca
   // do Sonnet em respostas longas, known issue do PR33).
+  // PR3: meta inclui tokens pra cálculo de custo no Monitor.
+  const tokensMeta = {
+    tokensInput: response.usage?.input_tokens || 0,
+    tokensOutput: response.usage?.output_tokens || 0,
+    cacheReadTokens: response.usage?.cache_read_input_tokens || 0,
+    cacheCreationTokens: response.usage?.cache_creation_input_tokens || 0,
+  };
   const tagCheck = detectsTagEsquecida(parsed);
   if (tagCheck.triggered) {
-    db.logV2Event(db.V2_EVENT_TYPES.TAG_ESQUECIDA, from, null, { preview: cleanText.slice(0, 80) });
+    db.logV2Event(db.V2_EVENT_TYPES.TAG_ESQUECIDA, from, null, { preview: cleanText.slice(0, 80), ...tokensMeta });
   } else {
     // Conta turnos OK pra denominador da % de tag esquecida.
-    db.logV2Event(db.V2_EVENT_TYPES.TURN_OK, from, null);
+    db.logV2Event(db.V2_EVENT_TYPES.TURN_OK, from, null, tokensMeta);
   }
   // valor_antecipado e preco_inventado rodam APENAS se bot mencionou valor.
   // Otimização: extractMoneyValues uma vez pelos detectores internos, mas detectors

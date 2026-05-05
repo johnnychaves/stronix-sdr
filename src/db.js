@@ -1,6 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+// crypto já é importado mais abaixo (USERS + AUTH section). Reusado por
+// _phoneBucket (PR3 — hash determinístico de phone pra rollout v3).
 
 // Path do banco: usa DB_PATH do env (Railway com volume) ou ./data/database.sqlite local
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'database.sqlite');
@@ -1809,6 +1811,443 @@ function getV2Alerts() {
   return alerts;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// PR #66 — MONITOR UNIFICADO V2 × V3 (cortes por versão + custo + rollout)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Generaliza Monitor v2 (PR37) pra cobrir v3 com as mesmas funções de
+// aggregation. Filtro por `version` ('v2'|'v3') decide quais event types
+// vão pro denominador/numerador. Funções v2-only originais viram aliases
+// pra não quebrar /api/v2/* legacy.
+//
+// Heurística de "qual versão atendeu esse phone": último evento TURN_OK
+// vs TURN_OK_V3 vence. Não tem coluna dedicada em lead_state — adicionar
+// se virar gargalo de query (não está hoje).
+
+// TODO(PR-futuro): mover pra agent_config pra dono editar via painel
+// quando Anthropic mudar preço (~1x/ano). Hardcode é OK pra rollout v3 —
+// custo é informativo, não decisório.
+const CLAUDE_PRICING_USD_PER_M = {
+  // Sonnet 4.5 — preço efetivo em 2026-05 (input/output normais + cache).
+  // Se Anthropic mudar tabela, atualizar aqui MANUALMENTE e marcar no commit.
+  input: 3.0,
+  output: 15.0,
+  cache_read: 0.30,
+  cache_creation: 3.75,
+};
+
+// Mapeia event types relevantes por versão.
+const V_DENOM = { v2: 'turn_ok', v3: 'turn_ok_v3' };
+const V_TAG_MISSING = { v2: 'tag_esquecida', v3: 'tool_call_ausente' };
+
+// Deriva qual versão atendeu cada phone com base no último TURN_OK[/V3].
+// Retorna Map<phone, 'v2'|'v3'>. Phones sem evento ficam fora do mapa.
+function _phoneVersionMap(periodMs = null) {
+  const since = periodMs ? Date.now() - periodMs : 0;
+  const rows = db.prepare(`
+    SELECT phone, event_type, MAX(timestamp) as ts
+    FROM v2_metrics_log
+    WHERE event_type IN ('turn_ok', 'turn_ok_v3')
+      AND phone IS NOT NULL
+      AND timestamp >= ?
+    GROUP BY phone, event_type
+  `).all(since);
+  // Pra cada phone, escolhe o event_type com maior ts.
+  const byPhone = new Map();
+  for (const r of rows) {
+    const existing = byPhone.get(r.phone);
+    if (!existing || r.ts > existing.ts) {
+      byPhone.set(r.phone, { ts: r.ts, version: r.event_type === 'turn_ok_v3' ? 'v3' : 'v2' });
+    }
+  }
+  const out = new Map();
+  for (const [phone, info] of byPhone) out.set(phone, info.version);
+  return out;
+}
+
+// Métricas agregadas com filtro por versão. Defaults retornam contrato
+// estável mesmo quando não há dados (% NaN viram 0).
+function getMetrics(period = '7d', version = 'v2') {
+  if (!['v2', 'v3'].includes(version)) throw new Error(`version inválida: ${version}`);
+  const periodMs = periodToMs(period);
+  const since = Date.now() - periodMs;
+  const denomEvent = V_DENOM[version];
+  const tagMissingEvent = V_TAG_MISSING[version];
+
+  // Funil: filtra por phones que tiveram TURN_OK[/V3] no período.
+  const phoneVersion = _phoneVersionMap(periodMs);
+  const phonesDessaVersao = [...phoneVersion.entries()]
+    .filter(([, v]) => v === version)
+    .map(([p]) => p);
+
+  let funil = {};
+  let totalLeads = 0;
+  if (phonesDessaVersao.length > 0) {
+    const placeholders = phonesDessaVersao.map(() => '?').join(',');
+    const funilRows = db.prepare(`
+      SELECT ls.estagio_atual, COUNT(DISTINCT ls.phone) as c
+      FROM lead_state ls
+      WHERE ls.phone IN (${placeholders})
+      GROUP BY ls.estagio_atual
+    `).all(...phonesDessaVersao);
+    for (const r of funilRows) {
+      funil[r.estagio_atual] = r.c;
+      totalLeads += r.c;
+    }
+  }
+
+  const agendou = funil['agendamento_confirmado'] || 0;
+  const handoff = funil['handoff_humano'] || 0;
+  // Perdidos: lead dessa versão, sem msg há >24h, não chegou em agendou/handoff
+  let perdidos = 0;
+  if (phonesDessaVersao.length > 0) {
+    const placeholders = phonesDessaVersao.map(() => '?').join(',');
+    perdidos = db.prepare(`
+      SELECT COUNT(DISTINCT ls.phone) as c FROM lead_state ls
+      LEFT JOIN contacts c ON c.phone = ls.phone
+      WHERE ls.phone IN (${placeholders})
+        AND c.last_contact_at < ?
+        AND ls.estagio_atual NOT IN ('agendamento_confirmado', 'handoff_humano')
+    `).get(...phonesDessaVersao, Date.now() - 24 * 60 * 60 * 1000)?.c || 0;
+  }
+
+  // Eventos de qualidade
+  const turnsOk = countV2Events(denomEvent, periodMs);
+  const tagMissing = countV2Events(tagMissingEvent, periodMs);
+  const routerEmpty = countV2Events(V2_EVENT_TYPES.ROUTER_EMPTY, periodMs);
+  const totalTurns = turnsOk + tagMissing;
+  const crashes = countV2Events(V2_EVENT_TYPES.CRASH, periodMs);
+
+  const result = {
+    version,
+    period,
+    since,
+    total_leads: totalLeads,
+    funil,
+    pct_agendou: totalLeads ? (agendou / totalLeads) * 100 : 0,
+    pct_handoff: totalLeads ? (handoff / totalLeads) * 100 : 0,
+    pct_perdeu: totalLeads ? (perdidos / totalLeads) * 100 : 0,
+    pct_tag_missing: totalTurns ? (tagMissing / totalTurns) * 100 : 0,
+    pct_router_empty: totalTurns ? (routerEmpty / totalTurns) * 100 : 0,
+    total_turns: totalTurns,
+    turns_ok: turnsOk,
+    crashes,
+  };
+
+  if (version === 'v3') {
+    const precoForaRef = countV2Events(V2_EVENT_TYPES.PRECO_FORA_REFERENCIA_V3, periodMs);
+    const retryV3 = countV2Events(V2_EVENT_TYPES.RETRY_V3, periodMs);
+    const toolMultiple = countV2Events(V2_EVENT_TYPES.TOOL_CALL_MULTIPLE, periodMs);
+    Object.assign(result, {
+      preco_fora_referencia: precoForaRef,
+      pct_preco_fora_referencia: totalTurns ? (precoForaRef / totalTurns) * 100 : 0,
+      retry_count: retryV3,
+      pct_retry: totalTurns ? (retryV3 / totalTurns) * 100 : 0,
+      tool_call_multiple: toolMultiple,
+    });
+  } else {
+    // Métricas v2-específicas (eram do PR37, mantidas no contrato).
+    const precoInventado = countV2Events(V2_EVENT_TYPES.PRECO_INVENTADO, periodMs);
+    const valorAntecipado = countV2Events(V2_EVENT_TYPES.VALOR_ANTECIPADO, periodMs);
+    Object.assign(result, {
+      preco_inventado: precoInventado,
+      valor_antecipado: valorAntecipado,
+    });
+  }
+
+  // Tempo médio do primeiro contato até agendou (para conversas dessa versão)
+  let tempoMedio = null;
+  if (phonesDessaVersao.length > 0) {
+    const placeholders = phonesDessaVersao.map(() => '?').join(',');
+    tempoMedio = db.prepare(`
+      SELECT AVG(c.last_contact_at - c.first_contact_at) as avg_ms
+      FROM lead_state ls
+      LEFT JOIN contacts c ON c.phone = ls.phone
+      WHERE ls.phone IN (${placeholders})
+        AND ls.estagio_atual = 'agendamento_confirmado'
+    `).get(...phonesDessaVersao)?.avg_ms || null;
+  }
+  result.tempo_medio_ate_agendou_ms = tempoMedio;
+
+  return result;
+}
+
+// Custo agregado da Anthropic API. Soma só events com meta.tokensInput
+// presente — events anteriores ao PR3 (sem instrumentação) ficam fora.
+// Consequência: dashboard mostra custo a partir do merge, com nota visível
+// na UI ("histórico anterior ao monitor v3 não rastreia custo").
+function getCostMetrics(period = '7d', version = 'v2') {
+  if (!['v2', 'v3'].includes(version)) throw new Error(`version inválida: ${version}`);
+  const periodMs = periodToMs(period);
+  const since = Date.now() - periodMs;
+  const denomEvent = V_DENOM[version];
+
+  // Pega só events com meta JSON contendo tokensInput. SQLite tem json_extract
+  // mas eu varro em JS pra robustez (meta às vezes é string crua antiga).
+  const rows = db.prepare(`
+    SELECT meta FROM v2_metrics_log
+    WHERE event_type = ? AND timestamp >= ? AND meta IS NOT NULL
+  `).all(denomEvent, since);
+
+  let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheCreationTokens = 0;
+  let turnsWithCost = 0;
+  for (const row of rows) {
+    let m;
+    try { m = typeof row.meta === 'string' ? JSON.parse(row.meta) : row.meta; } catch { continue; }
+    if (!m || typeof m.tokensInput !== 'number') continue;
+    inputTokens += m.tokensInput || 0;
+    outputTokens += m.tokensOutput || 0;
+    cacheReadTokens += m.cacheReadTokens || 0;
+    cacheCreationTokens += m.cacheCreationTokens || 0;
+    turnsWithCost++;
+  }
+
+  const totalTurns = countV2Events(denomEvent, periodMs);
+  const costUSD =
+    (inputTokens * CLAUDE_PRICING_USD_PER_M.input +
+      outputTokens * CLAUDE_PRICING_USD_PER_M.output +
+      cacheReadTokens * CLAUDE_PRICING_USD_PER_M.cache_read +
+      cacheCreationTokens * CLAUDE_PRICING_USD_PER_M.cache_creation) / 1_000_000;
+
+  // Conversas (phones distintos) dessa versão pra calcular cost/conv.
+  const phoneVersion = _phoneVersionMap(periodMs);
+  const conversationCount = [...phoneVersion.values()].filter(v => v === version).length;
+
+  return {
+    version,
+    period,
+    since,
+    cost_usd: costUSD,
+    cost_per_conversation_usd: conversationCount > 0 ? costUSD / conversationCount : 0,
+    cost_per_turn_usd: turnsWithCost > 0 ? costUSD / turnsWithCost : 0,
+    turns_total: totalTurns,
+    turns_with_cost_data: turnsWithCost,
+    conversations: conversationCount,
+    tokens: {
+      input: inputTokens,
+      output: outputTokens,
+      cache_read: cacheReadTokens,
+      cache_creation: cacheCreationTokens,
+    },
+    coverage_pct: totalTurns > 0 ? (turnsWithCost / totalTurns) * 100 : 100,
+    pricing_per_million_usd: CLAUDE_PRICING_USD_PER_M,
+  };
+}
+
+// Conversas com filtro por versão. Reusa lógica de getV2Conversations e
+// adiciona campo `_version` derivado do _phoneVersionMap.
+function getConversations({ status = null, version = null, limit = 200 } = {}) {
+  const PERDIDO_THRESHOLD = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  // Janela ampla pra derivar versão do phone (30d) — não filtra eventos antes
+  // de pegar a lista de leads.
+  const phoneVersion = _phoneVersionMap(30 * 24 * 60 * 60 * 1000);
+  const rows = db.prepare(`
+    SELECT
+      ls.phone,
+      c.name,
+      c.last_contact_at,
+      ls.estagio_atual,
+      ls.objecao_ativa,
+      ls.insistencias_valor,
+      ls.modalidade_recomendada,
+      ls.disponibilidade,
+      ls.modulo_pendente,
+      ls.total_mensagens_lead,
+      ls.total_mensagens_johnny,
+      ls.aula_experimental_agendada,
+      ls.data_agendamento,
+      ls.hora_agendamento,
+      ls.resumo_dinamico_n_msgs,
+      r.rating as review_rating,
+      r.comment as review_comment,
+      (SELECT content FROM messages WHERE phone = ls.phone ORDER BY id DESC LIMIT 1) as last_message
+    FROM lead_state ls
+    LEFT JOIN contacts c ON c.phone = ls.phone
+    LEFT JOIN conversation_reviews r ON r.phone = ls.phone
+    ORDER BY c.last_contact_at DESC
+    LIMIT ?
+  `).all(limit);
+
+  for (const r of rows) {
+    const idle = r.last_contact_at ? now - r.last_contact_at : Infinity;
+    if (r.estagio_atual === 'agendamento_confirmado') r._status = 'agendou';
+    else if (r.estagio_atual === 'handoff_humano') r._status = 'handoff';
+    else if (idle > PERDIDO_THRESHOLD) r._status = 'perdeu';
+    else r._status = 'em_andamento';
+    r._phone_masked = maskPhone(r.phone);
+    r._version = phoneVersion.get(r.phone) || null;
+  }
+  let filtered = rows;
+  if (status) filtered = filtered.filter(r => r._status === status);
+  if (version) filtered = filtered.filter(r => r._version === version);
+  return filtered;
+}
+
+// Alertas com filtro por versão. v2: critérios PR37 originais; v3: PR3.
+function getAlerts(version = 'v2') {
+  if (!['v2', 'v3'].includes(version)) throw new Error(`version inválida: ${version}`);
+  const alerts = [];
+  const period24h = 24 * 60 * 60 * 1000;
+  const phoneVersion = _phoneVersionMap(7 * 24 * 60 * 60 * 1000);
+
+  // 1. 3 conversas dessa versão seguidas marcadas ❌
+  // Reviews recentes filtradas por phone que está nessa versão.
+  const recentReviews = db.prepare(`
+    SELECT phone, rating, reviewed_at FROM conversation_reviews
+    ORDER BY reviewed_at DESC LIMIT 50
+  `).all();
+  const reviewsDessaVersao = recentReviews.filter(r => phoneVersion.get(r.phone) === version);
+  const last3 = reviewsDessaVersao.slice(0, 3);
+  if (last3.length === 3 && last3.every(r => r.rating === 'bad')) {
+    alerts.push({
+      level: 'critical',
+      code: 'three_bad_reviews',
+      version,
+      message: `3 conversas ${version} seguidas marcadas ❌`,
+      context: { phones: last3.map(r => maskPhone(r.phone)) },
+    });
+  }
+
+  if (version === 'v2') {
+    // Critérios v2 originais (PR37)
+    const precoInv = countV2Events(V2_EVENT_TYPES.PRECO_INVENTADO, period24h);
+    if (precoInv > 0) {
+      alerts.push({
+        level: 'critical', code: 'preco_inventado', version,
+        message: `Bot inventou preço/regra ${precoInv}x nas últimas 24h`,
+        context: { count: precoInv },
+      });
+    }
+    const valorAnt = countV2Events(V2_EVENT_TYPES.VALOR_ANTECIPADO, period24h);
+    if (valorAnt > 0) {
+      alerts.push({
+        level: 'critical', code: 'valor_antecipado', version,
+        message: `Bot passou valor antes da 3ª insistência ${valorAnt}x nas últimas 24h`,
+        context: { count: valorAnt },
+      });
+    }
+    // Tag esquecida >30% nas últimas 20 conversas v2
+    const last20V2 = db.prepare(`
+      SELECT DISTINCT phone FROM lead_state ORDER BY primeira_mensagem_em DESC LIMIT 20
+    `).all().map(r => r.phone).filter(p => phoneVersion.get(p) === 'v2');
+    if (last20V2.length >= 20) {
+      const placeholders = last20V2.map(() => '?').join(',');
+      const tagFalhas = db.prepare(`
+        SELECT COUNT(*) as c FROM v2_metrics_log
+        WHERE event_type = ? AND phone IN (${placeholders})
+      `).get(V2_EVENT_TYPES.TAG_ESQUECIDA, ...last20V2).c;
+      const totalTurns20 = db.prepare(`
+        SELECT COUNT(*) as c FROM v2_metrics_log
+        WHERE event_type IN (?, ?) AND phone IN (${placeholders})
+      `).get(V2_EVENT_TYPES.TAG_ESQUECIDA, V2_EVENT_TYPES.TURN_OK, ...last20V2).c;
+      if (totalTurns20 > 0) {
+        const pct = (tagFalhas / totalTurns20) * 100;
+        if (pct > 30) {
+          alerts.push({
+            level: 'warning', code: 'tag_esquecida_alta', version,
+            message: `Tag [ESTADO:] esquecida em ${pct.toFixed(1)}% das últimas 20 conversas v2 (limite 30%)`,
+            context: { pct, total: totalTurns20, falhas: tagFalhas },
+          });
+        }
+      }
+    }
+  }
+
+  if (version === 'v3') {
+    // PR3: qualquer PRECO_FORA_REFERENCIA_V3 é crítico (esperado 0).
+    const precoForaRef = countV2Events(V2_EVENT_TYPES.PRECO_FORA_REFERENCIA_V3, period24h);
+    if (precoForaRef > 0) {
+      alerts.push({
+        level: 'critical', code: 'preco_fora_referencia_v3', version,
+        message: `Validador rejeitou preço ${precoForaRef}x nas últimas 24h (esperado: 0)`,
+        context: { count: precoForaRef },
+      });
+    }
+    // PR3: qualquer TOOL_CALL_MULTIPLE é canário (mudança de contrato Anthropic)
+    const toolMult = countV2Events(V2_EVENT_TYPES.TOOL_CALL_MULTIPLE, period24h);
+    if (toolMult > 0) {
+      alerts.push({
+        level: 'critical', code: 'tool_call_multiple', version,
+        message: `Anthropic emitiu 2+ tool_use ${toolMult}x nas últimas 24h (esperado: 0 com disable_parallel_tool_use=true)`,
+        context: { count: toolMult },
+      });
+    }
+    // TOOL_CALL_AUSENTE: análogo a tag_esquecida mas pra v3. Esperado: 0.
+    // Limite mínimo de 20 turnos pra evitar ruído de N pequeno.
+    const tcAusente = countV2Events(V2_EVENT_TYPES.TOOL_CALL_AUSENTE, period24h);
+    const turnsV3_24h = countV2Events(V2_EVENT_TYPES.TURN_OK_V3, period24h);
+    const totalV3 = tcAusente + turnsV3_24h;
+    if (totalV3 >= 20 && tcAusente / totalV3 > 0.05) {
+      const pct = (tcAusente / totalV3) * 100;
+      alerts.push({
+        level: 'critical', code: 'tool_call_ausente_alta', version,
+        message: `Tool call ausente em ${pct.toFixed(1)}% dos turnos v3 nas últimas 24h (limite 5%)`,
+        context: { pct, total: totalV3, falhas: tcAusente },
+      });
+    }
+  }
+
+  // Crashes nas últimas 24h, filtrados por versão (meta.version='v3' ou ausente=v2)
+  const crashesRows = db.prepare(`
+    SELECT meta FROM v2_metrics_log
+    WHERE event_type = ? AND timestamp >= ?
+  `).all(V2_EVENT_TYPES.CRASH, Date.now() - period24h);
+  let crashesDessaVersao = 0;
+  for (const c of crashesRows) {
+    let m;
+    try { m = typeof c.meta === 'string' ? JSON.parse(c.meta) : c.meta; } catch { m = null; }
+    const crashVersion = m?.version || 'v2';
+    if (crashVersion === version) crashesDessaVersao++;
+  }
+  if (crashesDessaVersao > 0) {
+    alerts.push({
+      level: 'critical', code: 'crash', version,
+      message: `Agente ${version} crashou ${crashesDessaVersao}x nas últimas 24h`,
+      context: { count: crashesDessaVersao },
+    });
+  }
+
+  return alerts;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// HASH DETERMINÍSTICO POR PHONE (rollout v3 incremental)
+// ───────────────────────────────────────────────────────────────────────
+//
+// SHA256 do phone canonicalizado → bucket [0..99]. Phone-locked: mesmo phone
+// sempre cai no mesmo bucket. Mudar `v3_rollout_pct` move o threshold mas
+// não rebucketiza phones individuais.
+//
+// Precedência: agent_version_override (admin pause) > rollout (se env=v3) > env.
+
+function _phoneBucket(phone) {
+  const canon = canonicalizeContactPhone(phone);
+  const hex = crypto.createHash('sha256').update(canon).digest('hex').slice(0, 8);
+  return parseInt(hex, 16) % 100;
+}
+
+function getAgentVersionForPhone(phone, envVersion) {
+  // Override de admin (pause force) tem prioridade absoluta — ignora rollout.
+  const override = getRuntimeFlag('agent_version_override');
+  if (override && ['v1', 'v2', 'v3'].includes(override)) return override;
+
+  const env = (envVersion || 'v2').toLowerCase();
+  // Rollout só aplica quando env=v3 (intent é "v3 ON, gradual"). Se env=v2,
+  // todo mundo é v2 (rollout não tem efeito). Permite ROLLBACK total via env.
+  if (env !== 'v3') return env;
+
+  const pctRaw = getRuntimeFlag('v3_rollout_pct');
+  const pct = pctRaw === null || pctRaw === '' ? 100 : Math.max(0, Math.min(100, parseInt(pctRaw, 10) || 0));
+  if (pct >= 100) return 'v3';
+  if (pct <= 0) return 'v2';
+  return _phoneBucket(phone) < pct ? 'v3' : 'v2';
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Aliases v2-only (mantidos pra /api/v2/* legacy não quebrar)
+// ───────────────────────────────────────────────────────────────────────
+
 // Runtime flags persistidos em DB. Sobreviem restart.
 function getRuntimeFlag(key) {
   const row = db.prepare('SELECT value FROM v2_runtime_flags WHERE key = ?').get(key);
@@ -1935,6 +2374,13 @@ module.exports = {
   getV2Alerts,
   getRuntimeFlag,
   setRuntimeFlag,
+  // PR #66 — Monitor unificado v2 × v3
+  getMetrics,
+  getAlerts,
+  getConversations,
+  getCostMetrics,
+  getAgentVersionForPhone,
+  CLAUDE_PRICING_USD_PER_M,
   isValidReviewRating,
   maskPhone,
   // Internal notes
