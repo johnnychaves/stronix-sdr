@@ -28,6 +28,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Claude Code (configs/sessões locais — sempre pessoais, nunca compartilhar)
+.claude/
+
 # Secrets
 *.pem
 *.key
